@@ -9,7 +9,7 @@
 
 namespace luisa::compute {
 
-class CommandBuffer {
+class LC_RUNTIME_API CommandBuffer {
 
 private:
     Stream *_stream;

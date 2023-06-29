@@ -13,7 +13,7 @@
 
 namespace luisa::compute {
 
-class RayQueue {
+class LC_RUNTIME_API RayQueue {
 
 public:
     static constexpr auto counter_buffer_size = 16u * 1024u;
@@ -30,7 +30,7 @@ public:
     [[nodiscard]] BufferView<uint> prepare_index_buffer(CommandBuffer &command_buffer) noexcept;
 };
 
-class AggregatedRayQueue {
+class LC_RUNTIME_API AggregatedRayQueue {
 private:
     Buffer<uint> _index_buffer;
     Buffer<uint> _counter_buffer;
@@ -50,7 +50,7 @@ public:
     void catch_counter(CommandBuffer &command_buffer) noexcept;
 };
 
-class KernelInfo {
+class LC_RUNTIME_API KernelInfo {
 private:
     uint _kernel_state;
     luisa::unique_ptr<Resource> _shader;
@@ -67,7 +67,7 @@ public:
     [[nodiscard]] auto kernel_state() const noexcept { return _kernel_state; }
 };
 
-class ShaderScheduler {
+class LC_RUNTIME_API ShaderScheduler {
 private:
     AggregatedRayQueue _aggregated_kernel_queue;
     luisa::unique_ptr<luisa::function<void(uint)>> _launch_kernel;

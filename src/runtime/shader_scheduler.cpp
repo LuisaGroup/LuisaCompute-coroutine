@@ -1,0 +1,94 @@
+//
+// Created by ChenXin on 2023/6/29.
+//
+
+#include <luisa/runtime/shader_scheduler.h>
+
+namespace luisa::compute {
+
+RayQueue::RayQueue(luisa::compute::Device &device, size_t size) noexcept
+    : _index_buffer{device.create_buffer<uint>(size)},
+      _counter_buffer{device.create_buffer<uint>(counter_buffer_size)},
+      _current_counter{counter_buffer_size} {
+    _clear_counters = device.compile<1>([this] {
+        _counter_buffer->write(dispatch_x(), 0u);
+    });
+}
+
+BufferView<uint> RayQueue::prepare_counter_buffer(CommandBuffer &command_buffer) noexcept {
+    if (_current_counter == counter_buffer_size) {
+        _current_counter = 0u;
+        command_buffer << _clear_counters().dispatch(counter_buffer_size);
+    }
+    return _counter_buffer.view(_current_counter++, 1u);
+}
+
+BufferView<uint> RayQueue::prepare_index_buffer(CommandBuffer &command_buffer) noexcept {
+    return _index_buffer;
+}
+
+AggregatedRayQueue::AggregatedRayQueue(Device &device, size_t state_count,
+                                       uint kernel_count, bool gathering) noexcept
+    : _index_buffer{device.create_buffer<uint>(gathering ? state_count : kernel_count * state_count)},
+      _counter_buffer{device.create_buffer<uint>(kernel_count)},
+      _kernel_count{kernel_count},
+      _state_count{state_count},
+      _gathering{gathering} {
+    _host_counter.resize(kernel_count);
+    _offsets.resize(kernel_count);
+    _clear_counters = device.compile<1>([this] {
+        _counter_buffer->write(dispatch_x(), 0u);
+    });
+}
+
+void AggregatedRayQueue::clear_counter_buffer(CommandBuffer &command_buffer, int index) noexcept {
+    //if (_current_counter == counter_buffer_size-1) {
+    //   _current_counter = 0u;
+    if (index == -1) {
+        command_buffer << _clear_counters().dispatch(_kernel_count);
+    } else {
+        uint zero = 0u;
+        command_buffer << counter_buffer(index).copy_from(&zero);
+    }
+    //} else
+    //    _current_counter++;
+}
+
+BufferView<uint> AggregatedRayQueue::counter_buffer(luisa::uint index) noexcept {
+    return _counter_buffer.view(index, 1);
+}
+
+BufferView<uint> AggregatedRayQueue::index_buffer(luisa::uint index) noexcept {
+    if (_gathering)
+        return _index_buffer.view(_offsets[index], _host_counter[index]);
+    else
+        return _index_buffer.view(index * _state_count, _state_count);
+}
+
+uint AggregatedRayQueue::host_counter(uint index) const noexcept {
+    return _host_counter[index];
+}
+
+void AggregatedRayQueue::catch_counter(CommandBuffer &command_buffer) noexcept {
+    command_buffer << _counter_buffer.view(0, _kernel_count).copy_to(_host_counter.data());
+    command_buffer << synchronize();
+    uint prev = 0u;
+    for (auto i = 0u; i < _kernel_count; ++i) {
+        uint now = _host_counter[i];
+        _offsets[i] = prev;
+        prev += now;
+    }
+}
+
+auto KernelInfo::dispatch() const noexcept {
+    // dispatch by type
+
+    // ComputeDispatchCmdEncoder
+    ComputeDispatchCmdEncoder encoder{_shader->handle(), _arg_count, _uniform_count};
+
+
+    // RasterDispatchCmdEncoder
+    // TODO: only when calculating rasterization on dx backend
+}
+
+}// namespace luisa::compute

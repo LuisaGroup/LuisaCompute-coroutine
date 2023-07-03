@@ -10,6 +10,8 @@
 #include <luisa/dsl/sugar.h>
 #include <luisa/dsl/builtin.h>
 #include <luisa/runtime/command_buffer.h>
+#include <luisa/core/logging.h>
+#include <luisa/runtime/rhi/argument.h>
 
 namespace luisa::compute {
 
@@ -50,24 +52,51 @@ public:
     void catch_counter(CommandBuffer &command_buffer) noexcept;
 };
 
+struct LC_RUNTIME_API ArgumentInfo {
+
+    struct Uniform {
+        const void *data;
+        size_t size;
+    };
+
+    using Buffer = Argument::Buffer;
+    using Texture = Argument::Texture;
+    using BindlessArray = Argument::BindlessArray;
+    using Accel = Argument::Accel;
+    using Tag = Argument::Tag;
+
+    Tag tag;
+    union {
+        Buffer buffer;
+        Texture texture;
+        Uniform uniform;
+        BindlessArray bindless_array;
+        Accel accel;
+    };
+};
+
 class LC_RUNTIME_API KernelInfo {
+
 private:
-    uint _kernel_state;
-    luisa::unique_ptr<Resource> _shader;
-    uint _shader_type;
-    uint _dim;
-    uint _arg_count;
-    uint _uniform_count;
-    std::vector<uint> _arg_handles;
+    uint _shader_handle;
+    uint _uniform_size;
+    luisa::vector<ArgumentInfo> _args;
+
+    luisa::optional<ShaderDispatchCmdEncoder> _encoder;
 
 public:
-    [[nodiscard]] auto dispatch() const noexcept;
+    KernelInfo(uint shader_handle) noexcept : _uniform_size{0u} {}
 
-public:
-    [[nodiscard]] auto kernel_state() const noexcept { return _kernel_state; }
+    [[nodiscard]] auto dispatch() noexcept;
+    void encode_uniform(const void *data, size_t size) noexcept;
+    void encode_buffer(uint64_t handle, size_t offset, size_t size) noexcept;
+    void encode_texture(uint64_t handle, uint32_t level) noexcept;
+    void encode_bindless_array(uint64_t handle) noexcept;
+    void encode_accel(uint64_t handle) noexcept;
 };
 
 class LC_RUNTIME_API ShaderScheduler {
+
 private:
     AggregatedRayQueue _aggregated_kernel_queue;
     luisa::unique_ptr<luisa::function<void(uint)>> _launch_kernel;
@@ -75,10 +104,33 @@ private:
     Device &_device;
     bool _gathering;
 
+    bool _queue_empty;
+
 public:
     ShaderScheduler(Device &device, size_t state_count, uint kernel_count, bool gathering) noexcept
         : _device{device}, _aggregated_kernel_queue{device, state_count, kernel_count, gathering},
-          _gathering{gathering} {}
+          _gathering{gathering}, _queue_empty{true} {}
+
+    template<typename Size>
+        requires luisa::is_uint_vector_v<Size>
+    void execute(CommandBuffer &command_buffer, Size dispatch_size) noexcept {
+        // get dispatch size
+        constexpr auto dim = luisa::vector_dimension_v<Size>;
+        uint3 dispatch_size_uint3{1u, 1u, 1u};
+        for (auto i = 0u; i < dim; i++) {
+            dispatch_size_uint3[i] = dispatch_size[i];
+        }
+        uint dispatch_count = dispatch_size_uint3.x * dispatch_size_uint3.y * dispatch_size_uint3.z;
+        uint duplicate_count = 1u;
+
+        // init
+        _aggregated_kernel_queue.clear_counter_buffer(command_buffer);
+        auto launch_state_count = duplicate_count * dispatch_count;
+        while (launch_state_count > 0 || _queue_empty) {
+            _queue_empty = true;
+
+        }
+    }
 };
 
 }// namespace luisa::compute

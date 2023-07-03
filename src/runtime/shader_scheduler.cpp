@@ -80,15 +80,93 @@ void AggregatedRayQueue::catch_counter(CommandBuffer &command_buffer) noexcept {
     }
 }
 
-auto KernelInfo::dispatch() const noexcept {
+auto KernelInfo::dispatch() noexcept {
     // dispatch by type
 
     // ComputeDispatchCmdEncoder
-    ComputeDispatchCmdEncoder encoder{_shader->handle(), _arg_count, _uniform_count};
-
+    ComputeDispatchCmdEncoder encoder{_shader_handle, _args.size(), _uniform_size};
+    for (const auto &arg : _args) {
+        auto &arg_tag = arg.tag;
+        switch (arg_tag) {
+            case ArgumentInfo::Tag::BUFFER: {
+                auto arg_data = arg.buffer;
+                encoder.encode_buffer(arg_data.handle, arg_data.offset, arg_data.size);
+                break;
+            }
+            case ArgumentInfo::Tag::TEXTURE: {
+                auto arg_data = arg.texture;
+                encoder.encode_texture(arg_data.handle, arg_data.level);
+                break;
+            }
+            case ArgumentInfo::Tag::UNIFORM: {
+                auto arg_data = arg.uniform;
+                encoder.encode_uniform(arg_data.data, arg_data.size);
+                break;
+            }
+            case ArgumentInfo::Tag::BINDLESS_ARRAY: {
+                auto arg_data = arg.bindless_array;
+                encoder.encode_bindless_array(arg_data.handle);
+                break;
+            }
+            case ArgumentInfo::Tag::ACCEL: {
+                auto arg_data = arg.accel;
+                encoder.encode_accel(arg_data.handle);
+                break;
+            }
+            default:
+                LUISA_ERROR_WITH_LOCATION("Unsupported kernel argument type.");
+        }
+    }
+    _args.clear();
+    return std::move(encoder).build();
 
     // RasterDispatchCmdEncoder
-    // TODO: only when calculating rasterization on dx backend
+    // TODO: only when calculating rasterization on dx backend. (unsupported yet)
+}
+
+void KernelInfo::encode_uniform(const void *data, size_t size) noexcept {
+    _uniform_size += size;
+    ArgumentInfo arg{
+        .tag = ArgumentInfo::Tag::UNIFORM,
+        .uniform = ArgumentInfo::Uniform{
+            .data = data,
+            .size = size}};
+    _args.emplace_back(arg);
+}
+
+void KernelInfo::encode_buffer(uint64_t handle, size_t offset, size_t size) noexcept {
+    ArgumentInfo arg{
+        .tag = ArgumentInfo::Tag::BUFFER,
+        .buffer = ArgumentInfo::Buffer{
+            .handle = handle,
+            .offset = offset,
+            .size = size}};
+    _args.emplace_back(arg);
+}
+
+void KernelInfo::encode_texture(uint64_t handle, uint32_t level) noexcept {
+    ArgumentInfo arg{
+        .tag = ArgumentInfo::Tag::TEXTURE,
+        .texture = ArgumentInfo::Texture{
+            .handle = handle,
+            .level = level}};
+    _args.emplace_back(arg);
+}
+
+void KernelInfo::encode_bindless_array(uint64_t handle) noexcept {
+    ArgumentInfo arg{
+        .tag = ArgumentInfo::Tag::BINDLESS_ARRAY,
+        .bindless_array = ArgumentInfo::BindlessArray{
+            .handle = handle}};
+    _args.emplace_back(arg);
+}
+
+void KernelInfo::encode_accel(uint64_t handle) noexcept {
+    ArgumentInfo arg{
+        .tag = ArgumentInfo::Tag::ACCEL,
+        .accel = ArgumentInfo::Accel{
+            .handle = handle}};
+    _args.emplace_back(arg);
 }
 
 }// namespace luisa::compute

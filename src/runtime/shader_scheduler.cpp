@@ -80,7 +80,7 @@ void AggregatedRayQueue::catch_counter(CommandBuffer &command_buffer) noexcept {
     }
 }
 
-auto KernelInfo::dispatch() noexcept {
+luisa::unique_ptr<ShaderDispatchCommand> KernelInfo::dispatch() noexcept {
     // dispatch by type
 
     // ComputeDispatchCmdEncoder

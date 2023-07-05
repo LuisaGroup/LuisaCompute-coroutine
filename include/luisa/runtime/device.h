@@ -9,6 +9,7 @@
 #endif
 #include <luisa/ast/type_registry.h>
 #include <luisa/runtime/rhi/device_interface.h>
+#include <luisa/core/thread_pool.h>
 
 namespace luisa {
 class BinaryIO;
@@ -240,6 +241,24 @@ public:
         } else {
             return compile(Kernel3D{std::forward<Func>(f)}, option);
         }
+    }
+
+    template<uint dim, typename Func>
+    [[nodiscard]] auto compile_async(Func &&f) noexcept {
+        auto kernel = [&] {
+            if constexpr (dim == 1u) {
+                return Kernel1D{f};
+            } else if constexpr (dim == 2u) {
+                return Kernel2D{f};
+            } else if constexpr (dim == 3u) {
+                return Kernel3D{f};
+            } else {
+                static_assert(always_false_v<Func>, "Invalid dimension.");
+            }
+        }();
+        return global_thread_pool().async([&] {
+            return compile(kernel);
+        });
     }
 
     template<size_t N, typename Kernel>

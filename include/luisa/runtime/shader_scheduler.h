@@ -87,7 +87,7 @@ private:
 public:
     KernelInfo(uint shader_handle) noexcept : _uniform_size{0u} {}
 
-    [[nodiscard]] auto dispatch() noexcept;
+    [[nodiscard]] luisa::unique_ptr<ShaderDispatchCommand> dispatch() noexcept;
     void encode_uniform(const void *data, size_t size) noexcept;
     void encode_buffer(uint64_t handle, size_t offset, size_t size) noexcept;
     void encode_texture(uint64_t handle, uint32_t level) noexcept;
@@ -95,21 +95,46 @@ public:
     void encode_accel(uint64_t handle) noexcept;
 };
 
+class LC_RUNTIME_API ShaderFrame {
+
+public:
+    uint frame_handle;
+
+};
+
+class LC_RUNTIME_API ShaderFrameManager {
+
+public:
+    luisa::vector<ShaderFrame> frames;
+    luisa::unordered_map<uint, luisa::set<uint>> shader_frame_map;
+};
+
+#define INVALID_KERNEL 0u
+
 class LC_RUNTIME_API ShaderScheduler {
 
 private:
     AggregatedRayQueue _aggregated_kernel_queue;
     luisa::unique_ptr<luisa::function<void(uint)>> _launch_kernel;
-    luisa::unordered_map<int, KernelInfo> _kernel_info;
+    luisa::unordered_map<uint, KernelInfo> _kernel_info;
     Device &_device;
-    bool _gathering;
 
-    bool _queue_empty;
+    uint _state_limit;
+//    bool _gathering;
+//    bool _direct_launch;
+//    bool _use_tag_sort;
+    Buffer<uint> _kernel_indexes;
+    ShaderFrameManager _frame_manager;
 
 public:
-    ShaderScheduler(Device &device, size_t state_count, uint kernel_count, bool gathering) noexcept
+    ShaderScheduler(Device &device, size_t state_count, uint kernel_count, bool gathering, uint state_limit) noexcept
         : _device{device}, _aggregated_kernel_queue{device, state_count, kernel_count, gathering},
-          _gathering{gathering}, _queue_empty{true} {}
+//          _gathering{gathering}, _direct_launch{false}, _use_tag_sort{false}
+          _state_limit{state_limit} {}
+
+    void emplace_kernel(KernelInfo kernel_info) noexcept {
+        _kernel_info.try_emplace(_kernel_info.size() + 1u, std::move(kernel_info));
+    }
 
     template<typename Size>
         requires luisa::is_uint_vector_v<Size>
@@ -121,14 +146,142 @@ public:
             dispatch_size_uint3[i] = dispatch_size[i];
         }
         uint dispatch_count = dispatch_size_uint3.x * dispatch_size_uint3.y * dispatch_size_uint3.z;
+
+        // get_config
+        // TODO
         uint duplicate_count = 1u;
+        uint state_count = _state_limit;
+
+        // shader compile
+        LUISA_INFO("Compiling management kernels.");
+        auto mark_invalid_shader = _device.compile_async<1>([&](BufferUInt invalid_queue, BufferUInt invalid_queue_size) noexcept {
+            auto dispatch_id = dispatch_x();
+//            if (_gathering) {
+//                invalid_queue.write(dispatch_id, dispatch_id);
+//            }
+            invalid_queue_size.write(0u, state_count);
+//            if (_gathering) {
+//                _kernel_indexes->write(dispatch_id, INVALID_KERNEL);
+//            }
+        });
+
+//        auto gather_shader = _device.compile_async<1>([&](BufferUInt queue, BufferUInt queue_size, UInt kernel_id, UInt n) noexcept {
+//            if (_gathering) {
+//                auto path_id = dispatch_x();
+//                auto kernel = def(0u);
+//                $if(dispatch_x() < n) {
+//                    kernel = _kernel_indexes->read(path_id);
+//                };
+//                /*$if(kernel == kernel_id) {
+//                    auto slot = queue_size.atomic(0u).fetch_add(1u);
+//                                    queue.write(slot, path_id);
+//                };*/
+//
+//                auto slot = def(0u);
+//                {
+//                    Shared<uint> index{1u};
+//                    $if(thread_x() == 0u) { index.write(0u, 0u); };
+//                    sync_block();
+//                    auto local_index = def(0u);
+//                    $if(dispatch_x() < n & kernel == kernel_id) {
+//                        local_index = index.atomic(0u).fetch_add(1u);
+//                    };
+//                    sync_block();
+//                    $if(thread_x() == 0u) {
+//                        auto local_count = index.read(0u);
+//                        auto global_offset = queue_size.atomic(0u).fetch_add(local_count);
+//                        index.write(0u, global_offset);
+//                    };
+//                    sync_block();
+//                    slot = index.read(0u) + local_index;
+//                }
+//                $if(dispatch_x() < n & kernel == kernel_id) {
+//                    queue.write(slot, path_id);
+//                };
+//            }
+//        });
+//
+//        auto sort_tag_gather_shader = _device.compile_async<1>([&](BufferUInt queue, BufferUInt tags, BufferUInt tag_counter,
+//                                                                   UInt kernel_id, UInt tag_size) noexcept {
+//            if (_gathering && _use_tag_sort) {
+//                auto path_id = dispatch_x();
+//                $if(path_id < state_count) {
+//                    auto kernel = _kernel_indexes->read(path_id);
+//                    auto tag = tags.read(path_id);
+//                    $if(kernel == kernel_id) {
+//                        //                        if (pipeline().surfaces().size() <= 32) {//not sure what is the proper threshold
+//                        //
+//                        //                            for (auto i = 0u; i < pipeline().surfaces().size(); ++i) {
+//                        //                                $if(tag == i) {
+//                        //                                    auto queue_id = tag_counter.atomic(i).fetch_add(1u);
+//                        //                                    queue.write(queue_id, path_id);
+//                        //                                };
+//                        //                            }
+//                        //                        } else {
+//                        auto queue_id = tag_counter.atomic(tag).fetch_add(1u);
+//                        queue.write(queue_id, path_id);
+//                        //                        }
+//                    };
+//                };
+//            }
+//        });
+//
+//        auto bucket_update_shader = _device.compile_async<1>([&](BufferUInt tag_counter) noexcept {
+//            if (_use_tag_sort) {
+//                tag_counter.write(dispatch_x(), 0u);
+//            }
+//        });
+//
+//        auto bucket_reset_shader = _device.compile_async<1>([&](BufferUInt tag_counter, UInt tag_size) noexcept {
+//            if (_use_tag_sort) {
+//                $for(i, 0u, tag_size) {
+//                    tag_counter.write(i, 0u);
+//                };
+//            }
+//        });
 
         // init
         _aggregated_kernel_queue.clear_counter_buffer(command_buffer);
         auto launch_state_count = duplicate_count * dispatch_count;
-        while (launch_state_count > 0 || _queue_empty) {
-            _queue_empty = true;
+        auto last_committed_state = launch_state_count;
+        auto queue_empty = true;
+        command_buffer << mark_invalid_shader.get()(_aggregated_kernel_queue.index_buffer(INVALID_KERNEL),
+                                                    _aggregated_kernel_queue.counter_buffer(INVALID_KERNEL))
+                              .dispatch(state_count);
 
+        while (launch_state_count > 0 || queue_empty) {
+            queue_empty = true;
+            _aggregated_kernel_queue.catch_counter(command_buffer);
+
+            auto invalid_count = _aggregated_kernel_queue.host_counter(INVALID_KERNEL);
+            if (invalid_count > state_count / 2 && launch_state_count > 0) {
+                // launch new kernel
+
+                auto generate_count = std::min(launch_state_count, invalid_count);
+                auto zero = 0u;
+                auto valid_count = state_count - invalid_count;
+
+                _aggregated_kernel_queue.clear_counter_buffer(command_buffer, INVALID_KERNEL);
+
+                // TODO: compact & sort
+                // ...
+
+
+//                command_buffer << synchronize();
+                command_buffer << _kernel_info[1u].dispatch();
+                launch_state_count -= generate_count;
+                queue_empty = false;
+                continue;
+            }
+
+            auto setup_workload = [&](uint max_index) {
+                _aggregated_kernel_queue.clear_counter_buffer(command_buffer, max_index);
+            };
+            auto launch_kernel = [&](uint dispatch_index) {
+                auto dispatch_size = _aggregated_kernel_queue.host_counter(dispatch_index);
+
+                // TODO: dispatch different shaders by state tags
+            };
         }
     }
 };

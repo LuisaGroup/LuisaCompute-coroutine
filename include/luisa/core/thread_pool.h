@@ -107,5 +107,7 @@ public:
     }
 };
 
+LC_CORE_API ThreadPool &global_thread_pool() noexcept;
+
 }// namespace luisa
 

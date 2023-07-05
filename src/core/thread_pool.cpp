@@ -170,5 +170,10 @@ uint ThreadPool::worker_thread_index() noexcept {
     return detail::worker_thread_index();
 }
 
+ThreadPool &global_thread_pool() noexcept {
+    static ThreadPool pool{std::thread::hardware_concurrency()};
+    return pool;
+}
+
 }// namespace luisa
 

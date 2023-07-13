@@ -138,7 +138,7 @@ public:
 
     template<typename Size>
         requires luisa::is_uint_vector_v<Size>
-    void execute(CommandBuffer &command_buffer, Size dispatch_size) noexcept {
+    void dispatch(CommandBuffer &command_buffer, Size dispatch_size) noexcept {
         // get dispatch size
         constexpr auto dim = luisa::vector_dimension_v<Size>;
         uint3 dispatch_size_uint3{1u, 1u, 1u};
@@ -281,6 +281,7 @@ public:
                 auto dispatch_size = _aggregated_kernel_queue.host_counter(dispatch_index);
 
                 // TODO: dispatch different shaders by state tags
+                // get launch kernel from IR
             };
         }
     }

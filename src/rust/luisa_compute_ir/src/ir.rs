@@ -216,7 +216,7 @@ impl Primitive {
 
 impl VectorType {
     pub fn size(&self) -> usize {
-        let el_sz = self.element.size();
+        let el_sz: usize = self.element.size();
         let aligned_len = {
             let four = self.length / 4;
             let rem = self.length % 4;

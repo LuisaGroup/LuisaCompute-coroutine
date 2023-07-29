@@ -36,7 +36,8 @@ public:
         FOR,
         COMMENT,
         RAY_QUERY,
-        AUTO_DIFF
+        AUTO_DIFF,
+        SUSPEND
     };
 
 private:
@@ -72,6 +73,7 @@ class ForStmt;
 class CommentStmt;
 class RayQueryStmt;
 class AutoDiffStmt;
+class SuspendStmt;
 
 struct LC_AST_API StmtVisitor {
     virtual void visit(const BreakStmt *) = 0;
@@ -89,6 +91,7 @@ struct LC_AST_API StmtVisitor {
     virtual void visit(const CommentStmt *) = 0;
     virtual void visit(const RayQueryStmt *) = 0;
     virtual void visit(const AutoDiffStmt *stmt);
+    virtual void visit(const SuspendStmt *stmt);
     virtual ~StmtVisitor() noexcept = default;
 };
 
@@ -467,6 +470,24 @@ public:
     LUISA_STATEMENT_COMMON()
 };
 
+/// Suspend statement
+class SuspendStmt : public Statement {
+
+private:
+    const Expression *_expr;
+
+private:
+    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+
+public:
+    explicit SuspendStmt(const Expression *expr) noexcept
+        : Statement{Tag::SUSPEND}, _expr{expr} {
+        if (_expr != nullptr) { _expr->mark(Usage::READ); }
+    }
+    [[nodiscard]] auto expression() const noexcept { return _expr; }
+    LUISA_STATEMENT_COMMON()
+};
+
 #undef LUISA_STATEMENT_COMMON
 
 // helper function for easy traversal over the ASTs
@@ -572,6 +593,11 @@ void traverse_expressions(
             auto ad_stmt = static_cast<const AutoDiffStmt *>(stmt);
             traverse_expressions<recurse_subexpr>(
                 ad_stmt->body(), visit, enter_stmt, exit_stmt);
+            break;
+        }
+        case Statement::Tag::SUSPEND: {
+            auto suspend_stmt = static_cast<const SuspendStmt *>(stmt);
+            if (auto value = suspend_stmt->expression()) { do_visit(value); }
             break;
         }
     }

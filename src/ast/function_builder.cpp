@@ -100,6 +100,10 @@ void FunctionBuilder::return_(const Expression *expr) noexcept {
     }
 }
 
+void FunctionBuilder::suspend_(const Expression *expr) noexcept {
+	_create_and_append_statement<SuspendStmt>(expr);
+}
+
 RayQueryStmt *FunctionBuilder::ray_query_(const RefExpr *query) noexcept {
     return _create_and_append_statement<RayQueryStmt>(query);
 }

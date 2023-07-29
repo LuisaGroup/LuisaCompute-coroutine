@@ -419,6 +419,12 @@ inline void return_(T &&t) noexcept {
         detail::extract_expression(std::forward<T>(t)));
 }
 
+template<typename T>
+inline void suspend_(T &&t) noexcept {
+    detail::FunctionBuilder::current()->suspend_(
+        detail::extract_expression(std::forward<T>(t)));
+}
+
 inline void return_() noexcept {
     detail::FunctionBuilder::current()->return_();
 }

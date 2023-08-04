@@ -222,6 +222,7 @@ ir::NodeRef AST2IR::_convert_stmt(const Statement *stmt) noexcept {
         case Statement::Tag::COMMENT: return _convert(static_cast<const CommentStmt *>(stmt));
         case Statement::Tag::RAY_QUERY: return _convert(static_cast<const RayQueryStmt *>(stmt));
         case Statement::Tag::AUTO_DIFF: return _convert(static_cast<const AutoDiffStmt *>(stmt));
+        case Statement::Tag::SUSPEND: return _convert(static_cast<const SuspendStmt *>(stmt));
     }
     LUISA_ERROR_WITH_LOCATION("Invalid statement tag: {}.", luisa::to_string(stmt->tag()));
 }
@@ -693,6 +694,7 @@ ir::NodeRef AST2IR::_convert(const CallExpr *expr) noexcept {
             case CallOp::BINDLESS_BUFFER_SIZE: return ir::Func::Tag::BindlessBufferSize;
             case CallOp::BINDLESS_BUFFER_TYPE: return ir::Func::Tag::BindlessBufferType;
             case CallOp::REQUIRES_GRADIENT: return ir::Func::Tag::RequiresGradient;
+            case CallOp::SUSPEND: LUISA_ASSERT(false, "Suspend is not a CallOp.");
             case CallOp::GRADIENT: return ir::Func::Tag::Gradient;
             case CallOp::BACKWARD: return ir::Func::Tag::Backward;
             case CallOp::GRADIENT_MARKER: return ir::Func::Tag::GradientMarker;
@@ -1144,6 +1146,17 @@ ir::NodeRef AST2IR::_convert(const AutoDiffStmt *stmt) noexcept {
         _pools.clone(),
         ir::Node{.type_ = _convert_type(nullptr).clone(),
                  .instruction = instr});
+    ir::luisa_compute_ir_append_node(_current_builder(), node);
+    return node;
+}
+
+ir::NodeRef AST2IR::_convert(const SuspendStmt *stmt) noexcept {
+    auto id = _convert_expr(stmt->expression(), false);
+    auto instr = ir::luisa_compute_ir_new_instruction(
+        ir::Instruction{.tag = ir::Instruction::Tag::Suspend, .suspend = {id}});
+    auto node = ir::luisa_compute_ir_new_node(
+        _pools.clone(),
+        ir::Node{.type_ = _convert_type(nullptr).clone(), .instruction = instr});
     ir::luisa_compute_ir_append_node(_current_builder(), node);
     return node;
 }

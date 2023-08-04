@@ -98,7 +98,7 @@
 } % [&]() noexcept
 
 #define $autodiff ::luisa::compute::detail::AutoDiffStmtBuilder{} % [&]() noexcept
-#define $suspend(...) ::luisa::compute::suspend_(__VA_ARGS__)
+#define $suspend(...) ::luisa::compute::suspend(__VA_ARGS__)
 
 #define $switch(...) ::luisa::compute::detail::SwitchStmtBuilder{__VA_ARGS__} % [&]() noexcept
 #define $case(...) ::luisa::compute::detail::SwitchCaseStmtBuilder{__VA_ARGS__} % [&]() noexcept

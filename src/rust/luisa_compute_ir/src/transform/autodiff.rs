@@ -1127,6 +1127,7 @@ impl Backward {
             }
             crate::ir::Instruction::AdDetach(_) => {}
             Instruction::RayQuery { .. } => panic!("RayQuery is not supported yet"),
+            Instruction::Suspend { .. } => panic!("Coroutine is not supported yet"),
             crate::ir::Instruction::Call(func, args) => {
                 if grad_type.is_none() {
                     return;

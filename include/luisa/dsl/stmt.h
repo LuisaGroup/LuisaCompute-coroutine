@@ -420,7 +420,9 @@ inline void return_(T &&t) noexcept {
 }
 
 template<typename T>
-inline void suspend_(T &&t) noexcept {
+inline void suspend(T &&t) noexcept {
+    using E = expr_value_t<T>;
+    static_assert(std::is_same_v<E, uint>);
     detail::FunctionBuilder::current()->suspend_(
         detail::extract_expression(std::forward<T>(t)));
 }

@@ -988,6 +988,7 @@ pub enum Instruction {
         on_triangle_hit: Pooled<BasicBlock>,
         on_procedural_hit: Pooled<BasicBlock>,
     },
+    Suspend (NodeRef),
     AdDetach(Pooled<BasicBlock>),
     Comment(CBoxedSlice<u8>),
 }
@@ -1843,6 +1844,12 @@ impl IrBuilder {
             }),
             Type::void(),
         );
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
+    }
+    pub fn suspend(&mut self, id: NodeRef) -> NodeRef {
+        let node = Node::new(CArc::new(Instruction::Suspend (id)), Type::void());
         let node = new_node(&self.pools, node);
         self.append(node);
         node

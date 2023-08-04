@@ -144,6 +144,7 @@ pub enum SerializedInstruction {
         on_triangle_hit: SerializedBlockRef,
         on_procedural_hit: SerializedBlockRef,
     },
+    Suspend(SerializedNodeRef),
     Comment(Vec<u8>),
     Assert(SerializedNodeRef, Vec<u8>),
 }

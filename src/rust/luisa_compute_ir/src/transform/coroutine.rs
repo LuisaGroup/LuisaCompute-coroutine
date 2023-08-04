@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use super::Transform;
 
-use crate::*;
+use crate::{*, display::DisplayIR};
 use indexmap::IndexSet;
 use ir::*;
 
@@ -15,6 +15,7 @@ struct ToSSAImpl {
     map_blocks: HashMap<*mut BasicBlock, *mut BasicBlock>,
     local_defs: HashSet<NodeRef>,
     map_immutables: HashMap<NodeRef, NodeRef>,
+    suspend_count: u32,
 }
 struct SSABlockRecord {
     defined: NestedHashSet<NodeRef>,
@@ -45,6 +46,7 @@ impl ToSSAImpl {
             map_blocks: HashMap::new(),
             local_defs: model.collect_nodes().into_iter().collect(),
             map_immutables: HashMap::new(),
+            suspend_count: 0,
         }
     }
     fn load(
@@ -322,6 +324,19 @@ impl ToSSAImpl {
             Instruction::Return(_) => {
                 panic!("call LowerControlFlow before ToSSA");
             }
+            Instruction::Suspend (suspend_id) => {
+                let suspend_id = self.promote(*suspend_id,builder,record);
+                let current_count=builder.const_(Const::Uint32(self.suspend_count));
+                let cond=builder.call(Func::Eq,&[suspend_id,current_count],crate::context::register_type(Type::Primitive(Primitive::Bool)));
+                let mut true_builder=IrBuilder::new(builder.pools.clone());
+                true_builder.return_(INVALID_REF);
+                let true_branch=true_builder.finish();
+                let false_branch=IrBuilder::new(builder.pools.clone()).finish();
+                self.suspend_count += 1;
+                builder.if_(cond,true_branch,false_branch)
+                //builder.suspend(suspend_id)
+                
+            }
         }
     }
     fn promote_bb(
@@ -341,6 +356,8 @@ impl ToSSAImpl {
 
 impl Transform for Coroutine {
     fn transform(&self, module: Module) -> Module {
+        //let result=DisplayIR::new().display_ir(&module);
+        //println!("{}",result);
         let mut imp = ToSSAImpl::new(&module);
         let new_bb = imp.promote_bb(
             module.entry,
@@ -349,10 +366,14 @@ impl Transform for Coroutine {
         );
         let mut entry = module.entry;
         *entry.get_mut() = *new_bb;
-        Module {
+        let ret=Module {
             kind: module.kind,
             entry,
             pools: module.pools,
-        }
+        };
+        //println!("\n\n----------after------\n\n");
+        //let result=DisplayIR::new().display_ir(&ret);
+        //println!("{}",result);
+        ret
     }
 }

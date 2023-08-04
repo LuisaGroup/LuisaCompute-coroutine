@@ -595,6 +595,7 @@ struct Instruction {
         Switch,
         AdScope,
         RayQuery,
+        Suspend,
         AdDetach,
         Comment,
     };
@@ -667,6 +668,10 @@ struct Instruction {
         Pooled<BasicBlock> on_procedural_hit;
     };
 
+    struct Suspend_Body {
+        NodeRef _0;
+    };
+
     struct AdDetach_Body {
         Pooled<BasicBlock> _0;
     };
@@ -691,6 +696,7 @@ struct Instruction {
         Switch_Body switch_;
         AdScope_Body ad_scope;
         RayQuery_Body ray_query;
+        Suspend_Body suspend;
         AdDetach_Body ad_detach;
         Comment_Body comment;
     };

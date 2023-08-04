@@ -126,6 +126,9 @@ impl UsageDetector {
                 self.detect_block(on_procedural_hit);
                 self.detect_block(on_triangle_hit);
             }
+            crate::ir::Instruction::Suspend(id) => {
+                self.mark(*id, UsageMark::READ);
+            }
             crate::ir::Instruction::GenericLoop {
                 prepare,
                 cond,

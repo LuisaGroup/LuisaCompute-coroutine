@@ -191,6 +191,7 @@ impl ToSSAImpl {
                 return v;
             }
             Instruction::RayQuery { .. } => panic!("ray query not supported"),
+            Instruction::Suspend { .. } => panic!("suspend not supported"),
             Instruction::If {
                 cond,
                 true_branch,

@@ -168,6 +168,10 @@ impl DisplayIR {
                 self.output += "}";
             }
             Instruction::RayQuery { .. } => todo!(),
+            Instruction::Suspend (suspend_id ) => {
+                let temp = format!("suspend ${}\n", self.get(suspend_id));
+                self.output += temp.as_str();
+            }
             Instruction::Loop { body, cond } => {
                 let temp = format!("while ${} {{\n", self.get(cond));
                 self.output += temp.as_str();

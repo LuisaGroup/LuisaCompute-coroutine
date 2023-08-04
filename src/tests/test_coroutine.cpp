@@ -29,7 +29,7 @@ int main(int argc, char *argv[]) {
     std::vector<float> x(n);
     std::vector<float> x_out(n);
     for (auto i = 0u; i < n; i++) {
-        x[i] = 0;
+        x[i] = i;
     }
     stream << x_buffer.copy_from(x.data())
            << synchronize();
@@ -41,7 +41,6 @@ int main(int argc, char *argv[]) {
         //just for practice: write a program run to suspend corresponding handle, no continue
         auto i = dispatch_x();
         auto x = x_buffer.read(i);
-        x += 1;
         $suspend(handle);
         x += 10;
         x_buffer.write(i,x);
@@ -53,15 +52,16 @@ int main(int argc, char *argv[]) {
         x_buffer.write(i,x);
         $suspend(handle);
     };
-
     auto kernel_shader = device.compile(kernel);
     for (int i = 0; i < 10; ++i) {
+        stream << x_buffer.copy_from(x.data())
+           << synchronize();
         stream << kernel_shader(x_buffer, i).dispatch(n)
            << synchronize();
         stream << x_buffer.copy_to(x_out.data())
                << synchronize();
         for (int j = 0; j < n; ++j) {
-            LUISA_INFO("x[{}] = {}", j, x_out[j]);
+            LUISA_INFO("suspend {}: x[{}] = {}",i, j, x_out[j]);
         }
     }
 }

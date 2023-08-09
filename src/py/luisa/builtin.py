@@ -1,7 +1,7 @@
 from .dylibs import lcapi
 from .mathtypes import *
 from .types import uint, uint3, float2, float3, float4, short, ushort, half, half2, half3, half4, long, ulong, to_lctype, is_bit16_types, is_bit64_types, BuiltinFuncBuilder, arithmetic_dtypes, vector_dtypes, scalar_and_vector_dtypes, matrix_dtypes, vector_and_matrix_dtypes, \
-    vector, length_of, element_of, nameof, implicit_covertable, basic_dtypes
+    vector, length_of, element_of, nameof, implicit_covertable, basic_dtypes, integer_scalar_vector_dtypes
 import functools
 from . import globalvars
 from types import SimpleNamespace
@@ -208,7 +208,7 @@ builtin_func_names = {
     'copysign', 'fma',
     'min', 'max',
     'all', 'any',
-    'select', 'clamp', 'saturate', 'step', 'lerp',
+    'select', 'clamp', 'saturate', 'step', 'smoothstep', 'lerp',
     'clz', 'ctz', 'popcount', 'reverse',
     'determinant', 'transpose', 'inverse', "faceforward", "reflect",
     'print',
@@ -575,10 +575,11 @@ _func_map["cross"] = _cross
 def _lerp(name, *args):
     t_len = length_of(args[2].dtype)
     assert len(args) == 3 and (args[0].dtype == args[1].dtype) and (length_of(args[0].dtype) == t_len or t_len == 1)
-    return make_vector_call(element_of(args[0].dtype), lcapi.CallOp.LERP, args)
+    return make_vector_call(element_of(args[0].dtype), getattr(lcapi.CallOp, name.upper()), args)
 
 
 _func_map["lerp"] = _lerp
+_func_map["smoothstep"] = _lerp
 
 
 def _select(name, *args):
@@ -641,7 +642,7 @@ for name in ('clamp', 'fma'):
 
 
 def _step(name, *args):
-    op = lcapi.CallOp.STEP
+    op = getattr(lcapi.CallOp, name.upper())
     assert len(args) == 2
     assert implicit_covertable(args[0].dtype, args[1].dtype) and args[0].dtype in arithmetic_dtypes, \
         "invalid parameter"
@@ -743,7 +744,6 @@ def builtin_func(name, *args, **kwargs):
         raise NameError(f'unrecognized function call {name}')
     return func(name, *args)
 
-
 def callable_call(func, *args):
     shared_dict = {}
     exprs = []
@@ -764,7 +764,7 @@ def callable_call(func, *args):
     arg_list = tuple(a.dtype for a in args)
     if func is globalvars.current_context.func and arg_list == globalvars.current_context.argtypes:
         raise Exception("Recursion is not supported")
-    f = func.get_compiled(func_type=1, allow_ref=True, argtypes=arg_list, arg_info=shared_dict)
+    f = func.get_compiled(func_type=1, allow_ref=True, argtypes=arg_list, arg_info=shared_dict, custom_key=globalvars.saved_shader_count)
     globalvars.current_context.uses_printer |= f.uses_printer
     # create temporary var for each r-value argument
     # call
@@ -773,3 +773,57 @@ def callable_call(func, *args):
     else:
         dtype = f.return_type
         return dtype, lcapi.builder().call(to_lctype(dtype), f.function, exprs)
+
+@BuiltinFuncBuilder
+def warp_lane_count():
+    op = lcapi.CallOp.WARP_LANE_COUNT
+    return uint, lcapi.builder().call(to_lctype(uint), op, [])
+
+@BuiltinFuncBuilder
+def warp_lane_index():
+    op = lcapi.CallOp.WARP_LANE_INDEX
+    return uint, lcapi.builder().call(to_lctype(uint), op, [])
+
+@BuiltinFuncBuilder
+def warp_is_first_active_lane():
+    op = lcapi.CallOp.WARP_IS_FIRST_ACTIVE_LANE
+    return bool, lcapi.builder().call(to_lctype(bool), op, [])
+
+@BuiltinFuncBuilder
+def warp_active_all_equal(value):
+    assert value.dtype in scalar_and_vector_dtypes
+    op = lcapi.CallOp.WARP_ACTIVE_ALL_EQUAL
+    type = to_bool(value.dtype)
+    return type, lcapi.builder().call(to_lctype(type), op, [value.expr])
+
+@BuiltinFuncBuilder
+def warp_active_bit_and(value):
+    assert value.dtype in integer_scalar_vector_dtypes
+    op = lcapi.CallOp.WARP_ACTIVE_BIT_AND
+    return value.dtype, lcapi.builder().call(to_lctype(value.dtype), op, [value.expr])
+
+@BuiltinFuncBuilder
+def warp_active_bit_or(value):
+    assert value.dtype in integer_scalar_vector_dtypes
+    op = lcapi.CallOp.WARP_ACTIVE_BIT_OR
+    return value.dtype, lcapi.builder().call(to_lctype(value.dtype), op, [value.expr])
+
+@BuiltinFuncBuilder
+def warp_active_bit_or(value):
+    assert value.dtype in integer_scalar_vector_dtypes
+    op = lcapi.CallOp.WARP_ACTIVE_BIT_XOR
+    return value.dtype, lcapi.builder().call(to_lctype(value.dtype), op, [value.expr])
+# TODO:
+# WARP_ACTIVE_COUNT_BITS, // (bool): uint
+# WARP_ACTIVE_MAX, // (type: scalar/vector/matrix): type
+# WARP_ACTIVE_MIN, // (type: scalar/vector/matrix): type
+# WARP_ACTIVE_PRODUCT, // (type: scalar/vector/matrix): type
+# WARP_ACTIVE_SUM, // (type: scalar/vector/matrix): type
+# WARP_ACTIVE_ALL, // (bool): bool
+# WARP_ACTIVE_ANY, // (bool): bool
+# WARP_ACTIVE_BIT_MASK, // (bool): uint4 (uint4 contained 128-bit)
+# WARP_PREFIX_COUNT_BITS, // (bool): uint (count bits before this lane)
+# WARP_PREFIX_SUM, // (bool): uint (count bits before this lane)
+# WARP_PREFIX_PRODUCT, // (bool): uint (count bits before this lane)
+# WARP_READ_LANE_AT, // (type, index: uint): type (read this variable's value at this lane)
+# WARP_READ_FIRST_LANE, // (type, index: uint): type (read this variable's value at first lane)

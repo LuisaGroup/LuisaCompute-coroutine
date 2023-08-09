@@ -31,6 +31,8 @@
 #include <Resource/SparseBuffer.h>
 #include <Resource/SparseHeap.h>
 
+#include <DXApi/dml_ext.h>
+
 #ifdef LUISA_ENABLE_IR
 #include <luisa/ir/ir2ast.h>
 #endif
@@ -73,6 +75,14 @@ LCDevice::LCDevice(Context &&ctx, DeviceConfig const *settings)
         [](DeviceExtension *ext) {
             delete static_cast<DStorageExtImpl *>(ext);
         });
+    exts.try_emplace(
+        DirectMLExt::name,
+        [](LCDevice *device) -> DeviceExtension * {
+            return new DxDirectMLExt(device);
+        },
+        [](DeviceExtension *ext) {
+            delete static_cast<DxDirectMLExt *>(ext);
+        });
 }
 LCDevice::~LCDevice() {
 }
@@ -92,7 +102,7 @@ BufferCreationInfo LCDevice::create_buffer(const Type *element, size_t elem_coun
     Buffer *res;
     if (element->is_custom()) {
         if (element == Type::of<IndirectKernelDispatch>()) {
-            info.element_stride = 28;
+            info.element_stride = ComputeShader::DispatchIndirectStride;
             info.total_size_bytes = 4 + info.element_stride * elem_count;
             res = static_cast<Buffer *>(new DefaultBuffer(&nativeDevice, info.total_size_bytes, nativeDevice.defaultAllocator.get()));
         } else {
@@ -112,7 +122,7 @@ BufferCreationInfo LCDevice::create_buffer(const Type *element, size_t elem_coun
     return info;
 }
 void LCDevice::destroy_buffer(uint64 handle) noexcept {
-    delete reinterpret_cast<DefaultBuffer *>(handle);
+    delete reinterpret_cast<Buffer *>(handle);
 }
 ResourceCreationInfo LCDevice::create_texture(
     PixelFormat format,
@@ -151,7 +161,7 @@ ResourceCreationInfo LCDevice::create_texture(
 //    return Shader::PSOName(&nativeDevice, file_name);
 //}
 void LCDevice::destroy_texture(uint64 handle) noexcept {
-    delete reinterpret_cast<RenderTexture *>(handle);
+    delete reinterpret_cast<TextureBase *>(handle);
 }
 ResourceCreationInfo LCDevice::create_bindless_array(size_t size) noexcept {
     ResourceCreationInfo info;
@@ -232,7 +242,7 @@ ShaderCreationInfo LCDevice::create_shader(const ShaderOption &option, Function 
     }
     // Clock clk;
     auto code = hlsl::CodegenUtility{}.Codegen(kernel, nativeDevice.fileIo, option.native_include, mask, false);
-    // LUISA_INFO("HLSL Codegen: {} ms", clk.toc());
+    // LUISA_VERBOSE("HLSL Codegen: {} ms", clk.toc());
     if (option.compile_only) {
         assert(!option.name.empty());
         ComputeShader::SaveCompute(
@@ -250,14 +260,16 @@ ShaderCreationInfo LCDevice::create_shader(const ShaderOption &option, Function 
         vstd::string_view file_name;
         vstd::string str_cache;
         vstd::MD5 checkMD5({reinterpret_cast<uint8_t const *>(code.result.data() + code.immutableHeaderSize), code.result.size() - code.immutableHeaderSize});
-        CacheType cacheType;
-        if (option.name.empty()) {
-            str_cache << checkMD5.to_string(false) << ".dxil"sv;
-            file_name = str_cache;
-            cacheType = CacheType::Cache;
-        } else {
-            file_name = option.name;
-            cacheType = CacheType::ByteCode;
+        CacheType cacheType{};
+        if (option.enable_cache) {
+            if (option.name.empty()) {
+                str_cache << checkMD5.to_string(false) << ".dxil"sv;
+                file_name = str_cache;
+                cacheType = CacheType::Cache;
+            } else {
+                file_name = option.name;
+                cacheType = CacheType::ByteCode;
+            }
         }
         auto res = ComputeShader::CompileCompute(
             nativeDevice.fileIo,
@@ -315,32 +327,32 @@ ResourceCreationInfo LCDevice::create_event() noexcept {
 void LCDevice::destroy_event(uint64 handle) noexcept {
     delete reinterpret_cast<LCEvent *>(handle);
 }
-void LCDevice::signal_event(uint64 handle, uint64 stream_handle) noexcept {
+void LCDevice::signal_event(uint64 handle, uint64 stream_handle, uint64_t fence) noexcept {
     auto queue = reinterpret_cast<CmdQueueBase *>(stream_handle);
     switch (queue->Tag()) {
         case CmdQueueTag::MainCmd:
             reinterpret_cast<LCEvent *>(handle)->Signal(
-                &reinterpret_cast<LCCmdBuffer *>(stream_handle)->queue);
+                &reinterpret_cast<LCCmdBuffer *>(stream_handle)->queue, fence);
             break;
         case CmdQueueTag::DStorage:
             reinterpret_cast<LCEvent *>(handle)->Signal(
-                reinterpret_cast<DStorageCommandQueue *>(stream_handle));
+                reinterpret_cast<DStorageCommandQueue *>(stream_handle), fence);
             break;
     }
 }
-bool LCDevice::is_event_completed(uint64_t handle) const noexcept {
-    return reinterpret_cast<LCEvent *>(handle)->IsComplete();
+bool LCDevice::is_event_completed(uint64_t handle, uint64_t fence) const noexcept {
+    return reinterpret_cast<LCEvent *>(handle)->IsComplete(fence);
 }
-void LCDevice::wait_event(uint64 handle, uint64 stream_handle) noexcept {
+void LCDevice::wait_event(uint64 handle, uint64 stream_handle, uint64_t fence) noexcept {
     auto queue = reinterpret_cast<CmdQueueBase *>(stream_handle);
     if (queue->Tag() != CmdQueueTag::MainCmd) [[unlikely]] {
         LUISA_ERROR("Wait command not allowed in Direct-Storage.");
     }
     reinterpret_cast<LCEvent *>(handle)->Wait(
-        &reinterpret_cast<LCCmdBuffer *>(stream_handle)->queue);
+        &reinterpret_cast<LCCmdBuffer *>(stream_handle)->queue, fence);
 }
-void LCDevice::synchronize_event(uint64 handle) noexcept {
-    reinterpret_cast<LCEvent *>(handle)->Sync();
+void LCDevice::synchronize_event(uint64 handle, uint64_t fence) noexcept {
+    reinterpret_cast<LCEvent *>(handle)->Sync(fence);
 }
 ResourceCreationInfo LCDevice::create_procedural_primitive(const AccelOption &option) noexcept {
     return create_mesh(option);
@@ -442,14 +454,16 @@ ResourceCreationInfo DxRasterExt::create_raster_shader(
     } else {
         vstd::string_view file_name;
         vstd::string str_cache;
-        CacheType cacheType;
-        if (option.name.empty()) {
-            str_cache << checkMD5.to_string(false) << ".dxil"sv;
-            file_name = str_cache;
-            cacheType = CacheType::Cache;
-        } else {
-            file_name = option.name;
-            cacheType = CacheType::ByteCode;
+        CacheType cacheType{};
+        if (option.enable_cache) {
+            if (option.name.empty()) {
+                str_cache << checkMD5.to_string(false) << ".dxil"sv;
+                file_name = str_cache;
+                cacheType = CacheType::Cache;
+            } else {
+                file_name = option.name;
+                cacheType = CacheType::ByteCode;
+            }
         }
         ResourceCreationInfo info;
         auto res = RasterShader::CompileRaster(
@@ -516,7 +530,7 @@ ResourceCreationInfo DxRasterExt::create_depth_buffer(DepthFormat format, uint w
     return info;
 }
 void DxRasterExt::destroy_depth_buffer(uint64_t handle) noexcept {
-    delete reinterpret_cast<DepthBuffer *>(handle);
+    delete reinterpret_cast<TextureBase *>(handle);
 }
 DeviceExtension *LCDevice::extension(vstd::string_view name) noexcept {
     auto ite = exts.find(name);
@@ -594,7 +608,7 @@ void LCDevice::set_name(luisa::compute::Resource::Tag resource_tag, uint64_t res
             }
         } break;
         default: {
-            LUISA_ERROR("Unknown resource tag.");
+            LUISA_WARNING("Unknown resource tag.");
         } break;
     }
 }
@@ -640,7 +654,7 @@ SparseBufferCreationInfo LCDevice::create_sparse_buffer(const Type *element, siz
     SparseBuffer *res;
     if (element->is_custom()) {
         if (element == Type::of<IndirectKernelDispatch>()) {
-            info.element_stride = 28;
+            info.element_stride = ComputeShader::DispatchIndirectStride;
             info.total_size_bytes = 4 + info.element_stride * elem_count;
             res = new SparseBuffer(&nativeDevice, info.total_size_bytes);
         } else {
@@ -705,14 +719,14 @@ ShaderCreationInfo LCDevice::create_shader(const ShaderOption &option, const ir:
 #ifdef LUISA_ENABLE_IR
     Clock clk;
     auto function = IR2AST::build(kernel);
-    LUISA_INFO("IR2AST done in {} ms.", clk.toc());
+    LUISA_VERBOSE("IR2AST done in {} ms.", clk.toc());
     return create_shader(option, function->function());
 #else
     LUISA_ERROR_WITH_LOCATION("DirectX device does not support creating shader from IR types.");
 #endif
 }
 ResourceCreationInfo LCDevice::allocate_sparse_buffer_heap(size_t byte_size) noexcept {
-    auto heap = reinterpret_cast<SparseHeap*>(vengine_malloc(sizeof(SparseHeap)));
+    auto heap = reinterpret_cast<SparseHeap *>(vengine_malloc(sizeof(SparseHeap)));
     heap->allocation = nativeDevice.defaultAllocator->AllocateBufferHeap(&nativeDevice, byte_size, D3D12_HEAP_TYPE_DEFAULT, &heap->heap, &heap->offset);
     heap->size_bytes = byte_size;
     ResourceCreationInfo r;
@@ -721,12 +735,12 @@ ResourceCreationInfo LCDevice::allocate_sparse_buffer_heap(size_t byte_size) noe
     return r;
 }
 void LCDevice::deallocate_sparse_buffer_heap(uint64_t handle) noexcept {
-    auto heap = reinterpret_cast<SparseHeap*>(handle);
+    auto heap = reinterpret_cast<SparseHeap *>(handle);
     nativeDevice.defaultAllocator->Release(heap->allocation);
     vengine_free(heap);
 }
 ResourceCreationInfo LCDevice::allocate_sparse_texture_heap(size_t byte_size) noexcept {
-    auto heap = reinterpret_cast<SparseHeap*>(vengine_malloc(sizeof(SparseHeap)));
+    auto heap = reinterpret_cast<SparseHeap *>(vengine_malloc(sizeof(SparseHeap)));
     heap->allocation = nativeDevice.defaultAllocator->AllocateTextureHeap(&nativeDevice, byte_size, &heap->heap, &heap->offset, true);
     heap->size_bytes = byte_size;
     ResourceCreationInfo r;
@@ -736,9 +750,12 @@ ResourceCreationInfo LCDevice::allocate_sparse_texture_heap(size_t byte_size) no
 }
 
 void LCDevice::deallocate_sparse_texture_heap(uint64_t handle) noexcept {
-    auto heap = reinterpret_cast<SparseHeap*>(handle);
+    auto heap = reinterpret_cast<SparseHeap *>(handle);
     nativeDevice.defaultAllocator->Release(heap->allocation);
     vengine_free(heap);
+}
+uint LCDevice::compute_warp_size() const noexcept {
+    return nativeDevice.waveSize();
 }
 VSTL_EXPORT_C DeviceInterface *create(Context &&c, DeviceConfig const *settings) {
     return new LCDevice(std::move(c), settings);

@@ -1,11 +1,12 @@
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
+use half::f16;
 
 use crate::usage_detect::detect_usage;
 use crate::*;
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Formatter, write};
 use std::hash::Hasher;
 use std::ops::Deref;
 
@@ -20,6 +21,7 @@ pub enum Primitive {
     Uint32,
     Int64,
     Uint64,
+    Float16,
     Float32,
     Float64,
 }
@@ -37,6 +39,7 @@ impl std::fmt::Display for Primitive {
                 Self::Uint32 => "u32",
                 Self::Int64 => "i64",
                 Self::Uint64 => "u64",
+                Self::Float16 => "f16",
                 Self::Float32 => "f32",
                 Self::Float64 => "f64",
             }
@@ -62,6 +65,7 @@ impl VectorElementType {
     }
     pub fn is_float(&self) -> bool {
         match self {
+            VectorElementType::Scalar(Primitive::Float16) => true,
             VectorElementType::Scalar(Primitive::Float32) => true,
             VectorElementType::Scalar(Primitive::Float64) => true,
             VectorElementType::Vector(v) => v.element.is_float(),
@@ -70,6 +74,8 @@ impl VectorElementType {
     }
     pub fn is_int(&self) -> bool {
         match self {
+            VectorElementType::Scalar(Primitive::Int16) => true,
+            VectorElementType::Scalar(Primitive::Uint16) => true,
             VectorElementType::Scalar(Primitive::Int32) => true,
             VectorElementType::Scalar(Primitive::Uint32) => true,
             VectorElementType::Scalar(Primitive::Int64) => true,
@@ -208,6 +214,7 @@ impl Primitive {
             Primitive::Uint32 => 4,
             Primitive::Int64 => 8,
             Primitive::Uint64 => 8,
+            Primitive::Float16 => 2,
             Primitive::Float32 => 4,
             Primitive::Float64 => 8,
         }
@@ -407,7 +414,7 @@ impl Type {
     pub fn is_float(&self) -> bool {
         match self {
             Type::Primitive(p) => match p {
-                Primitive::Float32 | Primitive::Float64 => true,
+                Primitive::Float16 | Primitive::Float32 | Primitive::Float64 => true,
                 _ => false,
             },
             Type::Vector(v) => v.element.is_float(),
@@ -429,7 +436,9 @@ impl Type {
     pub fn is_int(&self) -> bool {
         match self {
             Type::Primitive(p) => match p {
-                Primitive::Int32 | Primitive::Uint32 | Primitive::Int64 | Primitive::Uint64 => true,
+                Primitive::Int16 | Primitive::Uint16 |
+                Primitive::Int32 | Primitive::Uint32 |
+                Primitive::Int64 | Primitive::Uint64 => true,
                 _ => false,
             },
             Type::Vector(v) => v.element.is_int(),
@@ -479,6 +488,7 @@ impl Node {
     }
 }
 
+
 #[derive(Clone, PartialEq, Eq, Debug, Hash, Serialize)]
 #[repr(C)]
 pub enum Func {
@@ -494,10 +504,13 @@ pub enum Func {
     DispatchSize,
 
     RequiresGradient,
-    Backward, // marks the beginning of backward pass
+    Backward,
+    // marks the beginning of backward pass
     Gradient,
-    GradientMarker, // marks a (node, gradient) tuple
-    AccGrad,        // grad (local), increment
+    GradientMarker,
+    // marks a (node, gradient) tuple
+    AccGrad,
+    // grad (local), increment
     Detach,
 
     // (handle, instance_id) -> Mat4
@@ -511,16 +524,23 @@ pub enum Func {
     RayTracingTraceClosest,
     // (handle, Ray, mask) -> bool
     RayTracingTraceAny,
-    RayTracingQueryAll, // (ray, mask)-> rq
+    RayTracingQueryAll,
+    // (ray, mask)-> rq
     RayTracingQueryAny, // (ray, mask)-> rq
 
-    RayQueryWorldSpaceRay,          // (rq) -> Ray
-    RayQueryProceduralCandidateHit, // (rq) -> ProceduralHit
-    RayQueryTriangleCandidateHit,   // (rq) -> TriangleHit
-    RayQueryCommittedHit,           // (rq) -> CommitedHit
-    RayQueryCommitTriangle,         // (rq) -> ()
-    RayQueryCommitProcedural,       // (rq, f32) -> ()
-    RayQueryTerminate,              // (rq) -> ()
+    RayQueryWorldSpaceRay,
+    // (rq) -> Ray
+    RayQueryProceduralCandidateHit,
+    // (rq) -> ProceduralHit
+    RayQueryTriangleCandidateHit,
+    // (rq) -> TriangleHit
+    RayQueryCommittedHit,
+    // (rq) -> CommitedHit
+    RayQueryCommitTriangle,
+    // (rq) -> ()
+    RayQueryCommitProcedural,
+    // (rq, f32) -> ()
+    RayQueryTerminate, // (rq) -> ()
 
     RasterDiscard,
 
@@ -533,6 +553,9 @@ pub enum Func {
 
     Cast,
     Bitcast,
+
+    Pack,
+    Unpack,
 
     // Binary op
     Add,
@@ -568,6 +591,8 @@ pub enum Func {
     Clamp,
     Lerp,
     Step,
+    SmoothStep,
+    Saturate,
 
     Abs,
     Min,
@@ -627,12 +652,14 @@ pub enum Func {
     // Vector operations
     Cross,
     Dot,
-    // (a, b) => a * b^T
+    // outer_product(a, b) => a * b^T
     OuterProduct,
     Length,
     LengthSquared,
     Normalize,
     Faceforward,
+    // reflect(i, n) => i - 2 * dot(n, i) * n
+    Reflect,
 
     // Matrix operations
     Determinant,
@@ -641,23 +668,23 @@ pub enum Func {
 
     SynchronizeBlock,
 
-    /// (buffer/smem, index, desired) -> old: stores desired, returns old.
+    /// (buffer/smem, indices..., desired) -> old: stores desired, returns old.
     AtomicExchange,
-    /// (buffer/smem, index, expected, desired) -> old: stores (old == expected ? desired : old), returns old.
+    /// (buffer/smem, indices..., expected, desired) -> old: stores (old == expected ? desired : old), returns old.
     AtomicCompareExchange,
-    /// (buffer/smem, index, val) -> old: stores (old + val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old + val), returns old.
     AtomicFetchAdd,
-    /// (buffer/smem, index, val) -> old: stores (old - val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old - val), returns old.
     AtomicFetchSub,
-    /// (buffer/smem, index, val) -> old: stores (old & val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old & val), returns old.
     AtomicFetchAnd,
-    /// (buffer/smem, index, val) -> old: stores (old | val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old | val), returns old.
     AtomicFetchOr,
-    /// (buffer/smem, index, val) -> old: stores (old ^ val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old ^ val), returns old.
     AtomicFetchXor,
-    /// (buffer/smem, index, val) -> old: stores min(old, val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores min(old, val), returns old.
     AtomicFetchMin,
-    /// (buffer/smem, index, val) -> old: stores max(old, val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores max(old, val), returns old.
     AtomicFetchMax,
     // memory access
     /// (buffer, index) -> value: reads the index-th element in buffer
@@ -708,8 +735,8 @@ pub enum Func {
     BindlessTexture3dSizeLevel,
     /// (bindless_array, index: uint, element: uint) -> T
     BindlessBufferRead,
-    /// (bindless_array, index: uint) -> uint: returns the size of the buffer in *elements*
-    BindlessBufferSize(CArc<Type>),
+    /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
+    BindlessBufferSize,
     // (bindless_array, index: uint) -> u64: returns the type of the buffer
     BindlessBufferType,
 
@@ -749,6 +776,9 @@ pub enum Func {
 
     // ArgT -> ArgT
     CpuCustomOp(CArc<CpuCustomOp>),
+
+    Unknown0,
+    Unknown1,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -757,10 +787,13 @@ pub enum Const {
     Zero(CArc<Type>),
     One(CArc<Type>),
     Bool(bool),
+    Int16(i16),
+    Uint16(u16),
     Int32(i32),
     Uint32(u32),
     Int64(i64),
     Uint64(u64),
+    Float16(f16),
     Float32(f32),
     Float64(f64),
     Generic(CBoxedSlice<u8>, CArc<Type>),
@@ -772,21 +805,56 @@ impl std::fmt::Display for Const {
             Const::Zero(t) => write!(f, "0_{}", t),
             Const::One(t) => write!(f, "1_{}", t),
             Const::Bool(b) => write!(f, "{}", b),
+            Const::Int16(i) => write!(f, "{}", i),
+            Const::Uint16(u) => write!(f, "{}", u),
             Const::Int32(i) => write!(f, "{}", i),
             Const::Uint32(u) => write!(f, "{}", u),
             Const::Int64(i) => write!(f, "{}", i),
             Const::Uint64(u) => write!(f, "{}", u),
+            Const::Float16(fl) => write!(f, "{}", fl),
             Const::Float32(fl) => write!(f, "{}", fl),
             Const::Float64(fl) => write!(f, "{}", fl),
             Const::Generic(data, t) => write!(f, "byte<{}>[{}]", t, data.as_ref().len()),
         }
     }
 }
+
 impl Const {
     pub fn get_i32(&self) -> i32 {
         match self {
+            Const::Int16(v) => *v as i32,
+            Const::Uint16(v) => *v as i32,
             Const::Int32(v) => *v,
             Const::Uint32(v) => *v as i32,
+            Const::Int64(v) => *v as i32,
+            Const::Uint64(v) => *v as i32,
+            Const::One(t) => {
+                assert!(
+                    t.is_primitive() && t.is_int(),
+                    "cannot convert {:?} to i32",
+                    t
+                );
+                1
+            }
+            Const::Zero(t) => {
+                assert!(
+                    t.is_primitive() && t.is_int(),
+                    "cannot convert {:?} to i32",
+                    t
+                );
+                0
+            }
+            Const::Generic(slice, t) => {
+                assert!(
+                    t.is_primitive() && t.is_int(),
+                    "cannot convert {:?} to i32",
+                    t
+                );
+                assert_eq!(slice.len(), 4, "invalid slice length for i32");
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(slice);
+                i32::from_le_bytes(buf)
+            }
             _ => panic!("cannot convert to i32"),
         }
     }
@@ -795,10 +863,13 @@ impl Const {
             Const::Zero(ty) => ty.clone(),
             Const::One(ty) => ty.clone(),
             Const::Bool(_) => <bool as TypeOf>::type_(),
+            Const::Int16(_) => <i16 as TypeOf>::type_(),
+            Const::Uint16(_) => <u16 as TypeOf>::type_(),
             Const::Int32(_) => <i32 as TypeOf>::type_(),
             Const::Uint32(_) => <u32 as TypeOf>::type_(),
             Const::Int64(_) => <i64 as TypeOf>::type_(),
             Const::Uint64(_) => <u64 as TypeOf>::type_(),
+            Const::Float16(_) => <f16 as TypeOf>::type_(),
             Const::Float32(_) => <f32 as TypeOf>::type_(),
             Const::Float64(_) => <f64 as TypeOf>::type_(),
             Const::Generic(_, t) => t.clone(),
@@ -818,12 +889,15 @@ pub struct UserData {
     data: *const u8,
     eq: extern "C" fn(*const u8, *const u8) -> bool,
 }
+
 impl PartialEq for UserData {
     fn eq(&self, other: &Self) -> bool {
         (self.eq)(self.data, other.data)
     }
 }
+
 impl Eq for UserData {}
+
 impl Serialize for UserData {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let state = serializer.serialize_struct("UserData", 1)?;
@@ -959,14 +1033,17 @@ pub enum Instruction {
     AdDetach(Pooled<BasicBlock>),
     Comment(CBoxedSlice<u8>),
 }
+
 extern "C" fn eq_impl<T: UserNodeData>(a: *const u8, b: *const u8) -> bool {
     let a = unsafe { &*(a as *const T) };
     let b = unsafe { &*(b as *const T) };
     a.equal(b)
 }
+
 fn type_id_u64<T: UserNodeData>() -> u64 {
     unsafe { std::mem::transmute(TypeId::of::<T>()) }
 }
+
 pub fn new_user_node<T: UserNodeData>(pools: &CArc<ModulePools>, data: T) -> NodeRef {
     new_node(
         pools,
@@ -980,6 +1057,7 @@ pub fn new_user_node<T: UserNodeData>(pools: &CArc<ModulePools>, data: T) -> Nod
         ),
     )
 }
+
 impl Instruction {
     pub fn is_call(&self) -> bool {
         match self {
@@ -1003,6 +1081,7 @@ impl Instruction {
         self.is_call() || self.is_const() || self.is_phi()
     }
 }
+
 pub const INVALID_INST: Instruction = Instruction::Invalid;
 
 pub fn new_node(pools: &CArc<ModulePools>, node: Node) -> NodeRef {
@@ -1062,11 +1141,13 @@ impl Serialize for BasicBlock {
         state.end()
     }
 }
+
 pub struct BasicBlockIter<'a> {
     cur: NodeRef,
     last: NodeRef,
     _block: &'a BasicBlock,
 }
+
 impl Iterator for BasicBlockIter<'_> {
     type Item = NodeRef;
     fn next(&mut self) -> Option<Self::Item> {
@@ -1079,6 +1160,7 @@ impl Iterator for BasicBlockIter<'_> {
         }
     }
 }
+
 impl BasicBlock {
     pub fn iter(&self) -> BasicBlockIter {
         BasicBlockIter {
@@ -1213,6 +1295,36 @@ impl NodeRef {
             _ => false,
         }
     }
+    pub fn is_const(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Const(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_uniform(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Uniform => true,
+            _ => false,
+        }
+    }
+    pub fn is_argument(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Argument { .. } => true,
+            _ => false,
+        }
+    }
+    pub fn is_value_argument(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Argument { by_value } => *by_value,
+            _ => false,
+        }
+    }
+    pub fn is_refernece_argument(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Argument { by_value } => !*by_value,
+            _ => false,
+        }
+    }
     pub fn is_phi(&self) -> bool {
         self.get().instruction.is_phi()
     }
@@ -1340,12 +1452,15 @@ impl PartialEq for CallableModuleRef {
         self.0.as_ptr() == other.0.as_ptr()
     }
 }
+
 impl Eq for CallableModuleRef {}
+
 impl Hash for CallableModuleRef {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.as_ptr().hash(state);
     }
 }
+
 // buffer binding
 #[repr(C)]
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, Hash, PartialEq, Eq)]
@@ -1392,11 +1507,13 @@ pub struct Capture {
     pub node: NodeRef,
     pub binding: Binding,
 }
+
 #[derive(Debug)]
 pub struct ModulePools {
     pub node_pool: Pool<Node>,
     pub bb_pool: Pool<BasicBlock>,
 }
+
 impl ModulePools {
     pub fn new() -> Self {
         Self {
@@ -1419,6 +1536,7 @@ pub struct KernelModule {
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
 }
+
 unsafe impl Send for KernelModule {}
 
 #[repr(C)]
@@ -1426,6 +1544,7 @@ unsafe impl Send for KernelModule {}
 pub struct BlockModule {
     pub module: Module,
 }
+
 unsafe impl Send for BlockModule {}
 
 impl Module {
@@ -1437,10 +1556,12 @@ impl Module {
         }
     }
 }
+
 struct NodeCollector {
     nodes: Vec<NodeRef>,
     unique: HashSet<NodeRef>,
 }
+
 impl NodeCollector {
     fn new() -> Self {
         Self {
@@ -1499,6 +1620,7 @@ impl NodeCollector {
         }
     }
 }
+
 impl Module {
     pub fn collect_nodes(&self) -> Vec<NodeRef> {
         let mut collector = NodeCollector::new();
@@ -1737,7 +1859,12 @@ impl IrBuilder {
         self.append(node.clone());
         node
     }
-    pub fn switch(&mut self, value: NodeRef, cases: &[SwitchCase], default: Pooled<BasicBlock>) {
+    pub fn switch(
+        &mut self,
+        value: NodeRef,
+        cases: &[SwitchCase],
+        default: Pooled<BasicBlock>,
+    ) -> NodeRef {
         let node = Node::new(
             CArc::new(Instruction::Switch {
                 value,
@@ -1748,6 +1875,7 @@ impl IrBuilder {
         );
         let node = new_node(&self.pools, node);
         self.append(node);
+        node
     }
     pub fn if_(
         &mut self,
@@ -1886,7 +2014,10 @@ pub extern "C" fn luisa_compute_ir_node_usage(kernel: &KernelModule) -> CBoxedSl
     }
     CBoxedSlice::new(usage)
 }
-
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_type_size(ty: &CArc<Type>) -> usize {
+    ty.size()
+}
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_new_node(pools: CArc<ModulePools>, node: Node) -> NodeRef {
     new_node(&pools, node)
@@ -1933,16 +2064,56 @@ pub extern "C" fn luisa_compute_ir_build_local(builder: &mut IrBuilder, init: No
 }
 
 #[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_if(
+    builder: &mut IrBuilder,
+    cond: NodeRef,
+    true_branch: Pooled<BasicBlock>,
+    false_branch: Pooled<BasicBlock>,
+) -> NodeRef {
+    builder.if_(cond, true_branch, false_branch)
+}
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_phi(
+    builder: &mut IrBuilder,
+    incoming: CSlice<PhiIncoming>,
+    t: CArc<Type>,
+) -> NodeRef {
+    let incoming = incoming.as_ref();
+    builder.phi(incoming, t)
+}
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_switch(
+    builder: &mut IrBuilder,
+    value: NodeRef,
+    cases: CSlice<SwitchCase>,
+    default: Pooled<BasicBlock>,
+) -> NodeRef {
+    let cases = cases.as_ref();
+    builder.switch(value, cases, default)
+}
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_generic_loop(
+    builder: &mut IrBuilder,
+    prepare: Pooled<BasicBlock>,
+    cond: NodeRef,
+    body: Pooled<BasicBlock>,
+    update: Pooled<BasicBlock>,
+) -> NodeRef {
+    builder.generic_loop(prepare, cond, body, update)
+}
+#[no_mangle]
 pub extern "C" fn luisa_compute_ir_build_local_zero_init(
     builder: &mut IrBuilder,
     ty: CArc<Type>,
 ) -> NodeRef {
     builder.local_zero_init(ty)
 }
+
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_new_module_pools() -> *mut CArcSharedBlock<ModulePools> {
     CArc::into_raw(CArc::new(ModulePools::new()))
 }
+
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_new_builder(pools: CArc<ModulePools>) -> IrBuilder {
     unsafe { IrBuilder::new(pools.clone()) }
@@ -1971,6 +2142,7 @@ pub extern "C" fn luisa_compute_ir_new_kernel_module(
 ) -> *mut CArcSharedBlock<KernelModule> {
     CArc::into_raw(CArc::new(m))
 }
+
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_new_block_module(
     m: BlockModule,
@@ -1982,6 +2154,7 @@ pub extern "C" fn luisa_compute_ir_new_block_module(
 pub extern "C" fn luisa_compute_ir_register_type(ty: &Type) -> *mut CArcSharedBlock<Type> {
     CArc::into_raw(context::register_type(ty.clone()))
 }
+
 pub mod debug {
     use crate::display::DisplayIR;
     use std::ffi::CString;

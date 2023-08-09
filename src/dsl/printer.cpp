@@ -1,9 +1,4 @@
-//
-// Created by Mike Smith on 2022/2/13.
-//
-
 #include <luisa/runtime/device.h>
-#include <luisa/runtime/stream.h>
 #include <luisa/dsl/printer.h>
 
 namespace luisa::compute {
@@ -18,16 +13,17 @@ Printer::Printer(Device &device, luisa::string_view name, size_t capacity) noexc
 }
 
 luisa::unique_ptr<Command> Printer::reset() noexcept {
-    _reset_called = true;
+    _reset_called.store(true);
     static const auto zero = 0u;
     return _buffer.view(_buffer.size() - 1u, 1u).copy_from(&zero);
 }
 
 std::tuple<luisa::unique_ptr<Command>,
            luisa::move_only_function<void()>,
-           luisa::unique_ptr<Command>>
+           luisa::unique_ptr<Command>,
+           Stream::Synchronize>
 Printer::retrieve(bool abort_on_error) noexcept {
-    if (!_reset_called) [[unlikely]] {
+    if (!_reset_called.load()) [[unlikely]] {
         LUISA_ERROR_WITH_LOCATION(
             "Printer results cannot be "
             "retrieved if never reset.");
@@ -52,8 +48,8 @@ Printer::retrieve(bool abort_on_error) noexcept {
             LUISA_WARNING_WITH_LOCATION("Kernel log truncated.");
         }
     };
-    return {_buffer.copy_to(_host_buffer.data()), print, reset()};
+    auto copy = _buffer.copy_to(_host_buffer.data());
+    return {std::move(copy), print, reset(), synchronize()};
 }
 
 }// namespace luisa::compute
-

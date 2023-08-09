@@ -1,11 +1,16 @@
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "*-no-recursion"
+
 #include <luisa/ast/op.h>
 #include <luisa/ast/variable.h>
 #include <luisa/core/logging.h>
 #include <luisa/core/magic_enum.h>
 #include <luisa/runtime/rtx/ray.h>
 #include <luisa/runtime/rtx/hit.h>
+#include <luisa/dsl/rtx/ray_query.h>
 #include <luisa/rust/ir.hpp>
 #include <luisa/ir/ir2ast.h>
+#include <luisa/ir/ir.h>
 
 namespace luisa::compute {
 
@@ -46,10 +51,10 @@ void IR2AST::_convert_block(const ir::BasicBlock *block) noexcept {
         }
         node_ref = node->next;
     }
-
     if (auto iter = _ctx->block_to_phis.find(block);
         iter != _ctx->block_to_phis.end()) {
         for (auto phi : iter->second) {
+            _ctx->function_builder->comment_("phi node assignment");
             _ctx->function_builder->assign(_convert_node(phi.dst), _convert_node(phi.src));
         }
     }
@@ -67,7 +72,7 @@ const Expression *IR2AST::_convert_node(const ir::Node *node) noexcept {
 
     auto expr = [&, index = _ctx->node_to_exprs.size()]() -> const Expression * {
         switch (node->instruction->tag) {
-            case ir::Instruction::Tag::Buffer: return _ctx->function_builder->buffer(type);
+            case ir::Instruction::Tag::Buffer: return _ctx->function_builder->buffer(Type::buffer(type));
             case ir::Instruction::Tag::Bindless: return _ctx->function_builder->bindless_array();
             case ir::Instruction::Tag::Texture2D: [[fallthrough]];
             case ir::Instruction::Tag::Texture3D: {
@@ -79,7 +84,7 @@ const Expression *IR2AST::_convert_node(const ir::Node *node) noexcept {
             }
             case ir::Instruction::Tag::Accel: return _ctx->function_builder->accel();
             case ir::Instruction::Tag::Shared: return _ctx->function_builder->shared(type);
-            case ir::Instruction::Tag::UserData: return _ctx->function_builder->literal(Type::from("float"), 0.0f); 
+            case ir::Instruction::Tag::UserData: return _ctx->function_builder->literal(Type::of<float>(), 0.0f);
             case ir::Instruction::Tag::Const: return _convert_constant(node->instruction->const_._0);
             case ir::Instruction::Tag::Call: {
                 auto ret = _convert_instr_call(node);
@@ -120,7 +125,6 @@ void IR2AST::_convert_instr_local(const ir::Node *node) noexcept {
 }
 
 void IR2AST::_convert_instr_user_data(const ir::Node *_user_data) noexcept {
-   
 }
 
 void IR2AST::_convert_instr_invalid(const ir::Node *invalid) noexcept {
@@ -136,6 +140,117 @@ void IR2AST::_convert_instr_update(const ir::Node *node) noexcept {
     auto rhs = _convert_node(node->instruction->update.value);
     _ctx->function_builder->assign(lhs, rhs);
 }
+
+namespace detail {
+
+[[nodiscard]] inline const Expression *
+ir2ast_convert_ray(FunctionBuilder *b, const Expression *expr) noexcept {
+    // if the types are the same (i.e. Ray), no need to convert
+    if (expr->type() == Type::of<Ray>()) { return expr; }
+    auto ft = Type::of<float>();
+    auto vt = Type::structure(4u, ft, ft, ft);
+    auto rt = Type::structure(16, vt, ft, vt, ft);
+    LUISA_ASSERT(expr->type() == rt,
+                 "Invalid ray type: {}.",
+                 expr->type()->description());
+    // if the ray is not a local variable, make a local copy first
+    if (expr->tag() != Expression::Tag::REF) {
+        auto ref = b->local(expr->type());
+        b->assign(ref, expr);
+        expr = ref;
+    }
+    // decompose the ray
+    auto o = b->member(vt, expr, 0u);
+    auto ox = b->member(ft, o, 0u);
+    auto oy = b->member(ft, o, 1u);
+    auto oz = b->member(ft, o, 2u);
+    auto tmin = b->member(ft, expr, 1u);
+    auto d = b->member(vt, expr, 2u);
+    auto dx = b->member(ft, d, 0u);
+    auto dy = b->member(ft, d, 1u);
+    auto dz = b->member(ft, d, 2u);
+    auto tmax = b->member(ft, expr, 3u);
+    auto at = Type::array(ft, 3u);
+    auto ray = b->local(Type::of<Ray>());
+    auto o_ = b->member(at, ray, 0u);
+    auto d_ = b->member(at, ray, 2u);
+    auto ut = Type::of<uint>();
+    auto u0 = b->literal(ut, 0u);
+    auto u1 = b->literal(ut, 1u);
+    auto u2 = b->literal(ut, 2u);
+    b->assign(b->access(ft, o_, u0), ox);
+    b->assign(b->access(ft, o_, u1), oy);
+    b->assign(b->access(ft, o_, u2), oz);
+    b->assign(b->member(ft, ray, 1u), tmin);
+    b->assign(b->access(ft, d_, u0), dx);
+    b->assign(b->access(ft, d_, u1), dy);
+    b->assign(b->access(ft, d_, u2), dz);
+    b->assign(b->member(ft, ray, 3u), tmax);
+    return ray;
+}
+
+[[nodiscard]] inline const Expression *
+ir2ast_convert_triangle_hit(FunctionBuilder *b, const Type *dst_ht, const Expression *expr) noexcept {
+    LUISA_ASSERT(expr->type() == Type::of<TriangleHit>(),
+                 "Invalid triangle hit type: {}.",
+                 expr->type()->description());
+    if (dst_ht == Type::of<TriangleHit>()) { return expr; }
+    auto ft = Type::of<float>();
+    auto ut = Type::of<uint>();
+    auto vt = Type::of<float2>();
+    auto ht = Type::structure(8u, ut, ut, ft, ft, ft);
+    LUISA_ASSERT(dst_ht == ht,
+                 "Invalid triangle hit type: {}.",
+                 expr->type()->description());
+    if (expr->tag() != Expression::Tag::REF) {
+        auto ref = b->local(expr->type());
+        b->assign(ref, expr);
+        expr = ref;
+    }
+    auto bary = b->member(ft, expr, 2u);
+    auto bary_x = b->access(ft, bary, b->literal(ut, 0u));
+    auto bary_y = b->access(ft, bary, b->literal(ut, 1u));
+    auto hit = b->local(dst_ht);
+    b->assign(b->member(ut, hit, 0u), b->member(ut, expr, 0u));// inst
+    b->assign(b->member(ut, hit, 1u), b->member(ut, expr, 1u));// prim
+    b->assign(b->member(ft, hit, 2u), bary_x);                 // bary_x
+    b->assign(b->member(ft, hit, 3u), bary_y);                 // bary_y
+    b->assign(b->member(ft, hit, 4u), b->member(ft, expr, 3u));// ray_t
+    return hit;
+}
+
+[[nodiscard]] inline const Expression *
+ir2ast_convert_committed_hit(FunctionBuilder *b, const Type *dst_ht, const Expression *expr) noexcept {
+    LUISA_ASSERT(expr->type() == Type::of<CommittedHit>(),
+                 "Invalid committed hit type: {}.",
+                 expr->type()->description());
+    if (dst_ht == Type::of<CommittedHit>()) { return expr; }
+    auto ft = Type::of<float>();
+    auto ut = Type::of<uint>();
+    auto vt = Type::of<float2>();
+    auto ht = Type::structure(8u, ut, ut, ft, ft, ut, ft);
+    LUISA_ASSERT(dst_ht == ht,
+                 "Invalid committed hit type: {}.",
+                 expr->type()->description());
+    if (expr->tag() != Expression::Tag::REF) {
+        auto ref = b->local(expr->type());
+        b->assign(ref, expr);
+        expr = ref;
+    }
+    auto bary = b->member(ft, expr, 2u);
+    auto bary_x = b->access(ft, bary, b->literal(ut, 0u));
+    auto bary_y = b->access(ft, bary, b->literal(ut, 1u));
+    auto hit = b->local(dst_ht);
+    b->assign(b->member(ut, hit, 0u), b->member(ut, expr, 0u));// inst
+    b->assign(b->member(ut, hit, 1u), b->member(ut, expr, 1u));// prim
+    b->assign(b->member(ft, hit, 2u), bary_x);                 // bary_x
+    b->assign(b->member(ft, hit, 3u), bary_y);                 // bary_y
+    b->assign(b->member(ut, hit, 4u), b->member(ut, expr, 3u));// hit_type
+    b->assign(b->member(ft, hit, 5u), b->member(ft, expr, 4u));// ray_t
+    return hit;
+}
+
+}// namespace detail
 
 const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
     auto type = _convert_type(node->type_.get());
@@ -158,18 +273,19 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
             call_op == CallOp::RAY_TRACING_TRACE_ANY ||
             call_op == CallOp::RAY_TRACING_QUERY_ALL ||
             call_op == CallOp::RAY_TRACING_QUERY_ANY) {
-            converted_args[1] = _ctx->function_builder->cast(
-                Type::of<Ray>(), CastOp::BITWISE, converted_args[1]);
+            converted_args[1] = detail::ir2ast_convert_ray(
+                _ctx->function_builder.get(),
+                converted_args[1]);
         }
         if (call_op == CallOp::RAY_TRACING_QUERY_ANY) {
-            auto type = Type::custom("LC_RayQueryAny");
-            auto local =  _ctx->function_builder->local(type);
-            auto call =  _ctx->function_builder->call(type, call_op, converted_args);
+            auto type = Type::of<RayQueryAny>();
+            auto local = _ctx->function_builder->local(type);
+            auto call = _ctx->function_builder->call(type, call_op, converted_args);
             _ctx->function_builder->assign(local, call);
             return local;
         }
         if (call_op == CallOp::RAY_TRACING_QUERY_ALL) {
-            auto type = Type::custom("LC_RayQueryAll");
+            auto type = Type::of<RayQueryAll>();
             auto local = _ctx->function_builder->local(type);
             auto call = _ctx->function_builder->call(type, call_op, converted_args);
             _ctx->function_builder->assign(local, call);
@@ -183,8 +299,14 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
             if (call_op == CallOp::RAY_TRACING_TRACE_CLOSEST) {
                 auto ret = _ctx->function_builder->call(
                     Type::of<TriangleHit>(), call_op, converted_args);
-                return _ctx->function_builder->cast(
-                    type, CastOp::BITWISE, ret);
+                return detail::ir2ast_convert_triangle_hit(
+                    _ctx->function_builder.get(), type, ret);
+            }
+            if (call_op == CallOp::RAY_QUERY_COMMITTED_HIT) {
+                auto ret = _ctx->function_builder->call(
+                    Type::of<CommittedHit>(), call_op, converted_args);
+                return detail::ir2ast_convert_committed_hit(
+                    _ctx->function_builder.get(), type, ret);
             }
             auto ret = _ctx->function_builder->call(
                 type, call_op, luisa::span{converted_args});
@@ -249,7 +371,17 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         for (const auto &arg : args) {
             converted_args.push_back(_convert_node(arg));
         }
-        auto matrix_op = _decide_make_matrix_op(type->dimension());
+        auto matrix_op = _decide_make_matrix_op(matrix_dimension);
+        if (dimension == 1u) {// Mat is a broadcasting operation in IR
+            auto col_type = Type::vector(type->element(), type->dimension());
+            auto vector_op = _decide_make_vector_op(type->element(), matrix_dimension);
+            auto col = _ctx->function_builder->call(col_type, vector_op, converted_args);
+            converted_args.clear();
+            converted_args.reserve(matrix_dimension);
+            for (auto i = 0u; i < matrix_dimension; i++) {
+                converted_args.emplace_back(col);
+            }
+        }
         return _ctx->function_builder->call(type, matrix_op, luisa::span{converted_args});
     };
 
@@ -261,6 +393,8 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         switch (c.tag) {
             case ir::Const::Tag::Zero: return 0;
             case ir::Const::Tag::One: return 1;
+            case ir::Const::Tag::Int16: return c.int16._0;
+            case ir::Const::Tag::Uint16: return c.uint16._0;
             case ir::Const::Tag::Int32: return c.int32._0;
             case ir::Const::Tag::Uint32: return c.uint32._0;
             case ir::Const::Tag::Int64: return c.int64._0;
@@ -274,6 +408,8 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
                     return static_cast<uint64_t>(x);
                 };
                 switch (t->primitive._0) {
+                    case ir::Primitive::Int16: return do_cast.operator()<int16_t>();
+                    case ir::Primitive::Uint16: return do_cast.operator()<uint16_t>();
                     case ir::Primitive::Int32: return do_cast.operator()<int32_t>();
                     case ir::Primitive::Uint32: return do_cast.operator()<uint32_t>();
                     case ir::Primitive::Int64: return do_cast.operator()<int64_t>();
@@ -286,14 +422,12 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         LUISA_ERROR_WITH_LOCATION("Invalid index.");
     };
     switch (func.tag) {
+        case ir::Func::Tag::Pack: return builtin_func(3, CallOp::PACK);
+        case ir::Func::Tag::Unpack: return builtin_func(2, CallOp::UNPACK);
         case ir::Func::Tag::ZeroInitializer: return builtin_func(0, CallOp::ZERO);
         case ir::Func::Tag::Assume: return builtin_func(1, CallOp::ASSUME);
         case ir::Func::Tag::Unreachable: return builtin_func(0, CallOp::UNREACHABLE);
-        case ir::Func::Tag::Assert: {
-            LUISA_ASSERT(args.size() == 1u, "`Assert` takes 1 argument.");
-            LUISA_WARNING_WITH_LOCATION("`Assert` not implemented currently.");
-            return nullptr;
-        }
+        case ir::Func::Tag::Assert: return builtin_func(1, CallOp::ASSERT);
         case ir::Func::Tag::ThreadId: {
             LUISA_ASSERT(args.empty(), "`ThreadId` takes no arguments.");
             return _ctx->function_builder->thread_id();
@@ -315,6 +449,7 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         case ir::Func::Tag::GradientMarker: return builtin_func(2, CallOp::GRADIENT_MARKER);
         case ir::Func::Tag::AccGrad: return builtin_func(2, CallOp::ACCUMULATE_GRADIENT);
         case ir::Func::Tag::Detach: return builtin_func(1, CallOp::DETACH);
+        case ir::Func::Tag::Backward: return builtin_func(1, CallOp::BACKWARD);
         case ir::Func::Tag::RayTracingInstanceTransform: return builtin_func(2, CallOp::RAY_TRACING_INSTANCE_TRANSFORM);
         case ir::Func::Tag::RayTracingSetInstanceTransform: return builtin_func(3, CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM);
         case ir::Func::Tag::RayTracingSetInstanceVisibility: return builtin_func(3, CallOp::RAY_TRACING_SET_INSTANCE_VISIBILITY);
@@ -329,6 +464,7 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         case ir::Func::Tag::RayQueryCommitTriangle: return builtin_func(1, CallOp::RAY_QUERY_COMMIT_TRIANGLE);
         case ir::Func::Tag::RayQueryCommitProcedural: return builtin_func(2, CallOp::RAY_QUERY_COMMIT_PROCEDURAL);
         case ir::Func::Tag::RayQueryTerminate: return builtin_func(1, CallOp::RAY_QUERY_TERMINATE);
+        case ir::Func::Tag::RayQueryWorldSpaceRay: return builtin_func(1, CallOp::RAY_QUERY_WORLD_SPACE_RAY);
         case ir::Func::Tag::RasterDiscard: return builtin_func(0, CallOp::RASTER_DISCARD);
         case ir::Func::Tag::IndirectClearDispatchBuffer: return builtin_func(1, CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER);
         case ir::Func::Tag::IndirectEmplaceDispatchKernel: return builtin_func(4, CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL);
@@ -397,14 +533,18 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
             LUISA_ASSERT(args.size() == 3u, "Select takes 3 arguments.");
             // In IR the argument order is (condition, value_true, value_false)
             // However in AST it is (value_false, value_true, condition)
-            return _ctx->function_builder->call(type, CallOp::SELECT, {
-                                                                          _convert_node(args[2]),
-                                                                          _convert_node(args[1]),
-                                                                          _convert_node(args[0]),
-                                                                      });
+            return _ctx->function_builder->call(
+                type, CallOp::SELECT,
+                {
+                    _convert_node(args[2]),
+                    _convert_node(args[1]),
+                    _convert_node(args[0]),
+                });
         }
         case ir::Func::Tag::Clamp: return builtin_func(3, CallOp::CLAMP);
+        case ir::Func::Tag::Saturate: return builtin_func(1, CallOp::SATURATE);
         case ir::Func::Tag::Lerp: return builtin_func(3, CallOp::LERP);
+        case ir::Func::Tag::SmoothStep: return builtin_func(3, CallOp::SMOOTHSTEP);
         case ir::Func::Tag::Step: return builtin_func(2, CallOp::STEP);
         case ir::Func::Tag::Abs: return builtin_func(1, CallOp::ABS);
         case ir::Func::Tag::Min: return builtin_func(2, CallOp::MIN);
@@ -456,19 +596,20 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         case ir::Func::Tag::LengthSquared: return builtin_func(1, CallOp::LENGTH_SQUARED);
         case ir::Func::Tag::Normalize: return builtin_func(1, CallOp::NORMALIZE);
         case ir::Func::Tag::Faceforward: return builtin_func(3, CallOp::FACEFORWARD);
+        case ir::Func::Tag::Reflect: return builtin_func(2, CallOp::REFLECT);
         case ir::Func::Tag::Determinant: return builtin_func(1, CallOp::DETERMINANT);
         case ir::Func::Tag::Transpose: return builtin_func(1, CallOp::TRANSPOSE);
         case ir::Func::Tag::Inverse: return builtin_func(1, CallOp::INVERSE);
         case ir::Func::Tag::SynchronizeBlock: return builtin_func(0, CallOp::SYNCHRONIZE_BLOCK);
-        case ir::Func::Tag::AtomicExchange: return builtin_func(3, CallOp::ATOMIC_EXCHANGE);
-        case ir::Func::Tag::AtomicCompareExchange: return builtin_func(4, CallOp::ATOMIC_COMPARE_EXCHANGE);
-        case ir::Func::Tag::AtomicFetchAdd: return builtin_func(3, CallOp::ATOMIC_FETCH_ADD);
-        case ir::Func::Tag::AtomicFetchSub: return builtin_func(3, CallOp::ATOMIC_FETCH_SUB);
-        case ir::Func::Tag::AtomicFetchAnd: return builtin_func(3, CallOp::ATOMIC_FETCH_AND);
-        case ir::Func::Tag::AtomicFetchOr: return builtin_func(3, CallOp::ATOMIC_FETCH_OR);
-        case ir::Func::Tag::AtomicFetchXor: return builtin_func(3, CallOp::ATOMIC_FETCH_XOR);
-        case ir::Func::Tag::AtomicFetchMin: return builtin_func(3, CallOp::ATOMIC_FETCH_MIN);
-        case ir::Func::Tag::AtomicFetchMax: return builtin_func(3, CallOp::ATOMIC_FETCH_MAX);
+        case ir::Func::Tag::AtomicExchange: return builtin_func(args.size(), CallOp::ATOMIC_EXCHANGE);
+        case ir::Func::Tag::AtomicCompareExchange: return builtin_func(args.size(), CallOp::ATOMIC_COMPARE_EXCHANGE);
+        case ir::Func::Tag::AtomicFetchAdd: return builtin_func(args.size(), CallOp::ATOMIC_FETCH_ADD);
+        case ir::Func::Tag::AtomicFetchSub: return builtin_func(args.size(), CallOp::ATOMIC_FETCH_SUB);
+        case ir::Func::Tag::AtomicFetchAnd: return builtin_func(args.size(), CallOp::ATOMIC_FETCH_AND);
+        case ir::Func::Tag::AtomicFetchOr: return builtin_func(args.size(), CallOp::ATOMIC_FETCH_OR);
+        case ir::Func::Tag::AtomicFetchXor: return builtin_func(args.size(), CallOp::ATOMIC_FETCH_XOR);
+        case ir::Func::Tag::AtomicFetchMin: return builtin_func(args.size(), CallOp::ATOMIC_FETCH_MIN);
+        case ir::Func::Tag::AtomicFetchMax: return builtin_func(args.size(), CallOp::ATOMIC_FETCH_MAX);
         case ir::Func::Tag::BufferRead: return builtin_func(2, CallOp::BUFFER_READ);
         case ir::Func::Tag::BufferWrite: return builtin_func(3, CallOp::BUFFER_WRITE);
         case ir::Func::Tag::BufferSize: return builtin_func(1, CallOp::BUFFER_SIZE);
@@ -493,7 +634,7 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         case ir::Func::Tag::BindlessTexture2dSizeLevel: return builtin_func(3, CallOp::BINDLESS_TEXTURE2D_SIZE_LEVEL);
         case ir::Func::Tag::BindlessTexture3dSizeLevel: return builtin_func(3, CallOp::BINDLESS_TEXTURE3D_SIZE_LEVEL);
         case ir::Func::Tag::BindlessBufferRead: return builtin_func(3, CallOp::BINDLESS_BUFFER_READ);
-        case ir::Func::Tag::BindlessBufferSize: return builtin_func(2, CallOp::BINDLESS_BUFFER_SIZE);
+        case ir::Func::Tag::BindlessBufferSize: return builtin_func(3, CallOp::BINDLESS_BUFFER_SIZE);
         case ir::Func::Tag::BindlessBufferType: return builtin_func(2, CallOp::BINDLESS_BUFFER_TYPE);
         case ir::Func::Tag::Vec: return make_vector(1);
         case ir::Func::Tag::Vec2: return make_vector(2);
@@ -571,6 +712,19 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
             }
             return struct_instance;
         }
+        case ir::Func::Tag::Array: {
+            LUISA_ASSERT(type->is_array(), "Invalid array type.");
+            auto element_type = type->element();
+            auto array_instance = _ctx->function_builder->local(type);
+            LUISA_ASSERT(args.size() == type->count(), "Array type inconsistent with arguments.");
+            for (auto i = 0u; i < args.size(); i++) {
+                auto index = _ctx->function_builder->literal(Type::of<uint>(), i);
+                auto access = _ctx->function_builder->access(element_type, array_instance, index);
+                auto elem = _convert_node(args[i]);
+                _ctx->function_builder->assign(access, elem);
+            }
+            return array_instance;
+        }
         case ir::Func::Tag::Mat: return make_matrix(1);
         case ir::Func::Tag::Mat2: return make_matrix(2);
         case ir::Func::Tag::Mat3: return make_matrix(3);
@@ -586,8 +740,10 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
             auto callable = callable_fb->function();
             return _ctx->function_builder->call(type, callable, luisa::span{converted_args});
         }
-        case ir::Func::Tag::CpuCustomOp: LUISA_ERROR_WITH_LOCATION("CpuCustomOp is not implemented.");
-        default: LUISA_ERROR_WITH_LOCATION("Invalid function tag: {}.", function_name);
+        case ir::Func::Tag::CpuCustomOp:
+            LUISA_ERROR_WITH_LOCATION("CpuCustomOp is not implemented.");
+        case ir::Func::Tag::Unknown0: [[fallthrough]];
+        case ir::Func::Tag::Unknown1: LUISA_NOT_IMPLEMENTED();
     }
     return nullptr;
 }
@@ -611,88 +767,122 @@ void IR2AST::_convert_instr_loop(const ir::Node *node) noexcept {
     //         break;
     //     }
     // }
-    auto cond = _convert_node(node->instruction->loop.cond);
     auto loop_scope = _ctx->function_builder->loop_();
-    _ctx->function_builder->push_scope(loop_scope->body());
-    _convert_block(node->instruction->loop.body.get());
-    auto if_scope = _ctx->function_builder->if_(cond);
-    _ctx->function_builder->push_scope(if_scope->false_branch());
-    _ctx->function_builder->break_();
-    _ctx->function_builder->pop_scope(if_scope->false_branch());
-    _ctx->function_builder->pop_scope(loop_scope->body());
+    _ctx->function_builder->with(loop_scope->body(), [&] {
+        // body
+        auto old_generic_loop_break = std::exchange(_ctx->generic_loop_break, nullptr);
+        _convert_block(node->instruction->loop.body.get());
+        _ctx->generic_loop_break = old_generic_loop_break;
+        // if (!cond) break;
+        auto cond = _convert_node(node->instruction->loop.cond);
+        auto not_cond = _ctx->function_builder->unary(Type::of<bool>(), UnaryOp::NOT, cond);
+        auto if_scope = _ctx->function_builder->if_(not_cond);
+        _ctx->function_builder->with(if_scope->true_branch(), [&] {
+            _ctx->function_builder->break_();
+        });
+    });
 }
 
 void IR2AST::_convert_instr_generic_loop(const ir::Node *node) noexcept {
-    // bool first_entrance = true;
+    // template:
     // loop {
-    //     if (!first_entrance) {
-    //         update();
-    //     } else {
-    //         first_entrance = false;
-    //     }
+    //     loop_break = false;
     //     prepare();
     //     if (!cond()) break;
-    //     body();
+    //     loop {
+    //         body {
+    //             // break => { loop_break = true; break; }
+    //             // continue => { break; }
+    //         }
+    //         break;
+    //     }
+    //     if (loop_break) break;
+    //     update();
     // }
-    auto first_entrance = _ctx->function_builder->local(Type::from("bool"));
-    _ctx->function_builder->assign(first_entrance, _ctx->function_builder->literal(Type::from("bool"), true));
-    auto loop_scope = _ctx->function_builder->loop_();
-    _ctx->function_builder->push_scope(loop_scope->body());
-    auto update_if_scope = _ctx->function_builder->if_(first_entrance);
-    _ctx->function_builder->push_scope(update_if_scope->true_branch());
-    _ctx->function_builder->assign(first_entrance, _ctx->function_builder->literal(Type::from("bool"), false));
-    _ctx->function_builder->pop_scope(update_if_scope->true_branch());
-    _ctx->function_builder->push_scope(update_if_scope->false_branch());
-    _convert_block(node->instruction->generic_loop.update.get());
-    _ctx->function_builder->pop_scope(update_if_scope->false_branch());
-    _convert_block(node->instruction->generic_loop.prepare.get());
-    auto loop_cond = _convert_node(node->instruction->generic_loop.cond);
-    auto loop_cond_invert = _ctx->function_builder->unary(Type::from("bool"), UnaryOp::NOT, loop_cond);
-    auto cond_if_scope = _ctx->function_builder->if_(loop_cond_invert);
-    _ctx->function_builder->push_scope(cond_if_scope->true_branch());
-    _ctx->function_builder->break_();
-    _ctx->function_builder->pop_scope(cond_if_scope->true_branch());
-    _convert_block(node->instruction->generic_loop.body.get());
-    _ctx->function_builder->pop_scope(loop_scope->body());
+    auto generic_loop_break = _ctx->function_builder->local(Type::of<bool>());
+    auto loop = _ctx->function_builder->loop_();
+    _ctx->function_builder->with(loop->body(), [&] {
+        // bool loop_break = false;
+        auto false_ = _ctx->function_builder->literal(Type::of<bool>(), false);
+        _ctx->function_builder->assign(generic_loop_break, false_);
+        // prepare();
+        _convert_block(node->instruction->generic_loop.prepare.get());
+        // if (!cond()) break;
+        auto cond = _convert_node(node->instruction->generic_loop.cond);
+        auto not_cond = _ctx->function_builder->unary(Type::of<bool>(), UnaryOp::NOT, cond);
+        auto if_ = _ctx->function_builder->if_(not_cond);
+        _ctx->function_builder->with(if_->true_branch(), [&] {
+            _ctx->function_builder->break_();
+        });
+        // loop
+        auto loop_once = _ctx->function_builder->loop_();
+        _ctx->function_builder->with(loop_once->body(), [&] {
+            // body
+            auto old_generic_loop_break = std::exchange(_ctx->generic_loop_break, generic_loop_break);
+            _convert_block(node->instruction->generic_loop.body.get());
+            _ctx->generic_loop_break = old_generic_loop_break;
+            // break;
+            _ctx->function_builder->break_();
+        });
+        // if (loop_break) break;
+        auto if_break = _ctx->function_builder->if_(generic_loop_break);
+        _ctx->function_builder->with(if_break->true_branch(), [&] {
+            _ctx->function_builder->break_();
+        });
+        // update();
+        _convert_block(node->instruction->generic_loop.update.get());
+    });
 }
 
 void IR2AST::_convert_instr_break(const ir::Node *node) noexcept {
+    if (_ctx->generic_loop_break) {// inside generic loop
+        // break => { loop_break = true; break; }
+        auto true_ = _ctx->function_builder->literal(Type::of<bool>(), true);
+        _ctx->function_builder->assign(_ctx->generic_loop_break, true_);
+    }
     _ctx->function_builder->break_();
 }
 
 void IR2AST::_convert_instr_continue(const ir::Node *node) noexcept {
-    _ctx->function_builder->continue_();
+    if (_ctx->generic_loop_break) {// inside generic loop
+        // continue => { break; }
+        _ctx->function_builder->break_();
+    } else {
+        _ctx->function_builder->continue_();
+    }
 }
 
 void IR2AST::_convert_instr_if(const ir::Node *node) noexcept {
     auto cond = _convert_node(node->instruction->if_.cond);
     auto if_scope = _ctx->function_builder->if_(cond);
-    _ctx->function_builder->push_scope(if_scope->true_branch());
-    _convert_block(node->instruction->if_.true_branch.get());
-    _ctx->function_builder->pop_scope(if_scope->true_branch());
-    _ctx->function_builder->push_scope(if_scope->false_branch());
-    _convert_block(node->instruction->if_.false_branch.get());
-    _ctx->function_builder->pop_scope(if_scope->false_branch());
+    _ctx->function_builder->with(if_scope->true_branch(), [&] {
+        _convert_block(node->instruction->if_.true_branch.get());
+    });
+    _ctx->function_builder->with(if_scope->false_branch(), [&] {
+        _convert_block(node->instruction->if_.false_branch.get());
+    });
 }
 
 void IR2AST::_convert_instr_switch(const ir::Node *node) noexcept {
     auto value = _convert_node(node->instruction->switch_.value);
     auto switch_scope = _ctx->function_builder->switch_(value);
-    _ctx->function_builder->push_scope(switch_scope->body());
-    auto data = node->instruction->switch_.cases.ptr;
-    auto len = node->instruction->switch_.cases.len / sizeof(ir::SwitchCase);
-    for (auto i = 0; i < len; i++) {
-        auto value = _ctx->function_builder->literal(Type::from("int"), data[i].value);
-        auto case_scope = _ctx->function_builder->case_(value);
-        _ctx->function_builder->push_scope(case_scope->body());
-        _convert_block(data[i].block.get());
-        _ctx->function_builder->pop_scope(case_scope->body());
-    }
-    auto default_scope = _ctx->function_builder->default_();
-    _ctx->function_builder->push_scope(default_scope->body());
-    _convert_block(node->instruction->switch_.default_.get());
-    _ctx->function_builder->pop_scope(default_scope->body());
-    _ctx->function_builder->pop_scope(switch_scope->body());
+    _ctx->function_builder->with(switch_scope->body(), [&] {
+        auto data = node->instruction->switch_.cases.ptr;
+        auto len = node->instruction->switch_.cases.len;
+        for (auto i = 0; i < len; i++) {
+            auto value = _ctx->function_builder->literal(Type::of<int>(), data[i].value);
+            auto case_scope = _ctx->function_builder->case_(value);
+            _ctx->function_builder->with(case_scope->body(), [&] {
+                _convert_block(data[i].block.get());
+            });
+        }
+        if (node->instruction->switch_.default_.get() != nullptr) {
+            auto default_scope = _ctx->function_builder->default_();
+            _ctx->function_builder->with(default_scope->body(), [&] {
+                _convert_block(node->instruction->switch_.default_.get());
+            });
+        }
+    });
 }
 
 void IR2AST::_convert_instr_ad_scope(const ir::Node *node) noexcept {
@@ -708,16 +898,15 @@ void IR2AST::_convert_instr_ad_detach(const ir::Node *node) noexcept {
 }
 void IR2AST::_convert_instr_ray_query(const ir::Node *node) noexcept {
     _ctx->function_builder->comment_("Ray Query Begin");
-    auto rq = static_cast<const RefExpr*>(_convert_node(node->instruction->ray_query.ray_query));
+    auto rq = static_cast<const RefExpr *>(_convert_node(node->instruction->ray_query.ray_query));
     auto rq_scope = _ctx->function_builder->ray_query_(rq);
-
-    _ctx->function_builder->with(rq_scope->on_triangle_candidate(), [&]{
+    _ctx->function_builder->with(rq_scope->on_triangle_candidate(), [&] {
         _convert_block(node->instruction->ray_query.on_triangle_hit.get());
     });
-    _ctx->function_builder->with(rq_scope->on_procedural_candidate(), [&]{
+    _ctx->function_builder->with(rq_scope->on_procedural_candidate(), [&] {
         _convert_block(node->instruction->ray_query.on_procedural_hit.get());
     });
-  
+
     _ctx->function_builder->comment_("Ray Query End");
 }
 void IR2AST::_convert_instr_comment(const ir::Node *node) noexcept {
@@ -734,161 +923,75 @@ void IR2AST::_convert_instr_debug(const ir::Node *node) noexcept {
 }
 
 const Expression *IR2AST::_convert_constant(const ir::Const &const_) noexcept {
-    auto decode = []<typename T>(const uint8_t *data) noexcept {
-        T x{};
-        std::memcpy(&x, data, sizeof(T));
-        return x;
-    };
 
-    auto apply = []<typename F>(const ir::Type *ty, const F &fn) noexcept {
-        auto type = _convert_type(ty);
-        switch (ty->tag) {
-            case ir::Type::Tag::Primitive: {
-                switch (ty->primitive._0) {
-                    case ir::Primitive::Bool: return fn.template operator()<bool>(type);
-                    case ir::Primitive::Int16:
-                    case ir::Primitive::Int32:
-                    case ir::Primitive::Int64: return fn.template operator()<int>(type);
-                    case ir::Primitive::Uint16:
-                    case ir::Primitive::Uint32:
-                    case ir::Primitive::Uint64: return fn.template operator()<uint>(type);
-                    case ir::Primitive::Float32:
-                    case ir::Primitive::Float64: return fn.template operator()<float>(type);
-                }
-                LUISA_ERROR_WITH_LOCATION("bad primitive type: {}", to_underlying(ty->primitive._0));
-            }
-            case ir::Type::Tag::Vector: {
-                LUISA_ASSERT(ty->vector._0.element.tag == ir::VectorElementType::Tag::Scalar, "vector of vectors is not supported.");
-                switch (ty->vector._0.element.scalar._0) {
-                    case ir::Primitive::Bool: {
-                        switch (ty->vector._0.length) {
-                            case 2: return fn.template operator()<bool2>(type);
-                            case 3: return fn.template operator()<bool3>(type);
-                            case 4: return fn.template operator()<bool4>(type);
-                            default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
-                        }
-                    }
-                    case ir::Primitive::Float32: {
-                        switch (ty->vector._0.length) {
-                            case 2: return fn.template operator()<float2>(type);
-                            case 3: return fn.template operator()<float3>(type);
-                            case 4: return fn.template operator()<float4>(type);
-                            default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
-                        }
-                    }
-                    case ir::Primitive::Int32: {
-                        switch (ty->vector._0.length) {
-                            case 2: return fn.template operator()<int2>(type);
-                            case 3: return fn.template operator()<int3>(type);
-                            case 4: return fn.template operator()<int4>(type);
-                            default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
-                        }
-                    }
-                    case ir::Primitive::Uint32: {
-                        switch (ty->vector._0.length) {
-                            case 2: return fn.template operator()<uint2>(type);
-                            case 3: return fn.template operator()<uint3>(type);
-                            case 4: return fn.template operator()<uint4>(type);
-                            default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
-                        }
-                    }
-                    case ir::Primitive::Float64: [[fallthrough]];
-                    case ir::Primitive::Int64: [[fallthrough]];
-                    case ir::Primitive::Uint64: [[fallthrough]];
-                    default: LUISA_ERROR_WITH_LOCATION("64-bit primitive types are not yet supported.");
-                }
-            }
-            case ir::Type::Tag::Matrix: {
-                LUISA_ASSERT(ty->matrix._0.element.tag == ir::VectorElementType::Tag::Scalar, "matrix of vectors is not supported.");
-                switch (ty->matrix._0.dimension) {
-                    case 2: return fn.template operator()<float2x2>(type);
-                    case 3: return fn.template operator()<float3x3>(type);
-                    case 4: return fn.template operator()<float4x4>(type);
-                }
-            }
-            default: LUISA_ERROR_WITH_LOCATION("apply can only be called on Primitive | Vector | Matrix");
-        }
-    };
-    // Primitive -> inline as literal
-    // Generic
-    //     Primitive -> inline as literal
-    //     Array or Vector or Matrix -> Constant
-    //     Other -> Error
+    auto b = _ctx->function_builder.get();
     switch (const_.tag) {
-        case ir::Const::Tag::Zero: {
-            auto type = const_.zero._0.get();
-            auto build_zero_with_type = [&]<typename U>(const Type *type) {
-                if constexpr (luisa::is_matrix_v<U>) {
-                    return _ctx->function_builder->literal(type, U::eye(0));
-                } else {
-                    return _ctx->function_builder->literal(type, U(0));
-                }
-            };
-            return apply(type, build_zero_with_type);
-        }
-        case ir::Const::Tag::One: {
-            auto type = const_.one._0.get();
-            auto build_one_with_type = [&]<typename U>(const Type *type) {
-                if constexpr (luisa::is_matrix_v<U>) {
-                    return _ctx->function_builder->literal(type, U::eye(1));
-                } else {
-                    return _ctx->function_builder->literal(type, U(1));
-                }
-            };
-            return apply(type, build_one_with_type);
-        }
-        case ir::Const::Tag::Bool:
-            return _ctx->function_builder->literal(Type::from("bool"), const_.bool_._0);
-        case ir::Const::Tag::Float32:
-        case ir::Const::Tag::Float64:
-            return _ctx->function_builder->literal(Type::from("float"), const_.float32._0);
-        case ir::Const::Tag::Int32:
-        case ir::Const::Tag::Int64:
-            return _ctx->function_builder->literal(Type::from("int"), const_.int32._0);
-        case ir::Const::Tag::Uint32:
-        case ir::Const::Tag::Uint64:
-            return _ctx->function_builder->literal(Type::from("uint"), const_.uint32._0);
+        case ir::Const::Tag::Zero: return b->call(_convert_type(const_.zero._0.get()), CallOp::ZERO, {});
+        case ir::Const::Tag::One: return b->call(_convert_type(const_.one._0.get()), CallOp::ONE, {});
+        case ir::Const::Tag::Bool: return b->literal(Type::of<bool>(), const_.bool_._0);
+        case ir::Const::Tag::Int32: return b->literal(Type::of<int>(), const_.int32._0);
+        case ir::Const::Tag::Uint32: return b->literal(Type::of<uint>(), const_.uint32._0);
+        case ir::Const::Tag::Int64: return b->literal(Type::of<slong>(), const_.int64._0);
+        case ir::Const::Tag::Uint64: return b->literal(Type::of<ulong>(), const_.uint64._0);
+        case ir::Const::Tag::Float16: return b->literal(Type::of<half>(), luisa::bit_cast<half>(const_.float16._0));
+        case ir::Const::Tag::Float32: return b->literal(Type::of<float>(), const_.float32._0);
+        case ir::Const::Tag::Float64: return b->literal(Type::of<double>(), const_.float64._0);
         case ir::Const::Tag::Generic: {
-            auto &&data = const_.generic._0;
-            auto type = const_.generic._1.get();
-            switch (type->tag) {
-                case ir::Type::Tag::Primitive: [[fallthrough]];
-                case ir::Type::Tag::Matrix: [[fallthrough]];
-                case ir::Type::Tag::Vector: {
-                    auto build_literal_with_type = [&]<typename U>(const Type *type) {
-                        return _ctx->function_builder->literal(type, decode.operator()<U>(data.ptr));
-                    };
-                    return apply(type, build_literal_with_type);
-                }
-                case ir::Type::Tag::Array: {
-                    auto get_payload = [data]<typename T>() noexcept {
-                        return luisa::span(reinterpret_cast<const T *>(data.ptr), data.len / sizeof(T));
-                    };
-                    auto array_type = _convert_type(type);
-                    auto elem_type = type->array._0.element.get();
-                    auto build_constant_with_type = [&]<typename U>(const Type *type) {
-                        return _ctx->function_builder->constant(
-                            array_type, ConstantData::create(get_payload.operator()<U>()));
-                    };
-                    return apply(elem_type, build_constant_with_type);
-                }
-                default: LUISA_ERROR_WITH_LOCATION("Invalid array type.");
-            }
-        }
+            auto type = _convert_type(const_.generic._1.get());
+            auto [data, size, _] = const_.generic._0;
+            if (type->is_scalar() || type->is_vector() || type->is_matrix()) {
+
+#define LUISA_IR2AST_DECODE_CONST(T)                                 \
+    if (type == Type::of<T>()) {                                     \
+        return b->literal(type, *reinterpret_cast<const T *>(data)); \
     }
-    // 其余情况生成 literal
-    LUISA_ERROR_WITH_LOCATION("Error.");
+
+#define LUISA_IR2AST_DECODE_CONST_VEC(T) \
+    LUISA_IR2AST_DECODE_CONST(T)         \
+    LUISA_IR2AST_DECODE_CONST(T##2)      \
+    LUISA_IR2AST_DECODE_CONST(T##3)      \
+    LUISA_IR2AST_DECODE_CONST(T##4)
+
+                LUISA_IR2AST_DECODE_CONST_VEC(bool)
+                LUISA_IR2AST_DECODE_CONST_VEC(int)
+                LUISA_IR2AST_DECODE_CONST_VEC(uint)
+                LUISA_IR2AST_DECODE_CONST_VEC(short)
+                LUISA_IR2AST_DECODE_CONST_VEC(ushort)
+                LUISA_IR2AST_DECODE_CONST_VEC(slong)
+                LUISA_IR2AST_DECODE_CONST_VEC(ulong)
+                LUISA_IR2AST_DECODE_CONST_VEC(half)
+                LUISA_IR2AST_DECODE_CONST_VEC(float)
+                LUISA_IR2AST_DECODE_CONST_VEC(double)
+
+                LUISA_IR2AST_DECODE_CONST(float2x2)
+                LUISA_IR2AST_DECODE_CONST(float3x3)
+                LUISA_IR2AST_DECODE_CONST(float4x4)
+
+#undef LUISA_IR2AST_DECODE_CONST_VEC
+#undef LUISA_IR2AST_DECODE_CONST
+
+                LUISA_NOT_IMPLEMENTED();
+            }
+            auto c = ConstantData::create(type, data, size);
+            return b->constant(c);
+        }
+        default: break;
+    }
+    LUISA_ERROR_WITH_LOCATION("Unreachable");
 }
 
 const Type *IR2AST::_convert_primitive_type(const ir::Primitive &type) noexcept {
     switch (type) {
-        case ir::Primitive::Bool: return Type::from("bool");
-        case ir::Primitive::Float32: return Type::from("float");
-        case ir::Primitive::Int32: return Type::from("int");
-        case ir::Primitive::Uint32: return Type::from("uint");
-        case ir::Primitive::Float64: LUISA_ERROR_WITH_LOCATION("64-bit primitive types are not yet supported.");;
-        case ir::Primitive::Int64: return Type::from("long");
-        case ir::Primitive::Uint64: return Type::from("ulong");
+        case ir::Primitive::Bool: return Type::of<bool>();
+        case ir::Primitive::Float16: return Type::of<half>();
+        case ir::Primitive::Float32: return Type::of<float>();
+        case ir::Primitive::Int16: return Type::of<short>();
+        case ir::Primitive::Uint16: return Type::of<ushort>();
+        case ir::Primitive::Int32: return Type::of<int>();
+        case ir::Primitive::Uint32: return Type::of<uint>();
+        case ir::Primitive::Float64: return Type::of<double>();
+        case ir::Primitive::Int64: return Type::of<slong>();
+        case ir::Primitive::Uint64: return Type::of<ulong>();
         default: LUISA_ERROR_WITH_LOCATION("Invalid primitive type.");
     }
 }
@@ -921,11 +1024,11 @@ const Type *IR2AST::_convert_type(const ir::Type *type) noexcept {
             return Type::structure(struct_type.alignment, fields);
         }
         case ir::Type::Tag::Opaque: {
-            auto opaque_type = luisa::string_view((const char*)type->opaque._0.ptr);
+            auto opaque_type = luisa::string_view((const char *)type->opaque._0.ptr);
             return Type::custom(opaque_type);
         }
         case ir::Type::Tag::UserData: {
-            return Type::from("float");
+            return Type::of<float>();
         }
         default: break;
     }
@@ -1060,11 +1163,39 @@ void IR2AST::_process_local_declarations(const ir::BasicBlock *bb) noexcept {
                 case 4: return CallOp::MAKE_BOOL4;
                 default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
             }
+        case Type::Tag::FLOAT16:
+            switch (length) {
+                case 2: return CallOp::MAKE_HALF2;
+                case 3: return CallOp::MAKE_HALF3;
+                case 4: return CallOp::MAKE_HALF4;
+                default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
+            }
         case Type::Tag::FLOAT32:
             switch (length) {
                 case 2: return CallOp::MAKE_FLOAT2;
                 case 3: return CallOp::MAKE_FLOAT3;
                 case 4: return CallOp::MAKE_FLOAT4;
+                default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
+            }
+        case Type::Tag::FLOAT64:
+            switch (length) {
+                case 2: return CallOp::MAKE_DOUBLE2;
+                case 3: return CallOp::MAKE_DOUBLE3;
+                case 4: return CallOp::MAKE_DOUBLE4;
+                default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
+            }
+        case Type::Tag::INT16:
+            switch (length) {
+                case 2: return CallOp::MAKE_SHORT2;
+                case 3: return CallOp::MAKE_SHORT3;
+                case 4: return CallOp::MAKE_SHORT4;
+                default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
+            }
+        case Type::Tag::UINT16:
+            switch (length) {
+                case 2: return CallOp::MAKE_USHORT2;
+                case 3: return CallOp::MAKE_USHORT3;
+                case 4: return CallOp::MAKE_USHORT4;
                 default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
             }
         case Type::Tag::INT32:
@@ -1081,7 +1212,22 @@ void IR2AST::_process_local_declarations(const ir::BasicBlock *bb) noexcept {
                 case 4: return CallOp::MAKE_UINT4;
                 default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
             }
-        default: LUISA_ERROR_WITH_LOCATION("64-bit primitive types are not yet supported.");
+        case Type::Tag::INT64:
+            switch (length) {
+                case 2: return CallOp::MAKE_LONG2;
+                case 3: return CallOp::MAKE_LONG3;
+                case 4: return CallOp::MAKE_LONG4;
+                default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
+            }
+        case Type::Tag::UINT64:
+            switch (length) {
+                case 2: return CallOp::MAKE_ULONG2;
+                case 3: return CallOp::MAKE_ULONG3;
+                case 4: return CallOp::MAKE_ULONG4;
+                default: LUISA_ERROR_WITH_LOCATION("Vectors with length other than 2, 3 and 4 are not supported.");
+            }
+        default: LUISA_ERROR_WITH_LOCATION("Unsupported vector element type: {}.",
+                                           primitive->description());
     }
 }
 
@@ -1097,7 +1243,7 @@ void IR2AST::_process_local_declarations(const ir::BasicBlock *bb) noexcept {
 [[nodiscard]] const RefExpr *IR2AST::_convert_argument(const ir::Node *node) noexcept {
     auto type = _convert_type(node->type_.get());
     switch (node->instruction->tag) {
-        case ir::Instruction::Tag::Uniform: return _ctx->function_builder->argument(type);;
+        case ir::Instruction::Tag::Uniform: return _ctx->function_builder->argument(type); ;
         case ir::Instruction::Tag::Argument: {
             if (node->instruction->argument.by_value) {
                 return _ctx->function_builder->argument(type);
@@ -1159,76 +1305,98 @@ void IR2AST::_process_local_declarations(const ir::BasicBlock *bb) noexcept {
 }
 
 [[nodiscard]] luisa::shared_ptr<detail::FunctionBuilder> IR2AST::convert_kernel(const ir::KernelModule *kernel) noexcept {
+
+    LUISA_VERBOSE("IR2AST: converting kernel (ptr = {}).",
+                  (void *)(kernel));
+
     IR2ASTContext ctx{
         .module = kernel->module,
+        .generic_loop_break = nullptr,
         .function_builder = luisa::make_shared<detail::FunctionBuilder>(Function::Tag::KERNEL)};
-    auto old_ctx = _ctx;
-    _ctx = &ctx;
 
-    auto guard = detail::FunctionBuilder::FunctionStackGuard(_ctx->function_builder.get());
-    _ctx->function_builder->with(_ctx->function_builder->body(), [&]() {
-        auto entry = kernel->module.entry.get();
-        _collect_phis(entry);
+    // do the conversion
+    {
+        auto old_ctx = _ctx;
+        _ctx = &ctx;
+        detail::FunctionBuilder::FunctionStackGuard guard{_ctx->function_builder.get()};
+        _ctx->function_builder->with(_ctx->function_builder->body(), [&]() {
+            auto entry = kernel->module.entry.get();
+            _collect_phis(entry);
 
-        _ctx->function_builder->set_block_size(uint3{kernel->block_size[0], kernel->block_size[1], kernel->block_size[2]});
+            _ctx->function_builder->set_block_size(uint3{kernel->block_size[0], kernel->block_size[1], kernel->block_size[2]});
 
-        auto captures = kernel->captures;
-        auto args = kernel->args;
-        for (auto i = 0; i < captures.len; i++) {
-            auto captured = captures.ptr[i];
-            auto node = ir::luisa_compute_ir_node_get(captured.node);
-            auto binding = _convert_captured(captured);
-            _ctx->node_to_exprs.emplace(node, binding);
-        }
-        for (auto i = 0; i < args.len; i++) {
-            auto arg = ir::luisa_compute_ir_node_get(args.ptr[i]);
-            auto argument = _convert_argument(arg);
-            _ctx->node_to_exprs.emplace(arg, argument);
-        }
+            auto captures = kernel->captures;
+            auto args = kernel->args;
+            for (auto i = 0; i < captures.len; i++) {
+                auto captured = captures.ptr[i];
+                auto node = ir::luisa_compute_ir_node_get(captured.node);
+                auto binding = _convert_captured(captured);
+                _ctx->node_to_exprs.emplace(node, binding);
+            }
+            for (auto i = 0; i < args.len; i++) {
+                auto arg = ir::luisa_compute_ir_node_get(args.ptr[i]);
+                auto argument = _convert_argument(arg);
+                _ctx->node_to_exprs.emplace(arg, argument);
+            }
 
-        auto shared = kernel->shared;
-        for (auto i = 0; i < shared.len; i++) {
-            auto shared_var = ir::luisa_compute_ir_node_get(shared.ptr[i]);
-            auto type = _convert_type(shared_var->type_.get());
-            auto shared_var_expr = _ctx->function_builder->shared(type);
-            _ctx->node_to_exprs.emplace(shared_var, shared_var_expr);
-        }
-        _process_local_declarations(entry);
-        _convert_block(entry);
-    });
-
-    _ctx = old_ctx;
+            auto shared = kernel->shared;
+            for (auto i = 0; i < shared.len; i++) {
+                auto shared_var = ir::luisa_compute_ir_node_get(shared.ptr[i]);
+                auto type = _convert_type(shared_var->type_.get());
+                auto shared_var_expr = _ctx->function_builder->shared(type);
+                _ctx->node_to_exprs.emplace(shared_var, shared_var_expr);
+            }
+            _process_local_declarations(entry);
+            _convert_block(entry);
+        });
+        _ctx = old_ctx;
+    }
+    LUISA_VERBOSE("IR2AST: converted kernel (ptr = {}, hash = {:016x}).",
+                  (void *)(kernel), ctx.function_builder->hash());
     return ctx.function_builder;
 }
 
 [[nodiscard]] luisa::shared_ptr<detail::FunctionBuilder> IR2AST::convert_callable(const ir::CallableModule *callable) noexcept {
-    if (_converted_callables.find(callable) != _converted_callables.end()) {
-        return _converted_callables.at(callable);
+    if (auto iter = _converted_callables.find(callable);
+        iter != _converted_callables.end()) {
+        return iter->second;
     }
+    LUISA_VERBOSE("IR2AST: converting callable (ptr = {}).",
+                  (void *)(callable), callable->captures.len);
     IR2ASTContext ctx{
         .module = callable->module,
+        .generic_loop_break = nullptr,
         .function_builder = luisa::make_shared<detail::FunctionBuilder>(Function::Tag::CALLABLE)};
-    auto old_ctx = _ctx;
-    _ctx = &ctx;
-
-    auto guard = detail::FunctionBuilder::FunctionStackGuard(_ctx->function_builder.get());
-    _ctx->function_builder->with(_ctx->function_builder->body(), [&]() {
-        for (auto i = 0; i < callable->args.len; i++) {
-            auto arg = ir::luisa_compute_ir_node_get(callable->args.ptr[i]);
-            _ctx->node_to_exprs.emplace(arg, _convert_argument(arg));
-        }
-        auto entry = callable->module.entry.get();
-        _collect_phis(entry);
-        _process_local_declarations(entry);
-        _convert_block(entry);
-    });
-    if (ctx.function_builder->function().tag() != Function::Tag::CALLABLE) {
-        LUISA_ERROR_WITH_LOCATION(
-            "Calling non-callable function in device code.");
-    }
-    _ctx = old_ctx;
     _converted_callables.emplace(callable, ctx.function_builder);
-    return ctx.function_builder;
+
+    // do the conversion
+    {
+        auto old_ctx = _ctx;
+        _ctx = &ctx;
+        detail::FunctionBuilder::FunctionStackGuard guard{_ctx->function_builder.get()};
+        _ctx->function_builder->with(_ctx->function_builder->body(), [&]() {
+            for (auto i = 0; i < callable->captures.len; i++) {
+                auto captured = callable->captures.ptr[i];
+                auto node = ir::luisa_compute_ir_node_get(captured.node);
+                auto binding = _convert_captured(captured);
+                _ctx->node_to_exprs.emplace(node, binding);
+            }
+            for (auto i = 0; i < callable->args.len; i++) {
+                auto arg = ir::luisa_compute_ir_node_get(callable->args.ptr[i]);
+                _ctx->node_to_exprs.emplace(arg, _convert_argument(arg));
+            }
+            auto entry = callable->module.entry.get();
+            _collect_phis(entry);
+            _process_local_declarations(entry);
+            _convert_block(entry);
+        });
+        _ctx = old_ctx;
+    }
+    auto callable_hash = ctx.function_builder->hash();
+    LUISA_VERBOSE("IR2AST: converted callable (ptr = {}, hash = {:016x}).",
+                  (void *)(callable), callable_hash,
+                  ctx.function_builder->arguments().size());
+    return std::move(ctx.function_builder);
 }
 
 const Type *IR2AST::get_type(const ir::Type *type) noexcept {
@@ -1237,7 +1405,7 @@ const Type *IR2AST::get_type(const ir::Type *type) noexcept {
 
 [[nodiscard]] const Type *IR2AST::get_type(const ir::NodeRef node_ref) noexcept {
     auto node = ir::luisa_compute_ir_node_get(node_ref);
-    LUISA_VERBOSE("node type is {}", luisa::to_underlying(node->instruction->tag));
+    //    LUISA_VERBOSE("node type is {}", luisa::to_underlying(node->instruction->tag));
     switch (node->instruction->tag) {
         case ir::Instruction::Tag::Buffer: return Type::buffer(_convert_type(node->type_.get()));
         case ir::Instruction::Tag::Texture2D: return Type::texture(_convert_type(node->type_.get()), 2u);
@@ -1253,5 +1421,11 @@ const Type *IR2AST::get_type(const ir::Type *type) noexcept {
     return builder.convert_kernel(kernel);
 }
 
+[[nodiscard]] luisa::shared_ptr<detail::FunctionBuilder> IR2AST::build(const ir::CallableModule *callable) noexcept {
+    IR2AST builder{};
+    return builder.convert_callable(callable);
+}
+
 }// namespace luisa::compute
 
+#pragma clang diagnostic pop

@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/2/6.
-//
-
 #pragma once
 
 #include <luisa/core/basic_types.h>
@@ -72,6 +68,7 @@ public:
     // native handle
     [[nodiscard]] virtual void *native_handle() const noexcept = 0;
     [[nodiscard]] virtual bool is_c_api() const noexcept { return false; }
+    [[nodiscard]] virtual uint compute_warp_size() const noexcept { return 0; }
 
 public:
     [[nodiscard]] virtual BufferCreationInfo create_buffer(const Type *element, size_t elem_count) noexcept = 0;
@@ -113,10 +110,10 @@ public:
     // event
     [[nodiscard]] virtual ResourceCreationInfo create_event() noexcept = 0;
     virtual void destroy_event(uint64_t handle) noexcept = 0;
-    virtual void signal_event(uint64_t handle, uint64_t stream_handle) noexcept = 0;
-    virtual void wait_event(uint64_t handle, uint64_t stream_handle) noexcept = 0;
-    virtual bool is_event_completed(uint64_t handle) const noexcept = 0;
-    virtual void synchronize_event(uint64_t handle) noexcept = 0;
+    virtual void signal_event(uint64_t handle, uint64_t stream_handle, uint64_t fence_value) noexcept = 0;
+    virtual void wait_event(uint64_t handle, uint64_t stream_handle, uint64_t fence_value) noexcept = 0;
+    virtual bool is_event_completed(uint64_t handle, uint64_t fence_value) const noexcept = 0;
+    virtual void synchronize_event(uint64_t handle, uint64_t fence_value) noexcept = 0;
 
     // accel
     [[nodiscard]] virtual ResourceCreationInfo create_mesh(

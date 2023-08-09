@@ -40,17 +40,20 @@ luisa::unique_ptr<BinaryStream> DefaultBinaryIO::_read(luisa::string const &file
         return luisa::make_unique<LockedBinaryFileStream>(this, file, length, file_path, std::move(idx));
     } else {
         _unlock(idx, false);
-        LUISA_INFO("Read file {} failed.", file_path);
+        LUISA_VERBOSE("Read file {} failed.", file_path);
         return nullptr;
     }
 }
+
 DefaultBinaryIO::MapIndex DefaultBinaryIO::_lock(luisa::string const &name, bool is_write) const noexcept {
     MapIndex iter;
     FileMutex *ptr;
+    auto abs_path = luisa::filesystem::absolute(name).string();
     {
         std::lock_guard lck{_global_mtx};
-        iter = _mutex_map.emplace(name);
+        iter = _mutex_map.emplace(abs_path);
         ptr = &iter.value();
+        ptr->ref_count++;
     }
     if (is_write) {
         ptr->mtx.lock();
@@ -67,17 +70,19 @@ void DefaultBinaryIO::_unlock(MapIndex const &idx, bool is_write) const noexcept
     } else {
         v.mtx.unlock_shared();
     }
+    std::lock_guard lck{_global_mtx};
     if ((--v.ref_count) == 0) {
-        std::lock_guard lck{_global_mtx};
         _mutex_map.remove(idx);
     }
 }
 
-void DefaultBinaryIO::_write(luisa::string const &file_path, luisa::span<std::byte const> data) const noexcept {
+void DefaultBinaryIO::_write(const luisa::string &file_path, luisa::span<std::byte const> data) const noexcept {
+    auto folder = luisa::filesystem::path{file_path}.parent_path();
+    std::error_code ec;
+    luisa::filesystem::create_directories(folder, ec);
+    if (ec) { LUISA_WARNING("Create directory {} failed.", folder.string()); }
     auto idx = _lock(file_path, true);
-    auto disposer = vstd::scope_exit([&]() { _unlock(idx, true); });
-    auto f = fopen(file_path.c_str(), "wb");
-    if (f) [[likely]] {
+    if (auto f = fopen(file_path.c_str(), "wb")) [[likely]] {
 #ifdef _WIN32
 #define LUISA_FWRITE _fwrite_nolock
 #define LUISA_FCLOSE _fclose_nolock
@@ -92,6 +97,7 @@ void DefaultBinaryIO::_write(luisa::string const &file_path, luisa::span<std::by
     } else {
         LUISA_WARNING("Write file {} failed.", file_path);
     }
+    _unlock(idx, true);
 }
 
 DefaultBinaryIO::DefaultBinaryIO(Context &&ctx, void *ext) noexcept
@@ -121,25 +127,27 @@ luisa::unique_ptr<BinaryStream> DefaultBinaryIO::read_internal_shader(luisa::str
     return _read(file_path);
 }
 
-void DefaultBinaryIO::write_shader_bytecode(luisa::string_view name, luisa::span<std::byte const> data) const noexcept {
+luisa::filesystem::path DefaultBinaryIO::write_shader_bytecode(luisa::string_view name, luisa::span<std::byte const> data) const noexcept {
     std::filesystem::path local_path{name};
     if (local_path.is_absolute()) {
         _write(luisa::to_string(name), data);
-        return;
+        return local_path;
     }
     auto file_path = luisa::to_string(_ctx.runtime_directory() / name);
     _write(file_path, data);
+    return file_path;
 }
 
-void DefaultBinaryIO::write_shader_cache(luisa::string_view name, luisa::span<std::byte const> data) const noexcept {
+luisa::filesystem::path DefaultBinaryIO::write_shader_cache(luisa::string_view name, luisa::span<std::byte const> data) const noexcept {
     auto file_path = luisa::to_string(_cache_dir / name);
     _write(file_path, data);
+    return file_path;
 }
 
-void DefaultBinaryIO::write_internal_shader(luisa::string_view name, luisa::span<std::byte const> data) const noexcept {
+luisa::filesystem::path DefaultBinaryIO::write_internal_shader(luisa::string_view name, luisa::span<std::byte const> data) const noexcept {
     auto file_path = luisa::to_string(_data_dir / name);
     _write(file_path, data);
+    return file_path;
 }
 
 }// namespace luisa::compute
-

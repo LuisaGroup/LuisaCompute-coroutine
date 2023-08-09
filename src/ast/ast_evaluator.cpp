@@ -1,10 +1,12 @@
 #include <luisa/ast/function.h>
 #include <luisa/ast/ast_evaluator.h>
+#include <luisa/ast/type_registry.h>
 #include <luisa/core/logging.h>
 #include <algorithm>
 #include <luisa/core/mathematics.h>
 
 namespace luisa::compute {
+
 ASTEvaluator::Result ASTEvaluator::try_eval(Expression const *expr) {
     switch (expr->tag()) {
         case Expression::Tag::UNARY:
@@ -124,69 +126,103 @@ ASTEvaluator::Result ASTEvaluator::try_eval(BinaryExpr const *expr) {
         if (lr.index() != rr.index()) {
             bool trans_success = false;
             visit(
-                [&]<typename A, typename B>(A a, B b) {
-                    if constexpr (!std::is_same_v<A, monostate> && !std::is_same_v<B, monostate>) {
+                [&]<typename A>(A a) {
+                    if constexpr (!std::is_same_v<A, monostate>) {
                         using ScalarA = ScalarType_t<A>;
-                        using ScalarB = ScalarType_t<B>;
                         using TTA = ScalarType<A>;
-                        using TTB = ScalarType<B>;
-                        using DstScalar = TypeCast<ScalarA, ScalarB>;
                         // vec + scalar
-                        if constexpr (TTA::is_vector && TTB::is_scalar) {
-                            using VecType = Vector<DstScalar, TTA::size>;
-                            VecType a_result, b_result;
-                            for (auto &&i : range(TTA::size)) {
-                                a_result[i] = static_cast<DstScalar>(a[i]);
-                                b_result[i] = static_cast<DstScalar>(b);
-                            }
-                            lr = a_result;
-                            rr = b_result;
-                            trans_success = true;
+                        if constexpr (TTA::is_vector) {
+                            visit([&]<typename B>(B b) {
+                                using TTB = ScalarType<B>;
+                                if constexpr (!std::is_same_v<B, monostate> && TTB::is_scalar) {
+                                    using ScalarB = ScalarType_t<B>;
+                                    using DstScalar = TypeCast<ScalarA, ScalarB>;
+                                    using VecType = Vector<DstScalar, TTA::size>;
+                                    VecType a_result, b_result;
+                                    for (auto &&i : range(TTA::size)) {
+                                        a_result[i] = static_cast<DstScalar>(a[i]);
+                                        b_result[i] = static_cast<DstScalar>(b);
+                                    }
+                                    lr = a_result;
+                                    rr = b_result;
+                                    trans_success = true;
+                                }
+                            },
+                                  rr);
                         }
                         // scalar + vec
-                        else if constexpr (TTA::is_scalar && TTB::is_vector) {
-                            using VecType = Vector<DstScalar, TTB::size>;
-                            VecType a_result, b_result;
-                            for (auto &&i : range(TTB::size)) {
-                                a_result[i] = static_cast<DstScalar>(a);
-                                b_result[i] = static_cast<DstScalar>(b[i]);
-                            }
-                            lr = a_result;
-                            rr = b_result;
-                            trans_success = true;
+                        else if constexpr (TTA::is_scalar) {
+                            visit([&]<typename B>(B b) {
+                                using TTB = ScalarType<B>;
+                                if constexpr (!std::is_same_v<B, monostate> && TTB::is_vector) {
+                                    using ScalarB = ScalarType_t<B>;
+                                    using DstScalar = TypeCast<ScalarA, ScalarB>;
+                                    using VecType = Vector<DstScalar, TTB::size>;
+                                    VecType a_result, b_result;
+                                    for (auto &&i : range(TTB::size)) {
+                                        a_result[i] = static_cast<DstScalar>(a);
+                                        b_result[i] = static_cast<DstScalar>(b[i]);
+                                    }
+                                    lr = a_result;
+                                    rr = b_result;
+                                    trans_success = true;
+                                }
+                            },
+                                  rr);
                         }
                         // scalar + scalar
-                        else if constexpr (TTA::is_scalar && TTB::is_scalar) {
-                            DstScalar a_result, b_result;
-                            a_result = static_cast<DstScalar>(a);
-                            b_result = static_cast<DstScalar>(b);
-                            lr = a_result;
-                            rr = b_result;
-                            trans_success = true;
-                        } else if constexpr (TTA::is_matrix && TTB::is_scalar) {
-                            using VecType = Matrix<TTA::size>;
-                            VecType b_result;
-                            for (auto x : range(TTA::size))
-                                for (auto y : range(TTA::size)) {
-                                    b_result[x][y] = static_cast<float>(b);
+                        else if constexpr (TTA::is_scalar) {
+                            visit([&]<typename B>(B b) {
+                                using TTB = ScalarType<B>;
+                                if constexpr (!std::is_same_v<B, monostate> && TTB::is_scalar) {
+                                    using ScalarB = ScalarType_t<B>;
+                                    using DstScalar = TypeCast<ScalarA, ScalarB>;
+                                    DstScalar a_result, b_result;
+                                    a_result = static_cast<DstScalar>(a);
+                                    b_result = static_cast<DstScalar>(b);
+                                    lr = a_result;
+                                    rr = b_result;
+                                    trans_success = true;
                                 }
-                            rr = b_result;
-                            trans_success = true;
+                            },
+                                  rr);
+
+                        } else if constexpr (TTA::is_matrix) {
+                            visit([&]<typename B>(B b) {
+                                using TTB = ScalarType<B>;
+                                if constexpr (!std::is_same_v<B, monostate> && TTB::is_scalar) {
+                                    using VecType = Matrix<TTA::size>;
+                                    VecType b_result;
+                                    for (auto x : range(TTA::size))
+                                        for (auto y : range(TTA::size)) {
+                                            b_result[x][y] = static_cast<float>(b);
+                                        }
+                                    rr = b_result;
+                                    trans_success = true;
+                                }
+                            },
+                                  rr);
                         }
                         // scalar + vec
-                        else if constexpr (TTA::is_scalar && TTB::is_matrix) {
-                            using VecType = Matrix<TTB::size>;
-                            VecType a_result;
-                            for (auto x : range(TTA::size))
-                                for (auto y : range(TTA::size)) {
-                                    a_result[x][y] = static_cast<float>(a);
+                        else if constexpr (TTA::is_scalar) {
+                            visit([&]<typename B>(B b) {
+                                using TTB = ScalarType<B>;
+                                if constexpr (!std::is_same_v<B, monostate> && TTB::is_matrix) {
+                                    using VecType = Matrix<TTB::size>;
+                                    VecType a_result;
+                                    for (auto x : range(TTA::size))
+                                        for (auto y : range(TTA::size)) {
+                                            a_result[x][y] = static_cast<float>(a);
+                                        }
+                                    lr = a_result;
+                                    trans_success = true;
                                 }
-                            lr = a_result;
-                            trans_success = true;
+                            },
+                                  rr);
                         }
                     }
                 },
-                lr, rr);
+                lr);
             if (!trans_success) return monostate{};
         }
         return visit(
@@ -329,11 +365,15 @@ ASTEvaluator::Result ASTEvaluator::try_eval(MemberExpr const *expr) {
 }
 
 ASTEvaluator::Result ASTEvaluator::try_eval(AccessExpr const *expr) {
-    if (expr->range()->tag() != Expression::Tag::CONSTANT) [[likely]]
+    return luisa::monostate{};
+    if (expr->range()->tag() != Expression::Tag::CONSTANT ||
+        !expr->range()->type()->is_array()) [[likely]] {
         return monostate{};
+    }
     auto index_result = try_eval(expr->index());
-    if (holds_alternative<monostate>(index_result)) [[likely]]
+    if (holds_alternative<monostate>(index_result)) [[likely]] {
         return monostate{};
+    }
     int64_t index = visit(
         [&]<typename T>(T const &t) -> int64_t {
             if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
@@ -343,11 +383,32 @@ ASTEvaluator::Result ASTEvaluator::try_eval(AccessExpr const *expr) {
             }
         },
         index_result);
-    return visit(
-        [&]<typename T>(span<T const> const &t) -> Result {
-            return t[index];
-        },
-        static_cast<ConstantExpr const *>(expr->range())->data().view());
+    auto range = static_cast<ConstantExpr const *>(expr->range());
+
+#define LUISA_AST_EVAL_CONST(T)                                         \
+    if (Type::of<T>() == expr->type()) {                                \
+        return reinterpret_cast<const T *>(range->data().raw())[index]; \
+    }
+
+#define LUISA_AST_EVAL_CONST_VEC(T) \
+    LUISA_AST_EVAL_CONST(T)         \
+    LUISA_AST_EVAL_CONST(T##2)      \
+    LUISA_AST_EVAL_CONST(T##3)      \
+    LUISA_AST_EVAL_CONST(T##4)
+
+    LUISA_AST_EVAL_CONST_VEC(bool)
+    LUISA_AST_EVAL_CONST_VEC(int)
+    LUISA_AST_EVAL_CONST_VEC(uint)
+    LUISA_AST_EVAL_CONST_VEC(float)
+
+    LUISA_AST_EVAL_CONST(float2x2)
+    LUISA_AST_EVAL_CONST(float3x3)
+    LUISA_AST_EVAL_CONST(float4x4)
+
+#undef LUISA_AST_EVAL_CONST_VEC
+#undef LUISA_AST_EVAL_CONST
+
+    return monostate{};
 }
 
 ASTEvaluator::Result ASTEvaluator::try_eval(LiteralExpr const *expr) {

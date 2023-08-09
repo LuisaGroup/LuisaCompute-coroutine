@@ -2,6 +2,7 @@
 #include <luisa/vstl/string_utility.h>
 #include "variant_util.h"
 #include <luisa/ast/constant_data.h>
+#include <luisa/ast/type_registry.h>
 #include "struct_generator.h"
 #include "codegen_stack_data.h"
 #include <luisa/vstl/pdqsort.h>
@@ -9,6 +10,29 @@
 #include <luisa/core/logging.h>
 #include <luisa/ast/external_function.h>
 namespace lc::hlsl {
+#ifdef LUISA_ENABLE_IR
+static void glob_variables_with_grad(Function f, vstd::unordered_set<Variable> &gradient_variables) noexcept {
+    if (f.requires_autodiff())
+        traverse_expressions<true>(
+            f.body(),
+            [&](auto expr) noexcept {
+                if (expr->tag() == Expression::Tag::CALL) {
+                    if (auto call = static_cast<const CallExpr *>(expr);
+                        call->op() == CallOp::GRADIENT ||
+                        call->op() == CallOp::GRADIENT_MARKER ||
+                        call->op() == CallOp::REQUIRES_GRADIENT) {
+                        LUISA_ASSERT(!call->arguments().empty() &&
+                                         call->arguments().front()->tag() == Expression::Tag::REF,
+                                     "Invalid gradient function call.");
+                        auto v = static_cast<const RefExpr *>(call->arguments().front())->variable();
+                        gradient_variables.emplace(v);
+                    }
+                }
+            },
+            [](auto) noexcept {},
+            [](auto) noexcept {});
+}
+#endif
 struct RegisterIndexer {
     virtual void init() = 0;
     virtual uint &get(uint idx) = 0;
@@ -52,10 +76,10 @@ static size_t AddHeader(CallOpSet const &ops, luisa::BinaryIO const *internalDat
     if (ops.test(CallOp::INVERSE)) {
         builder << CodegenUtility::ReadInternalHLSLFile("inverse", internalDataPath);
     }
-    if (ops.test(CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER) || ops.test(CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL)) {
+    if (ops.test(CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER) || ops.test(CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL) || ops.test(CallOp::INDIRECT_SET_DISPATCH_KERNEL)) {
         builder << CodegenUtility::ReadInternalHLSLFile("indirect", internalDataPath);
     }
-    if (ops.test(CallOp::BUFFER_SIZE) || ops.test(CallOp::TEXTURE_SIZE)) {
+    if (ops.test(CallOp::BUFFER_SIZE) || ops.test(CallOp::TEXTURE_SIZE) || ops.test(CallOp::BYTE_BUFFER_SIZE)) {
         builder << CodegenUtility::ReadInternalHLSLFile("resource_size", internalDataPath);
     }
     bool useBindless = false;
@@ -81,6 +105,21 @@ static size_t AddHeader(CallOpSet const &ops, luisa::BinaryIO const *internalDat
     }
     if (!isRaster && (ops.test(CallOp::DDX) || ops.test(CallOp::DDY))) {
         builder << CodegenUtility::ReadInternalHLSLFile("compute_quad", internalDataPath);
+    }
+    if (ops.test(CallOp::ZERO) ||
+        ops.test(CallOp::ONE) ||
+        ops.test(CallOp::GRADIENT) ||
+        ops.test(CallOp::ACCUMULATE_GRADIENT) ||
+        ops.test(CallOp::REQUIRES_GRADIENT)) {
+        builder << CodegenUtility::ReadInternalHLSLFile("auto_diff", internalDataPath);
+    }
+    if (ops.test(CallOp::REDUCE_MAX) ||
+        ops.test(CallOp::REDUCE_MIN) ||
+        ops.test(CallOp::REDUCE_PRODUCT) ||
+        ops.test(CallOp::REDUCE_SUM) ||
+        ops.test(CallOp::OUTER_PRODUCT) ||
+        ops.test(CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION)) {
+        builder << CodegenUtility::ReadInternalHLSLFile("reduce", internalDataPath);
     }
     return immutable_size;
 }
@@ -108,7 +147,8 @@ void CodegenUtility::RegistStructType(Type const *type) {
     if (type->is_structure() || type->is_array())
         opt->structTypes.try_emplace(type, opt->count++);
     else if (type->is_buffer()) {
-        RegistStructType(type->element());
+        if (type->element())
+            RegistStructType(type->element());
     }
 }
 
@@ -216,50 +256,12 @@ void CodegenUtility::GetVariableName(Variable::Tag type, uint id, vstd::StringBu
 void CodegenUtility::GetVariableName(Variable const &type, vstd::StringBuilder &str) {
     GetVariableName(type.tag(), type.uid(), str);
 }
+
 bool CodegenUtility::GetConstName(uint64 hash, ConstantData const &data, vstd::StringBuilder &str) {
     auto constCount = opt->GetConstCount(hash);
     str << "c";
     vstd::to_string((constCount.first), str);
     return constCount.second;
-}
-void CodegenUtility::GetConstantStruct(ConstantData const &data, vstd::StringBuilder &str) {
-    uint64 constCount = opt->GetConstCount(data.hash()).first;
-    //auto typeName = CodegenUtility::GetBasicTypeName(view.index());
-    str << "struct tc"sv;
-    vstd::to_string((constCount), str);
-    uint64 varCount = 1;
-    luisa::visit(
-        [&](auto &&arr) {
-            varCount = arr.size();
-        },
-        data.view());
-    str << "{\n"sv;
-    str << CodegenUtility::GetBasicTypeName(data.view().index()) << " v[";
-    vstd::to_string((varCount), str);
-    str << "];\n};\n"sv;
-}
-void CodegenUtility::GetConstantData(ConstantData const &data, vstd::StringBuilder &str) {
-    auto &&view = data.view();
-    uint64 constCount = opt->GetConstCount(data.hash()).first;
-
-    vstd::string name = vstd::to_string((constCount));
-    str << "uniform const tc" << name << " c" << name;
-    str << "={{";
-    luisa::visit(
-        [&](auto &&arr) {
-            for (auto const &ele : arr) {
-                PrintValue<std::remove_cvref_t<typename std::remove_cvref_t<decltype(arr)>::element_type>> prt;
-                prt(ele, str);
-                str << ',';
-            }
-        },
-        view);
-    auto last = str.end() - 1;
-    if (*last == ',')
-        *last = '}';
-    else
-        str << '}';
-    str << "};\n";
 }
 
 void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usage usage, bool local_var) {
@@ -278,6 +280,9 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
             return;
         case Type::Tag::FLOAT16:
             str << "float16_t"sv;
+            return;
+        case Type::Tag::FLOAT64:
+            str << "float64_t"sv;
             return;
         case Type::Tag::INT16:
             str << "int16_t"sv;
@@ -316,30 +321,36 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
         }
             return;
         case Type::Tag::BUFFER: {
-
             if ((static_cast<uint>(usage) & static_cast<uint>(Usage::WRITE)) != 0)
                 str << "RW"sv;
-            str << "StructuredBuffer<"sv;
             auto ele = type.element();
-            if (ele->is_matrix()) {
-                auto n = vstd::to_string(ele->dimension());
-                str << "_WrappedFloat"sv << n << 'x' << n;
-            } else {
-                vstd::StringBuilder typeName;
-                if (ele->is_vector() && ele->dimension() == 3) {
-                    GetTypeName(*ele->element(), typeName, usage);
-                    typeName << '4';
+            // StructuredBuffer
+            if (ele != nullptr) {
+                str << "StructuredBuffer<"sv;
+                if (ele->is_matrix()) {
+                    auto n = vstd::to_string(ele->dimension());
+                    str << "_WrappedFloat"sv << n << 'x' << n;
                 } else {
-                    GetTypeName(*ele, typeName, usage);
+                    vstd::StringBuilder typeName;
+                    if (ele->is_vector() && ele->dimension() == 3) {
+                        GetTypeName(*ele->element(), typeName, usage);
+                        typeName << '4';
+                    } else {
+                        GetTypeName(*ele, typeName, usage);
+                    }
+                    auto ite = opt->structReplaceName.find(typeName);
+                    if (ite != opt->structReplaceName.end()) {
+                        str << ite->second;
+                    } else {
+                        str << typeName;
+                    }
                 }
-                auto ite = opt->structReplaceName.find(typeName);
-                if (ite != opt->structReplaceName.end()) {
-                    str << ite->second;
-                } else {
-                    str << typeName;
-                }
+                str << '>';
             }
-            str << '>';
+            // ByteAddressBuffer
+            else {
+                str << "ByteAddressBuffer"sv;
+            }
         } break;
         case Type::Tag::TEXTURE: {
             if ((static_cast<uint>(usage) & static_cast<uint>(Usage::WRITE)) != 0)
@@ -355,7 +366,7 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
             break;
         }
         case Type::Tag::BINDLESS_ARRAY: {
-            str << "ByteAddressBuffer"sv;
+            str << "StructuredBuffer<uint>"sv;
         } break;
         case Type::Tag::ACCEL: {
             str << "RaytracingAccelerationStructure"sv;
@@ -508,6 +519,9 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             break;
         case CallOp::STEP:
             str << "step"sv;
+            break;
+        case CallOp::SMOOTHSTEP:
+            str << "smoothstep"sv;
             break;
         case CallOp::ABS:
             str << "abs"sv;
@@ -674,6 +688,12 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             LUISA_ASSERT(!opt->isRaster, "texture-write can only be used in compute shader");
             str << "_Writetx";
             break;
+        case CallOp::MAKE_LONG2:
+        case CallOp::MAKE_LONG3:
+        case CallOp::MAKE_LONG4:
+        case CallOp::MAKE_ULONG2:
+        case CallOp::MAKE_ULONG3:
+        case CallOp::MAKE_ULONG4:
         case CallOp::MAKE_BOOL2:
         case CallOp::MAKE_BOOL3:
         case CallOp::MAKE_BOOL4:
@@ -694,7 +714,10 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         case CallOp::MAKE_USHORT4:
         case CallOp::MAKE_HALF2:
         case CallOp::MAKE_HALF3:
-        case CallOp::MAKE_HALF4: {
+        case CallOp::MAKE_HALF4:
+        case CallOp::MAKE_DOUBLE2:
+        case CallOp::MAKE_DOUBLE3:
+        case CallOp::MAKE_DOUBLE4: {
             if (args.size() == 1 && (args[0]->type() == expr->type())) {
                 args[0]->accept(vis);
             } else {
@@ -742,13 +765,99 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << "_bfwrite"sv;
             auto elem = args[0]->type()->element();
             if (IsNumVec3(*elem)) {
-                str << "Vec3"sv;
+                str << "Vec3("sv;
+                PrintArgs();
+                str << ',';
+                GetTypeName(*elem->element(), str, Usage::NONE);
+                str << ')';
+                return;
             } else if (elem->is_matrix()) {
                 str << "Mat";
             }
         } break;
         case CallOp::BUFFER_SIZE: {
             str << "_bfsize"sv;
+        } break;
+        case CallOp::BYTE_BUFFER_READ: {
+            str << "_bytebfread"sv;
+            auto elem = expr->type();
+            if (IsNumVec3(*elem)) {
+                str << "Vec3("sv;
+                args[0]->accept(vis);
+                str << ',';
+                GetTypeName(*elem->element(), str, Usage::NONE);
+                str << ',';
+                args[1]->accept(vis);
+                str << ')';
+
+            } else if (elem->is_matrix()) {
+                str << "Mat(";
+                args[0]->accept(vis);
+                str << ',';
+                switch (elem->dimension()) {
+                    case 2:
+                        str << "_WrappedFloat2x2"sv;
+                        break;
+                    case 3:
+                        str << "_WrappedFloat3x3"sv;
+                        break;
+                    case 4:
+                        str << "_WrappedFloat4x4"sv;
+                        break;
+                }
+                str << ',';
+                args[1]->accept(vis);
+                str << ')';
+            } else {
+                str << '(';
+                args[0]->accept(vis);
+                str << ',';
+                GetTypeName(*elem, str, Usage::NONE);
+                str << ',';
+                args[1]->accept(vis);
+                str << ')';
+            }
+            return;
+        }
+        case CallOp::BYTE_BUFFER_WRITE: {
+            str << "_bytebfwrite"sv;
+            auto elem = args[2]->type();
+            if (elem == Type::of<float3>()) {
+                str << "Vec3("sv;
+                args[0]->accept(vis);
+                str << ',';
+                GetTypeName(*elem->element(), str, Usage::NONE);
+                str << ',';
+                args[1]->accept(vis);
+                str << ',';
+                args[2]->accept(vis);
+                str << ')';
+                return;
+            } else if (elem->is_matrix()) {
+                str << "Mat(";
+                args[0]->accept(vis);
+                str << ',';
+                switch (elem->dimension()) {
+                    case 2:
+                        str << "_WrappedFloat2x2"sv;
+                        break;
+                    case 3:
+                        str << "_WrappedFloat3x3"sv;
+                        break;
+                    case 4:
+                        str << "_WrappedFloat4x4"sv;
+                        break;
+                }
+                str << ',';
+                args[1]->accept(vis);
+                str << ',';
+                args[2]->accept(vis);
+                str << ')';
+                return;
+            }
+        } break;
+        case CallOp::BYTE_BUFFER_SIZE: {
+            str << "_bytebfsize"sv;
         } break;
         case CallOp::TEXTURE_SIZE: {
             str << "_texsize"sv;
@@ -773,8 +882,7 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
                 i->accept(vis);
                 str << ',';
             }
-            vstd::to_string(expr->type()->size(), str);
-            str << ",bdls)"sv;
+            str << "bdls)"sv;
             return;
         }
         case CallOp::BINDLESS_BUFFER_READ: {
@@ -803,6 +911,7 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << ",bdls)"sv;
             return;
         }
+        case CallOp::ASSERT:
         case CallOp::ASSUME:
         case CallOp::UNREACHABLE: {
             return;
@@ -937,14 +1046,11 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             break;
         case CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL: {
             LUISA_ASSERT(!opt->isRaster, "indirect-operation can only be used in compute shader");
-            auto tp = args[1]->type();
-            if (tp->is_scalar()) {
-                str << "_EmplaceDispInd1D"sv;
-            } else if (tp->dimension() == 2) {
-                str << "_EmplaceDispInd2D"sv;
-            } else {
-                str << "_EmplaceDispInd3D"sv;
-            }
+            str << "_EmplaceDispInd"sv;
+        } break;
+        case CallOp::INDIRECT_SET_DISPATCH_KERNEL: {
+            LUISA_ASSERT(!opt->isRaster, "indirect-operation can only be used in compute shader");
+            str << "_SetDispInd"sv;
         } break;
         case CallOp::RAY_QUERY_WORLD_SPACE_RAY:
             str << "_RayQueryGetWorldRay<"sv;
@@ -976,9 +1082,114 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             args[0]->accept(vis);
             str << ".Abort()"sv;
             return;
-        default: {
-            LUISA_ERROR("Function Not Implemented");
-        } break;
+        case CallOp::ZERO: {
+            str << "_zero("sv;
+            GetTypeName(*expr->type(), str, Usage::READ, true);
+            str << ')';
+            return;
+        }
+        case CallOp::ONE: {
+            str << "_one("sv;
+            GetTypeName(*expr->type(), str, Usage::READ, true);
+            str << ')';
+            return;
+        }
+        case CallOp::REQUIRES_GRADIENT: {
+            str << "_REQUIRES_GRAD("sv;
+            for (auto &&i : args) {
+                i->accept(vis);
+                str << ',';
+            }
+            GetTypeName(*args[0]->type(), str, Usage::READ, true);
+            str << ')';
+            return;
+        }
+        case CallOp::GRADIENT:
+            str << "_GRAD";
+            break;
+        case CallOp::GRADIENT_MARKER:
+            str << "_MARK_GRAD";
+            break;
+        case CallOp::ACCUMULATE_GRADIENT:
+            str << "_accum_grad";
+            break;
+        case CallOp::DETACH:
+            str << "_detach";
+            break;
+        case CallOp::REDUCE_SUM: str << "_reduce_sum"; break;
+        case CallOp::REDUCE_PRODUCT: str << "_reduce_prod"; break;
+        case CallOp::REDUCE_MIN: str << "_reduce_min"; break;
+        case CallOp::REDUCE_MAX: str << "_reduce_max"; break;
+        case CallOp::OUTER_PRODUCT: str << "_outer_product"; break;
+        case CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION: str << "_mat_comp_mul"; break;
+        case CallOp::BINDLESS_BUFFER_TYPE: LUISA_NOT_IMPLEMENTED(); break;
+        case CallOp::WARP_LANE_COUNT:
+            str << "WaveGetLaneCount"sv;
+            break;
+        case CallOp::WARP_LANE_INDEX:
+            str << "WaveGetLaneIndex"sv;
+            break;
+        case CallOp::WARP_IS_FIRST_ACTIVE_LANE:
+            str << "WaveIsFirstLane"sv;
+            break;
+        case CallOp::WARP_ACTIVE_ALL_EQUAL:
+            str << "WaveActiveAllEqual"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_AND:
+            str << "WaveActiveBitAnd"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_OR:
+            str << "WaveActiveBitOr"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_XOR:
+            str << "WaveActiveBitXor"sv;
+            break;
+        case CallOp::WARP_ACTIVE_COUNT_BITS:
+            str << "WaveActiveCountBits"sv;
+            break;
+        case CallOp::WARP_PREFIX_COUNT_BITS:
+            str << "WavePrefixCountBits"sv;
+            break;
+        case CallOp::WARP_ACTIVE_MAX:
+            str << "WaveActiveMax"sv;
+            break;
+        case CallOp::WARP_ACTIVE_MIN:
+            str << "WaveActiveMin"sv;
+            break;
+        case CallOp::WARP_PREFIX_PRODUCT:
+            str << "WavePrefixProduct"sv;
+            break;
+        case CallOp::WARP_ACTIVE_PRODUCT:
+            str << "WaveActiveProduct"sv;
+            break;
+        case CallOp::WARP_PREFIX_SUM:
+            str << "WavePrefixProduct"sv;
+            break;
+        case CallOp::WARP_ACTIVE_SUM:
+            str << "WaveActiveSum"sv;
+            break;
+        case CallOp::WARP_ACTIVE_ALL:
+            str << "WaveActiveAllTrue"sv;
+            break;
+        case CallOp::WARP_ACTIVE_ANY:
+            str << "WaveActiveAnyTrue"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_MASK:
+            str << "WaveActiveBallot"sv;
+            break;
+        case CallOp::WARP_READ_LANE_AT:
+            str << "WaveReadLaneAt"sv;
+            break;
+        case CallOp::WARP_READ_FIRST_LANE:
+            str << "WaveReadLaneFirst"sv;
+            break;
+        case CallOp::BACKWARD:
+            LUISA_ERROR_WITH_LOCATION("`backward()` should not be called directly.");
+            break;
+        case CallOp::PACK:
+        case CallOp::UNPACK:
+            LUISA_ERROR_WITH_LOCATION("Call-Op not implemented.");
+            break;
     }
     str << '(';
     PrintArgs();
@@ -1024,40 +1235,148 @@ struct TypeNameStruct<luisa::Matrix<t>> {
         }
     }
 };
-void CodegenUtility::GetBasicTypeName(uint64 typeIndex, vstd::StringBuilder &str) {
-    vstd::VariantVisitor_t<basic_types>()(
-        [&]<typename T>() {
-            TypeNameStruct<T>()(str);
-        },
-        typeIndex);
-}
+
+class CodegenConstantPrinter final : public ConstantDecoder {
+
+private:
+    vstd::StringBuilder &_str;
+
+public:
+    CodegenConstantPrinter(CodegenUtility &codegen,
+                           vstd::StringBuilder &str) noexcept
+        : _str{str} {}
+
+protected:
+    void _decode_bool(bool x) noexcept override {
+        PrintValue<bool>{}(x, _str);
+    }
+    void _decode_short(short x) noexcept override {
+        LUISA_NOT_IMPLEMENTED();
+    }
+    void _decode_ushort(ushort x) noexcept override {
+        LUISA_NOT_IMPLEMENTED();
+    }
+    void _decode_int(int x) noexcept override {
+        PrintValue<int>{}(x, _str);
+    }
+    void _decode_uint(uint x) noexcept override {
+        PrintValue<uint>{}(x, _str);
+    }
+    void _decode_long(slong x) noexcept override {
+        LUISA_NOT_IMPLEMENTED();
+    }
+    void _decode_ulong(ulong x) noexcept override {
+        LUISA_NOT_IMPLEMENTED();
+    }
+    void _decode_half(half x) noexcept override {
+        LUISA_NOT_IMPLEMENTED();
+    }
+    void _decode_float(float x) noexcept override {
+        PrintValue<float>{}(x, _str);
+    }
+    void _decode_double(double x) noexcept override {
+        LUISA_NOT_IMPLEMENTED();
+    }
+    void _vector_separator(const Type *type, uint index) noexcept override {
+        LUISA_ERROR_WITH_LOCATION("Should not be called.");
+    }
+    void _matrix_separator(const Type *type, uint index) noexcept override {
+        LUISA_ERROR_WITH_LOCATION("Should not be called.");
+    }
+    void _decode_vector(const Type *type, const std::byte *data) noexcept override {
+#define LUISA_HLSL_DECODE_CONST_VEC(T, N)                   \
+    do {                                                    \
+        if (type == Type::of<T##N>()) {                     \
+            auto x = *reinterpret_cast<const T##N *>(data); \
+            if constexpr (N == 3) { _str << "{"sv; }        \
+            PrintValue<T##N>{}(x, _str);                    \
+            if constexpr (N == 3) { _str << ",0}"sv; }      \
+            return;                                         \
+        }                                                   \
+    } while (false)
+#define LUISA_HLSL_DECODE_CONST(T)     \
+    LUISA_HLSL_DECODE_CONST_VEC(T, 2); \
+    LUISA_HLSL_DECODE_CONST_VEC(T, 3); \
+    LUISA_HLSL_DECODE_CONST_VEC(T, 4)
+        LUISA_HLSL_DECODE_CONST(bool);
+        LUISA_HLSL_DECODE_CONST(int);
+        LUISA_HLSL_DECODE_CONST(uint);
+        LUISA_HLSL_DECODE_CONST(float);
+        LUISA_ERROR_WITH_LOCATION(
+            "Constant type '{}' is not supported yet.",
+            type->description());
+#undef LUISA_HLSL_DECODE_CONST_VEC
+#undef LUISA_HLSL_DECODE_CONST
+    }
+    void _decode_matrix(const Type *type, const std::byte *data) noexcept override {
+#define LUISA_HLSL_DECODE_CONST_MAT(N)                               \
+    do {                                                             \
+        using M = float##N##x##N;                                    \
+        if (type == Type::of<M>()) {                                 \
+            auto x = *reinterpret_cast<const M *>(data);             \
+            _str << "float" << #N "x" << (N == 3 ? "4" : #N) << "("; \
+            for (auto i = 0; i < N; i++) {                           \
+                _str << "float" << (N == 3 ? "4" : #N) << "(";       \
+                for (auto j = 0; j < 3; j++) {                       \
+                    PrintValue<float>{}(x[i][j], _str);              \
+                    if (j != N - 1) { _str << ","; }                 \
+                }                                                    \
+                if (N == 3) { _str << ",0"; }                        \
+                _str << ")";                                         \
+                if (i != N - 1) { _str << ","; }                     \
+            }                                                        \
+            _str << ")";                                             \
+            return;                                                  \
+        }                                                            \
+    } while (false)
+        LUISA_HLSL_DECODE_CONST_MAT(2);
+        LUISA_HLSL_DECODE_CONST_MAT(3);
+        LUISA_HLSL_DECODE_CONST_MAT(4);
+        LUISA_ERROR_WITH_LOCATION(
+            "Constant type '{}' is not supported yet.",
+            type->description());
+#undef LUISA_HLSL_DECODE_CONST_MAT
+    }
+    void _struct_separator(const Type *type, uint index) noexcept override {
+        auto n = type->members().size();
+        if (index == 0u) {
+            _str << "{"sv;
+        } else if (index == n) {
+            _str << "}"sv;
+        } else {
+            _str << ',';
+        }
+    }
+    void _array_separator(const Type *type, uint index) noexcept override {
+        auto n = type->dimension();
+        if (index == 0u) {
+            _str << "{{"sv;
+        } else if (index == n) {
+            _str << "}}"sv;
+        } else {
+            _str << ',';
+        }
+    }
+};
+
 void CodegenUtility::CodegenFunction(Function func, vstd::StringBuilder &result, bool cbufferNonEmpty) {
 
     auto codegenOneFunc = [&](Function func) {
         auto constants = func.constants();
         for (auto &&i : constants) {
             vstd::StringBuilder constValueName;
-            if (!GetConstName(i.data.hash(), i.data, constValueName)) continue;
+            if (!GetConstName(i.hash(), i, constValueName)) continue;
             result << "static const "sv;
-            GetTypeName(*i.type->element(), result, Usage::READ);
-            result << ' ' << constValueName << '[';
-            vstd::to_string(i.type->dimension(), result);
-            result << "]={"sv;
-            auto &&dataView = i.data.view();
-            luisa::visit(
-                [&]<typename T>(vstd::span<T> const &sp) {
-                    for (auto i : vstd::range(sp.size())) {
-                        auto &&value = sp[i];
-                        PrintValue<std::remove_cvref_t<T>>()(value, result);
-                        if (i != (sp.size() - 1)) {
-                            result << ',';
-                        }
-                    }
-                },
-                dataView);
-            result << "};\n"sv;
+            GetTypeName(*i.type(), result, Usage::READ);
+            result << ' ' << constValueName << " = "sv;
+            CodegenConstantPrinter printer{*this, result};
+            i.decode(printer);
+            result << ";\n"sv;
         }
-
+#ifdef LUISA_ENABLE_IR
+        vstd::unordered_set<Variable> grad_vars;
+        glob_variables_with_grad(func, grad_vars);
+#endif
         if (func.tag() == Function::Tag::KERNEL) {
             opt->funcType = CodegenStackData::FuncType::Kernel;
             result << "[numthreads("
@@ -1108,7 +1427,11 @@ void main(uint3 thdId:SV_GroupThreadId,uint3 dspId:SV_DispatchThreadID,uint3 grp
 
             StringStateVisitor vis(func, result, this);
             vis.sharedVariables = &opt->sharedVariable;
-            vis.VisitFunction(func);
+            vis.VisitFunction(
+#ifdef LUISA_ENABLE_IR
+                grad_vars,
+#endif
+                func);
         }
         result << "}\n"sv;
     };
@@ -1158,10 +1481,18 @@ void CodegenUtility::CodegenVertex(Function vert, vstd::StringBuilder &result, b
         opt->arguments.try_emplace(i.uid(), idx);
         ++idx;
     }
+#ifdef LUISA_ENABLE_IR
+    vstd::unordered_set<Variable> grad_vars;
+    glob_variables_with_grad(vert, grad_vars);
+#endif
     {
         StringStateVisitor vis(vert, result, this);
         vis.sharedVariables = &opt->sharedVariable;
-        vis.VisitFunction(vert);
+        vis.VisitFunction(
+#ifdef LUISA_ENABLE_IR
+            grad_vars,
+#endif
+            vert);
     }
     result << R"(
 }
@@ -1219,10 +1550,18 @@ void CodegenUtility::CodegenPixel(Function pixel, vstd::StringBuilder &result, b
         opt->arguments.try_emplace(i.uid(), idx);
         ++idx;
     }
+#ifdef LUISA_ENABLE_IR
+    vstd::unordered_set<Variable> grad_vars;
+    glob_variables_with_grad(pixel, grad_vars);
+#endif
     {
         StringStateVisitor vis(pixel, result, this);
         vis.sharedVariables = &opt->sharedVariable;
-        vis.VisitFunction(pixel);
+        vis.VisitFunction(
+#ifdef LUISA_ENABLE_IR
+            grad_vars,
+#endif
+            pixel);
     }
     result << R"(
 }
@@ -1441,6 +1780,7 @@ void CodegenUtility::CodegenProperties(
         return (static_cast<uint>(kernel.variable_usage(v.uid())) & static_cast<uint>(Usage::WRITE)) != 0;
     };
     auto args = kernel.arguments();
+    size_t uavArgCount = 0;
     for (auto &&i : vstd::ptr_range(args.data() + offset, args.size() - offset)) {
         auto print = [&] {
             GetTypeName(*i.type(), varData, kernel.variable_usage(i.uid()));
@@ -1455,7 +1795,10 @@ void CodegenUtility::CodegenProperties(
             GetVariableName(i, varData);
             varData << "Inst"sv;
         };
-        auto genArg = [&]<bool rtBuffer = false, bool writable = false>(RegisterType regisT, ShaderVariableType sT, char v) {
+        auto genArg = [&]<RegisterType regisT, bool rtBuffer = false, bool writable = false>(ShaderVariableType sT, char v) {
+            if constexpr (regisT == RegisterType::UAV) {
+                uavArgCount += 1;
+            }
             auto &&r = registerCount.get((uint8_t)regisT);
             Property prop = {
                 .type = sT,
@@ -1477,36 +1820,39 @@ void CodegenUtility::CodegenProperties(
         switch (i.type()->tag()) {
             case Type::Tag::TEXTURE:
                 if (Writable(i)) {
-                    genArg(RegisterType::UAV, ShaderVariableType::UAVTextureHeap, 'u');
+                    genArg.operator()<RegisterType::UAV>(ShaderVariableType::UAVTextureHeap, 'u');
                 } else {
-                    genArg(RegisterType::SRV, ShaderVariableType::SRVTextureHeap, 't');
+                    genArg.operator()<RegisterType::SRV>(ShaderVariableType::SRVTextureHeap, 't');
                 }
                 break;
             case Type::Tag::BUFFER: {
                 if (Writable(i)) {
-                    genArg(RegisterType::UAV, ShaderVariableType::RWStructuredBuffer, 'u');
+                    genArg.operator()<RegisterType::UAV>(ShaderVariableType::RWStructuredBuffer, 'u');
                 } else {
-                    genArg(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
+                    genArg.operator()<RegisterType::SRV>(ShaderVariableType::StructuredBuffer, 't');
                 }
             } break;
             case Type::Tag::BINDLESS_ARRAY:
-                genArg(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
+                genArg.operator()<RegisterType::SRV>(ShaderVariableType::StructuredBuffer, 't');
                 break;
             case Type::Tag::ACCEL:
                 if (Writable(i)) {
-                    genArg.operator()<true, true>(RegisterType::UAV, ShaderVariableType::RWStructuredBuffer, 'u');
+                    genArg.operator()<RegisterType::UAV, true, true>(ShaderVariableType::RWStructuredBuffer, 'u');
                 } else {
-                    genArg(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
-                    genArg.operator()<true>(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
+                    genArg.operator()<RegisterType::SRV>(ShaderVariableType::StructuredBuffer, 't');
+                    genArg.operator()<RegisterType::SRV, true>(ShaderVariableType::StructuredBuffer, 't');
                 }
                 break;
             case Type::Tag::CUSTOM: {
                 if (i.type()->description() == "LC_IndirectDispatchBuffer"sv) {
-                    genArg(RegisterType::UAV, ShaderVariableType::RWStructuredBuffer, 'u');
+                    genArg.operator()<RegisterType::UAV>(ShaderVariableType::RWStructuredBuffer, 'u');
                 }
             } break;
             default: break;
         }
+    }
+    if (uavArgCount > 8) {
+        LUISA_ERROR("Writable resources' count must be less than 8.");
     }
 }
 vstd::MD5 CodegenUtility::GetTypeMD5(vstd::span<Type const *const> types) {

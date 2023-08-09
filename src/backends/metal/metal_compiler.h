@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/15.
-//
-
 #pragma once
 
 #include <luisa/core/stl/lru_cache.h>
@@ -55,4 +51,3 @@ public:
 };
 
 }// namespace luisa::compute::metal
-

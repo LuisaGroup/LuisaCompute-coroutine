@@ -1,8 +1,7 @@
-//
-// Created by Mike Smith on 2021/2/7.
-//
-
 #pragma once
+
+#include <cstddef>
+#include <utility>
 
 #include <luisa/core/stl/hash_fwd.h>
 #include <luisa/core/basic_traits.h>
@@ -12,6 +11,14 @@ namespace luisa {
 // vectors
 namespace detail {
 
+template<typename T, size_t N>
+struct vector_alignment {
+    static constexpr size_t _a = sizeof(T) * (N == 3 ? 4 : N);
+    static constexpr size_t value = _a > 16u ? 16u : _a;
+};
+template<typename T, size_t N>
+static constexpr size_t vector_alignment_v = vector_alignment<T, N>::value;
+
 /// Vector storage only allows size of 2, 3, 4
 template<typename T, size_t N>
 struct VectorStorage {
@@ -20,7 +27,7 @@ struct VectorStorage {
 
 /// Vector storage of size 2
 template<typename T>
-struct alignas(sizeof(T) * 2) VectorStorage<T, 2> {
+struct alignas(vector_alignment_v<T, 2>) VectorStorage<T, 2> {
     T x, y;
     explicit constexpr VectorStorage(T s = {}) noexcept : x{s}, y{s} {}
     constexpr VectorStorage(T x, T y) noexcept : x{x}, y{y} {}
@@ -29,7 +36,7 @@ struct alignas(sizeof(T) * 2) VectorStorage<T, 2> {
 
 /// Vector storage of size 3
 template<typename T>
-struct alignas(sizeof(T) * 4) VectorStorage<T, 3> {
+struct alignas(vector_alignment_v<T, 3>) VectorStorage<T, 3> {
     T x, y, z;
     explicit constexpr VectorStorage(T s = {}) noexcept : x{s}, y{s}, z{s} {}
     constexpr VectorStorage(T x, T y, T z) noexcept : x{x}, y{y}, z{z} {}
@@ -38,7 +45,7 @@ struct alignas(sizeof(T) * 4) VectorStorage<T, 3> {
 
 /// Vector storage of size 4
 template<typename T>
-struct alignas(sizeof(T) * 4) VectorStorage<T, 4> {
+struct alignas(vector_alignment_v<T, 4>) VectorStorage<T, 4> {
     T x, y, z, w;
     explicit constexpr VectorStorage(T s = {}) noexcept : x{s}, y{s}, z{s}, w{s} {}
     constexpr VectorStorage(T x, T y, T z, T w) noexcept : x{x}, y{y}, z{z}, w{w} {}
@@ -50,7 +57,7 @@ struct alignas(sizeof(T) * 4) VectorStorage<T, 4> {
 /**
  * @brief Vector class
  * 
- * We only support vector of size 2, 3, 4 and type bool, float, int, uint.
+ * We only support vector of size 2, 3, 4 and type bool, float, half, 16/32/64-bit int/uint.
  * Any other kind of template parameters will fail on compilation.
  * 
  * @tparam T bool/float/int/uint
@@ -59,15 +66,11 @@ struct alignas(sizeof(T) * 4) VectorStorage<T, 4> {
 template<typename T, size_t N>
 struct Vector : public detail::VectorStorage<T, N> {
     static constexpr auto dimension = N;
-    static Vector<T, N> zero() noexcept { return Vector<T, N>(0); }
-    static Vector<T, N> one() noexcept { return Vector<T, N>(1); }
+    static Vector<T, N> zero() noexcept { return Vector<T, N>(static_cast<T>(0)); }
+    static Vector<T, N> one() noexcept { return Vector<T, N>(static_cast<T>(1)); }
     using value_type = T;
     using Storage = detail::VectorStorage<T, N>;
-    static_assert(std::disjunction_v<std::is_same<T, bool>,
-                                     std::is_same<T, float>,
-                                     std::is_same<T, int>,
-                                     std::is_same<T, uint>>,
-                  "Invalid vector type");
+    static_assert(is_scalar_v<T>, "Invalid vector type");
     static_assert(N == 2 || N == 3 || N == 4, "Invalid vector dimension");
     using Storage::VectorStorage;
     [[nodiscard]] constexpr T &operator[](size_t index) noexcept { return (&(this->x))[index]; }
@@ -94,14 +97,19 @@ struct hash<Vector<T, N>> {
     using T##4 = Vector<T, 4>;
 
 LUISA_MAKE_VECTOR_TYPES(bool)
-LUISA_MAKE_VECTOR_TYPES(float)
+
+LUISA_MAKE_VECTOR_TYPES(short)
+LUISA_MAKE_VECTOR_TYPES(ushort)
+
 LUISA_MAKE_VECTOR_TYPES(int)
 LUISA_MAKE_VECTOR_TYPES(uint)
 
+LUISA_MAKE_VECTOR_TYPES(ulong)
+LUISA_MAKE_VECTOR_TYPES(slong)
+
+LUISA_MAKE_VECTOR_TYPES(half)
+LUISA_MAKE_VECTOR_TYPES(float)
 LUISA_MAKE_VECTOR_TYPES(double)
-LUISA_MAKE_VECTOR_TYPES(uint64_t)
-LUISA_MAKE_VECTOR_TYPES(int64_t)
-// TODO: 16-bit
 
 #undef LUISA_MAKE_VECTOR_TYPES
 
@@ -223,10 +231,10 @@ using float3x3 = Matrix<3>;
 using float4x4 = Matrix<4>;
 
 using basic_types = std::tuple<
-    bool, float, int, uint,
-    bool2, float2, int2, uint2,
-    bool3, float3, int3, uint3,
-    bool4, float4, int4, uint4,
+    bool, float, int, uint, short, ushort, slong, ulong, half, double,
+    bool2, float2, int2, uint2, short2, ushort2, slong2, ulong2, half2, double2,
+    bool3, float3, int3, uint3, short3, ushort3, slong3, ulong3, half3, double3,
+    bool4, float4, int4, uint4, short4, ushort4, slong4, ulong4, half4, double4,
     float2x2, float3x3, float4x4>;
 
 /// any of bool2 is true
@@ -261,11 +269,11 @@ template<typename T, size_t N, std::enable_if_t<std::negation_v<luisa::is_boolea
 [[nodiscard]] constexpr auto operator-(const luisa::Vector<T, N> v) noexcept {
     using R = luisa::Vector<T, N>;
     if constexpr (N == 2) {
-        return R{-v.x, -v.y};
+        return R{static_cast<T>(-v.x), static_cast<T>(-v.y)};
     } else if constexpr (N == 3) {
-        return R{-v.x, -v.y, -v.z};
+        return R{static_cast<T>(-v.x), static_cast<T>(-v.y), static_cast<T>(-v.z)};
     } else {
-        return R{-v.x, -v.y, -v.z, -v.w};
+        return R{static_cast<T>(-v.x), static_cast<T>(-v.y), static_cast<T>(-v.z), static_cast<T>(-v.w)};
     }
 }
 
@@ -287,11 +295,11 @@ template<typename T, size_t N,
 [[nodiscard]] constexpr auto operator~(const luisa::Vector<T, N> v) noexcept {
     using R = luisa::Vector<T, N>;
     if constexpr (N == 2) {
-        return R{~v.x, ~v.y};
+        return R{static_cast<T>(~v.x), static_cast<T>(~v.y)};
     } else if constexpr (N == 3) {
-        return R{~v.x, ~v.y, ~v.z};
+        return R{static_cast<T>(~v.x), static_cast<T>(~v.y), static_cast<T>(~v.z)};
     } else {
-        return R{~v.x, ~v.y, ~v.z, ~v.w};
+        return R{static_cast<T>(~v.x), static_cast<T>(~v.y), static_cast<T>(~v.z), static_cast<T>(~v.w)};
     }
 }
 
@@ -302,19 +310,19 @@ template<typename T, size_t N,
         luisa::Vector<T, N> lhs, luisa::Vector<T, N> rhs) noexcept {                    \
         if constexpr (N == 2) {                                                         \
             return luisa::Vector<T, 2>{                                                 \
-                lhs.x op rhs.x,                                                         \
-                lhs.y op rhs.y};                                                        \
+                static_cast<T>(lhs.x op rhs.x),                                         \
+                static_cast<T>(lhs.y op rhs.y)};                                        \
         } else if constexpr (N == 3) {                                                  \
             return luisa::Vector<T, 3>{                                                 \
-                lhs.x op rhs.x,                                                         \
-                lhs.y op rhs.y,                                                         \
-                lhs.z op rhs.z};                                                        \
+                static_cast<T>(lhs.x op rhs.x),                                         \
+                static_cast<T>(lhs.y op rhs.y),                                         \
+                static_cast<T>(lhs.z op rhs.z)};                                        \
         } else {                                                                        \
             return luisa::Vector<T, 4>{                                                 \
-                lhs.x op rhs.x,                                                         \
-                lhs.y op rhs.y,                                                         \
-                lhs.z op rhs.z,                                                         \
-                lhs.w op rhs.w};                                                        \
+                static_cast<T>(lhs.x op rhs.x),                                         \
+                static_cast<T>(lhs.y op rhs.y),                                         \
+                static_cast<T>(lhs.z op rhs.z),                                         \
+                static_cast<T>(lhs.w op rhs.w)};                                        \
         }                                                                               \
     }                                                                                   \
     template<typename T, size_t N, std::enable_if_t<__VA_ARGS__, int> = 0>              \
@@ -560,6 +568,13 @@ LUISA_MAKE_TYPE_N(bool)
 LUISA_MAKE_TYPE_N(float)
 LUISA_MAKE_TYPE_N(int)
 LUISA_MAKE_TYPE_N(uint)
+LUISA_MAKE_TYPE_N(short)
+LUISA_MAKE_TYPE_N(ushort)
+LUISA_MAKE_TYPE_N(slong)
+LUISA_MAKE_TYPE_N(ulong)
+LUISA_MAKE_TYPE_N(half)
+LUISA_MAKE_TYPE_N(double)
+
 #undef LUISA_MAKE_TYPE_N
 
 /// make float2x2
@@ -757,4 +772,3 @@ LUISA_MAKE_TYPE_N(uint)
 //    for (auto i = 0u; i < N; i++) { r[i] = lhs - rhs[i]; }
 //    return r;
 //}
-

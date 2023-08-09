@@ -1,15 +1,64 @@
 local enable_gui = get_config("enable_gui")
 target("stb-image")
-set_basename("lc-ext-stb-image")
-_config_project({
-	project_kind = "shared"
-})
-add_headerfiles("../ext/stb/**.h")
-add_files("../ext/stb/stb.c")
-add_includedirs("../ext/stb", {
-	public = true
-})
+	set_basename("lc-ext-stb-image")
+	_config_project({
+		project_kind = "shared"
+	})
+	add_headerfiles("../ext/stb/**.h")
+	add_files("../ext/stb/stb.c")
+	add_includedirs("../ext/stb", {
+		public = true
+	})
 target_end()
+
+-- TEST MAIN with doctest
+------------------------------------
+local function lc_add_app(appname, folder, name, options) 
+	target(appname)
+	_config_project({
+		project_kind = "binary"
+	})
+	add_files("common/test_main.cpp")
+	add_files("common/test_math_util.cpp")
+	add_includedirs("./", {
+		public = true
+	})
+
+	local match_str = path.join(name, "**.cpp")
+	if name == "all" then
+		match_str = "**.cpp"
+	end
+	set_pcxxheader("pch.h")
+	add_files(path.join("next", folder, match_str))
+	add_deps("lc-runtime", "lc-dsl", "lc-vstl", "stb-image", "lc-backends-dummy")
+	if get_config("enable_ir") then
+		add_deps("lc-ir")
+		add_deps("lc-rust")
+	end
+	if get_config("enable_gui") then
+		add_deps("lc-gui")
+	end
+	target_end()
+end 
+
+-- temp test suites
+lc_add_app("test_feat", "test", "feat")
+
+-- for common features
+
+if get_config("enable_gui") then
+	add_defines("ENABLE_DISPLAY")
+	-- all test suites for release
+	lc_add_app("test_all", "test", "all")
+	-- example app 
+	lc_add_app("gallary", "example", "gallary")
+end
+-- lc_add_app("test_io", "test", "io")
+------------------------------------
+-- TEST MAIN end
+
+-- OLD TESTS
+
 local function test_proj(name, gui_dep, callable)
 	if gui_dep and not enable_gui then
 		return
@@ -20,6 +69,10 @@ local function test_proj(name, gui_dep, callable)
 	})
 	add_files(name .. ".cpp")
 	add_deps("lc-runtime", "lc-dsl", "lc-vstl", "stb-image", "lc-backends-dummy")
+	if get_config("enable_ir") then
+		add_deps("lc-ir")
+		add_deps("lc-rust")
+	end
 	if get_config("enable_gui") then
 		add_deps("lc-gui")
 	end
@@ -31,6 +84,9 @@ end
 
 -- FIXME: @Maxwell please use the doctest framework
 test_proj("test_helloworld")
+if get_config("enable_ir") then
+	test_proj('test_autodiff')
+end
 test_proj("test_ast")
 test_proj("test_atomic")
 test_proj("test_bindless", true)
@@ -72,6 +128,14 @@ test_proj("test_atomic_queue", true)
 test_proj("test_shared_memory", true)
 test_proj("test_native_include", true)
 test_proj("test_sparse_texture", true)
+test_proj("test_dml")
+
+if get_config("cuda_ext_lcub") then 
+	test_proj("test_cuda_lcub", false, function ()
+		add_deps("lc-backend-cuda-ext-lcub")
+	end)
+end
+
 local enable_fsr2
 local enable_xess
 -- Super-sampling example

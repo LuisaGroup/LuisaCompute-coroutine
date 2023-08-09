@@ -6,7 +6,12 @@
 #include <luisa/vstl/md5.h>
 namespace lc::dx {
 namespace ComputeShaderDetail {
-static constexpr bool PRINT_CODE = false;
+static const bool PRINT_CODE = ([]{
+    // read env LUISA_DUMP_SOURCE
+    auto env = std::getenv("LUISA_DUMP_SOURCE");
+    if (env == nullptr) return false;
+    return std::string_view{env} == "1";
+})();
 }// namespace ComputeShaderDetail
 ComputeShader *ComputeShader::LoadPresetCompute(
     BinaryIO const *fileIo,
@@ -63,7 +68,7 @@ ComputeShader *ComputeShader::CompileCompute(
             }
         }
 
-        if constexpr (PRINT_CODE) {
+        if (PRINT_CODE) {
             auto f = fopen("hlsl_output.hlsl", "ab");
             fwrite(str.result.data(), str.result.size(), 1, f);
             fclose(f);
@@ -155,7 +160,7 @@ void ComputeShader::SaveCompute(
     bool enableUnsafeMath) {
     using namespace ComputeShaderDetail;
     vstd::MD5 md5({reinterpret_cast<uint8_t const *>(str.result.data() + str.immutableHeaderSize), str.result.size() - str.immutableHeaderSize});
-    if constexpr (PRINT_CODE) {
+    if (PRINT_CODE) {
         auto f = fopen("hlsl_output.hlsl", "ab");
         fwrite(str.result.data(), str.result.size(), 1, f);
         fclose(f);
@@ -200,7 +205,7 @@ ID3D12CommandSignature *ComputeShader::CmdSig() const {
     c.DestOffsetIn32BitValues = 0;
     c.Num32BitValuesToSet = 4;
     indDesc[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
-    desc.ByteStride = 28;
+    desc.ByteStride = DispatchIndirectStride;
     desc.NumArgumentDescs = 2;
     desc.pArgumentDescs = indDesc;
     ThrowIfFailed(device->device->CreateCommandSignature(&desc, rootSig.Get(), IID_PPV_ARGS(&cmdSig)));

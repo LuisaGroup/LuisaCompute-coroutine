@@ -1,13 +1,13 @@
-//
-// Created by Mike Smith on 2021/9/7.
-//
-
 #pragma once
 
 #include <cstdint>
 #include <cstddef>
 #include <tuple>
 #include <type_traits>
+
+#define HALF_NO_THROW
+#define HALF_ARITHMETIC_TYPE float
+#include <half.hpp>
 
 namespace luisa {
 
@@ -23,20 +23,41 @@ struct always_true : std::true_type {};
 template<typename... T>
 constexpr auto always_true_v = always_true<T...>::value;
 
-// clang-format off
 template<typename T>
     requires std::is_enum_v<T>
 [[nodiscard]] constexpr auto to_underlying(T e) noexcept {
     return static_cast<std::underlying_type_t<T>>(e);
 }
-// clang-format on
 
+using half = half_float::half;
+using namespace half_float::literal;
+
+static_assert(sizeof(half) == 2u && alignof(half) == 2u,
+              "half should be 16-bit sized and aligned.");
+
+static_assert(std::is_same_v<decltype(1._h + 1._h), half>,
+              "half should support arithmetic operations.");
+
+static_assert(std::is_same_v<decltype(sin(1._h)), half>,
+              "half should support std::sin.");
+
+static_assert(std::is_arithmetic_v<half>,
+              "half should be arithmetic.");
+
+using uchar = uint8_t;
+using ushort = uint16_t;
 using uint = uint32_t;
+using ulong = uint64_t;
+using slong = int64_t;// long has different size on different platforms
 
 template<typename T>
 using is_integral = std::disjunction<
     std::is_same<std::remove_cvref_t<T>, int>,
-    std::is_same<std::remove_cvref_t<T>, uint>>;
+    std::is_same<std::remove_cvref_t<T>, uint>,
+    std::is_same<std::remove_cvref_t<T>, slong>,
+    std::is_same<std::remove_cvref_t<T>, ulong>,
+    std::is_same<std::remove_cvref_t<T>, short>,
+    std::is_same<std::remove_cvref_t<T>, ushort>>;
 
 template<typename T>
 constexpr auto is_integral_v = is_integral<T>::value;
@@ -48,7 +69,10 @@ template<typename T>
 constexpr auto is_boolean_v = is_boolean<T>::value;
 
 template<typename T>
-using is_floating_point = std::is_same<std::remove_cvref_t<T>, float>;
+using is_floating_point = std::disjunction<
+    std::is_same<std::remove_cvref_t<T>, half>,
+    std::is_same<std::remove_cvref_t<T>, float>,
+    std::is_same<std::remove_cvref_t<T>, double>>;
 
 template<typename T>
 constexpr auto is_floating_point_v = is_floating_point<T>::value;
@@ -56,13 +80,18 @@ constexpr auto is_floating_point_v = is_floating_point<T>::value;
 template<typename T>
 using is_signed = std::disjunction<
     is_floating_point<T>,
-    std::is_same<std::remove_cvref_t<T>, int>>;
+    std::is_same<std::remove_cvref_t<T>, short>,
+    std::is_same<std::remove_cvref_t<T>, int>,
+    std::is_same<std::remove_cvref_t<T>, slong>>;
 
 template<typename T>
 constexpr auto is_signed_v = is_signed<T>::value;
 
 template<typename T>
-using is_unsigned = std::is_same<std::remove_cvref_t<T>, uint>;
+using is_unsigned = std::disjunction<
+    std::is_same<std::remove_cvref_t<T>, ushort>,
+    std::is_same<std::remove_cvref_t<T>, uint>,
+    std::is_same<std::remove_cvref_t<T>, ulong>>;
 
 template<typename T>
 constexpr auto is_unsigned_v = is_unsigned<T>::value;

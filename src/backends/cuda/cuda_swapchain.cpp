@@ -1,7 +1,3 @@
-//
-// Created by Mike on 3/24/2023.
-//
-
 #ifdef LUISA_BACKEND_ENABLE_VULKAN_SWAPCHAIN
 
 #include <vulkan/vulkan.h>
@@ -10,16 +6,12 @@
 #include <nvtx3/nvToolsExtCuda.h>
 
 #include <luisa/core/platform.h>
-#include "cuda_device.h"
-#include "cuda_stream.h"
-#include "cuda_texture.h"
-#include "cuda_swapchain.h"
 
 #if defined(LUISA_PLATFORM_WINDOWS)
-#include <Windows.h>
-#include <AclAPI.h>
-#include <dxgi1_2.h>
+#include <windows.h>
 #include <VersionHelpers.h>
+#include <dxgi1_2.h>
+#include <AclAPI.h>
 #include <vulkan/vulkan_win32.h>
 #elif defined(LUISA_PLATFORM_UNIX)
 #include <X11/Xlib.h>
@@ -28,7 +20,12 @@
 #error "Unsupported platform"
 #endif
 
+#include "../common/vulkan_instance.h"
 #include "../common/vulkan_swapchain.h"
+#include "cuda_device.h"
+#include "cuda_stream.h"
+#include "cuda_texture.h"
+#include "cuda_swapchain.h"
 
 namespace luisa::compute::cuda {
 
@@ -71,7 +68,6 @@ public:
         if (*ppACL) { LocalFree(*ppACL); }
         free(m_winPSecurityDescriptor);
     }
-
     [[nodiscard]] auto get() const noexcept {
         return &m_winSecurityAttributes;
     }
@@ -275,25 +271,13 @@ private:
         VkSemaphoreCreateInfo semaphore_info = {};
         semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-#ifdef LUISA_PLATFORM_WINDOWS
-        WindowsSecurityAttributes win_security_attributes;
-        VkExportSemaphoreWin32HandleInfoKHR win_handle_info = {};
-        win_handle_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR;
-        win_handle_info.pNext = nullptr;
-        win_handle_info.pAttributes = win_security_attributes.get();
-        win_handle_info.dwAccess = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
-        win_handle_info.name = nullptr;
-#endif
-
         VkExportSemaphoreCreateInfoKHR export_info = {};
         export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO_KHR;
 #ifdef LUISA_PLATFORM_WINDOWS
-        export_info.pNext = IsWindows8OrGreater() ? &win_handle_info : nullptr;
         export_info.handleTypes = IsWindows8OrGreater() ?
                                       VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT :
                                       VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT;
 #else
-        export_info.pNext = nullptr;
         export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
         semaphore_info.pNext = &export_info;
@@ -422,7 +406,8 @@ private:
                 CU_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32 :
                 CU_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT;
         cuda_ext_semaphore_handle_desc.handle.win32.handle = vulkan_semaphore_handle(
-            IsWindows8OrGreater() ? VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT : VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT);
+            IsWindows8OrGreater() ? VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT :
+                                    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT);
 #else
         cuda_ext_semaphore_handle_desc.type = CU_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD;
         cuda_ext_semaphore_handle_desc.handle.fd = vulkan_semaphore_handle(
@@ -474,7 +459,7 @@ public:
     Impl(CUuuid device_uuid, uint64_t window_handle,
          uint width, uint height, bool allow_hdr,
          bool vsync, uint back_buffer_size) noexcept
-        : _base{luisa::bit_cast<VulkanSwapchain::DeviceUUID>(device_uuid),
+        : _base{luisa::bit_cast<VulkanDeviceUUID>(device_uuid),
                 window_handle,
                 width,
                 height,
@@ -490,7 +475,7 @@ public:
     [[nodiscard]] auto size() const noexcept { return _size; }
 
     void present(CUstream stream, CUarray image) noexcept {
-        
+
         auto name = [this] {
             std::scoped_lock lock{_name_mutex};
             return _name;
@@ -558,7 +543,7 @@ void CUDASwapchain::present(CUDAStream *stream, CUDATexture *image) noexcept {
     LUISA_ASSERT(image->storage() == _impl->pixel_storage(),
                  "Image pixel format must match the swapchain.");
     LUISA_ASSERT(all(image->size() == make_uint3(_impl->size(), 1u)),
-                     "Image size and pixel format must match the swapchain.");
+                 "Image size and pixel format must match the swapchain.");
     _impl->present(stream->handle(), image->level(0u));
 }
 
@@ -569,4 +554,3 @@ void CUDASwapchain::set_name(luisa::string &&name) noexcept {
 }// namespace luisa::compute::cuda
 
 #endif
-

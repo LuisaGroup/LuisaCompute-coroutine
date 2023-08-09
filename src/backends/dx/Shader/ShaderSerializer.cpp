@@ -1,4 +1,3 @@
-
 #include <Shader/ShaderSerializer.h>
 #include <Shader/ComputeShader.h>
 #include <Shader/RasterShader.h>
@@ -133,7 +132,8 @@ ComputeShader *ShaderSerializer::DeSerialize(
     if (binStream->length() != sizeof(Header) + targetSize) {
         return nullptr;
     }
-    vstd::vector<std::byte> binCode(targetSize);
+    vstd::vector<std::byte> binCode;
+    binCode.push_back_uninitialized(targetSize);
     vstd::vector<std::byte> psoCode;
 
     binStream->read({binCode.data(), binCode.size()});
@@ -172,7 +172,7 @@ ComputeShader *ShaderSerializer::DeSerialize(
         if (psoGenSuccess != S_OK) {
             // PSO cache miss(probably driver's version or hardware transformed), discard cache
             clearCache = true;
-            LUISA_INFO("{} pipeline cache illegal, discarded.", name);
+            LUISA_VERBOSE("{} pipeline cache illegal, discarded.", name);
             if (pso == nullptr) {
                 psoDesc.CachedPSO.CachedBlobSizeInBytes = 0;
                 psoDesc.CachedPSO.pCachedBlob = nullptr;
@@ -275,7 +275,7 @@ RasterShader *ShaderSerializer::RasterDeSerialize(
     //     if (psoGenSuccess != S_OK) {
     //         // PSO cache miss(probably driver's version or hardware transformed), discard cache
     //         clearCache = true;
-    //         LUISA_INFO("{} pipeline cache illegal, discarded.", name);
+    //         LUISA_VERBOSE("{} pipeline cache illegal, discarded.", name);
     //         if (pso == nullptr) {
     //             psoDesc.CachedPSO.CachedBlobSizeInBytes = 0;
     //             psoDesc.CachedPSO.pCachedBlob = nullptr;
@@ -378,6 +378,9 @@ ComPtr<ID3DBlob> ShaderSerializer::SerializeRootSig(
     ThrowIfFailed(D3D12SerializeVersionedRootSignature(
         &rootSigDesc,
         serializedRootSig.GetAddressOf(), errorBlob.GetAddressOf()));
+    if (errorBlob && errorBlob->GetBufferSize() > 0) [[unlikely]] {
+        LUISA_ERROR("Serialize root signature error: {}", vstd::string_view(reinterpret_cast<char const *>(errorBlob->GetBufferPointer()), errorBlob->GetBufferSize()));
+    }
     return serializedRootSig;
 }
 size_t ShaderSerializer::SerializeRootSig(

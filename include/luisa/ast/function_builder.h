@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2020/12/2.
-//
-
 #pragma once
 
 #include <luisa/core/stl/vector.h>
@@ -14,6 +10,8 @@
 #include <luisa/ast/constant_data.h>
 #include <luisa/ast/type_registry.h>
 #include <luisa/ast/external_function.h>
+#include <luisa/core/stl/unordered_map.h>
+#include <luisa/core/stl/optional.h>
 
 namespace lc::validation {
 class Device;
@@ -97,8 +95,8 @@ private:
     uint64_t _hash;
     uint3 _block_size;
     Tag _tag;
+    bool _hash_computed{false};
     bool _requires_atomic_float{false};
-    bool _requires_autodiff{false};
 
 protected:
     [[nodiscard]] static luisa::vector<FunctionBuilder *> &_function_stack() noexcept;
@@ -206,7 +204,7 @@ public:
     /// Return block size in uint3.
     [[nodiscard]] auto block_size() const noexcept { return _block_size; }
     /// Return hash.
-    [[nodiscard]] auto hash() const noexcept { return _hash; }
+    [[nodiscard]] uint64_t hash() const noexcept;
     /// Return if is raytracing.
     [[nodiscard]] bool requires_raytracing() const noexcept;
     /// Return if uses atomic operations
@@ -223,13 +221,14 @@ public:
         return _define(Function::Tag::KERNEL, std::forward<Def>(def));
     }
 
-    template<typename Def>
     /// Define a callable function with given definition
+    template<typename Def>
     static auto define_callable(Def &&def) {
         return _define(Function::Tag::CALLABLE, std::forward<Def>(def));
     }
-    template<typename Def>
+
     /// Define a callable function with given definition
+    template<typename Def>
     static auto define_raster_stage(Def &&def) {
         return _define(Function::Tag::RASTER_STAGE, std::forward<Def>(def));
     }
@@ -259,7 +258,7 @@ public:
     [[nodiscard]] const RefExpr *shared(const Type *type) noexcept;
 
     /// Add constant of type and data
-    [[nodiscard]] const ConstantExpr *constant(const Type *type, ConstantData data) noexcept;
+    [[nodiscard]] const ConstantExpr *constant(const ConstantData &c) noexcept;
     /// Add binding of buffer. Will check for already bound arguments.
     [[nodiscard]] const RefExpr *buffer_binding(const Type *type, uint64_t handle, size_t offset_bytes, size_t size_bytes) noexcept;
     /// Add binding of texture. Will check for already bound arguments.
@@ -394,4 +393,3 @@ public:
 };
 
 }// namespace luisa::compute::detail
-

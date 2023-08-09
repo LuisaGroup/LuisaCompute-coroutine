@@ -65,10 +65,10 @@ public:
     // event
     ResourceCreationInfo create_event() noexcept override;
     void destroy_event(uint64_t handle) noexcept override;
-    void signal_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    void wait_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    bool is_event_completed(uint64_t handle) const noexcept override;
-    void synchronize_event(uint64_t handle) noexcept override;
+    void signal_event(uint64_t handle, uint64_t stream_handle, uint64_t fence) noexcept override;
+    void wait_event(uint64_t handle, uint64_t stream_handle, uint64_t fence) noexcept override;
+    bool is_event_completed(uint64_t handle, uint64_t fence) const noexcept override;
+    void synchronize_event(uint64_t handle, uint64_t fence) noexcept override;
     // accel
     ResourceCreationInfo create_mesh(const AccelOption &option) noexcept override;
 
@@ -108,5 +108,6 @@ public:
     void update_sparse_resources(
         uint64_t stream_handle,
         luisa::vector<SparseUpdateTile> &&update_cmds) noexcept override;
+    uint compute_warp_size() const noexcept override;
 };
 }// namespace lc::dx

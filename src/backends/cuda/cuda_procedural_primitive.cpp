@@ -1,7 +1,3 @@
-//
-// Created by Mike on 3/27/2023.
-//
-
 #include "cuda_error.h"
 #include "cuda_buffer.h"
 #include "cuda_stream.h"
@@ -25,7 +21,7 @@ optix::BuildInput CUDAProceduralPrimitive::_make_build_input() const noexcept {
     build_input.customPrimitiveArray.numSbtRecords = 1u;
     return build_input;
 }
-
+static_assert(sizeof(optix::Aabb) == 24ull, "Invalid Aabb size.");
 void CUDAProceduralPrimitive::build(CUDACommandEncoder &encoder,
                                     ProceduralPrimitiveBuildCommand *command) noexcept {
     auto aabb_buffer = reinterpret_cast<const CUDABuffer *>(command->aabb_buffer());

@@ -14,7 +14,7 @@ use std::env;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::panic::Location;
 use std::path::{Path, PathBuf};
-use std::process::abort;
+use std::process::{abort, exit};
 use std::sync::Arc;
 
 pub struct SwapChainForCpuContext {
@@ -120,7 +120,7 @@ pub(crate) fn _panic_abort(msg: String, location: &Location<'_>) {
             eprintln!("set RUST_BACKTRACE=1 to display device backtrace");
         }
     };
-    abort();
+    exit(-1);
 }
 
 fn init() {
@@ -129,19 +129,19 @@ fn init() {
         .unwrap();
     // std::panic::set_hook(Box::new(move |panic_info| {});
     // let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-            Some(*s)
-        } else {
-            None
-        };
-        if let Some(msg) = msg {
-            if msg.starts_with("##lc_kernel##") {
-                return;
-            }
-        }
-        abort();
-    }));
+    // std::panic::set_hook(Box::new(move |panic_info| {
+    //     let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+    //         Some(*s)
+    //     } else {
+    //         None
+    //     };
+    //     if let Some(msg) = msg {
+    //         if msg.starts_with("##lc_kernel##") {
+    //             return;
+    //         }
+    //     }
+    //     abort();
+    // }));
 }
 
 extern "C" fn free_string(ptr: *mut c_char) {
@@ -185,7 +185,7 @@ unsafe extern "C" fn create_device(
     config: *const c_char,
 ) -> DeviceInterface {
     let device = CStr::from_ptr(device).to_str().unwrap();
-    let config = CStr::from_ptr(config).to_str().unwrap();
+    // let config = CStr::from_ptr(config).to_str().unwrap();
     let ctx = &*(ctx.0 as *const Context);
     match device {
         "cpu" => {
@@ -202,9 +202,9 @@ unsafe extern "C" fn create_device(
                     todo!()
                 };
                 let swapchain = lib_path.join(swapchain_dll);
-                let swapchain = SwapChainForCpuContext::new(swapchain)
+                let swapchain = SwapChainForCpuContext::new(&swapchain)
                     .map_err(|e| {
-                        log::warn!("failed to load swapchain: {}", e);
+                        eprintln!("failed to load swapchain: {}, path:{}", e, swapchain.display());
                         e
                     })
                     .ok()

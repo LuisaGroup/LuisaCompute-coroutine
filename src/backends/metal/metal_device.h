@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/8.
-//
-
 #pragma once
 
 #include <luisa/runtime/rhi/device_interface.h>
@@ -12,6 +8,8 @@ namespace luisa::compute::metal {
 
 class MetalCompiler;
 class MetalDStorageExt;
+class MetalDebugCaptureExt;
+class MetalPinnedMemoryExt;
 
 class MetalDevice : public DeviceInterface {
 
@@ -35,6 +33,8 @@ private:
 private:
     std::mutex _ext_mutex;
     luisa::unique_ptr<MetalDStorageExt> _dstorage_ext;
+    luisa::unique_ptr<MetalPinnedMemoryExt> _pinned_memory_ext;
+    luisa::unique_ptr<MetalDebugCaptureExt> _debug_capture_ext;
 
 public:
     [[nodiscard]] auto handle() const noexcept { return _handle; }
@@ -70,10 +70,10 @@ public:
     void destroy_shader(uint64_t handle) noexcept override;
     ResourceCreationInfo create_event() noexcept override;
     void destroy_event(uint64_t handle) noexcept override;
-    void signal_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    bool is_event_completed(uint64_t handle) const noexcept override;
-    void wait_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    void synchronize_event(uint64_t handle) noexcept override;
+    void signal_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept override;
+    bool is_event_completed(uint64_t handle, uint64_t value) const noexcept override;
+    void wait_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept override;
+    void synchronize_event(uint64_t handle, uint64_t value) noexcept override;
     ResourceCreationInfo create_mesh(const AccelOption &option) noexcept override;
     void destroy_mesh(uint64_t handle) noexcept override;
     ResourceCreationInfo create_procedural_primitive(const AccelOption &option) noexcept override;

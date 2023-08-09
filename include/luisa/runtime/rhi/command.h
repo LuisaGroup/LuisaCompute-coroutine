@@ -1,9 +1,6 @@
-//
-// Created by Mike Smith on 2021/3/3.
-//
-
 #pragma once
 
+#include <cstdlib>
 #include <array>
 
 #include <luisa/core/macro.h>
@@ -28,6 +25,7 @@ namespace luisa::compute {
 
 struct IndirectDispatchArg {
     uint64_t handle;
+    uint64_t offset;
 };
 
 #define LUISA_COMPUTE_RUNTIME_COMMANDS   \
@@ -97,6 +95,7 @@ public:
     [[nodiscard]] auto tag() const noexcept { return _tag; }
     [[nodiscard]] virtual StreamTag stream_tag() const noexcept = 0;
 };
+
 class ShaderDispatchCommandBase {
 
 public:
@@ -501,6 +500,10 @@ public:
             affine[11] = m[3][2];
             flags |= flag_transform;
         }
+        void set_transform_data(const float affine_data[12]) noexcept {
+            for (auto i = 0u; i < 12u; i++) { affine[i] = affine_data[i]; }
+            flags |= flag_transform;
+        }
         void set_visibility(uint8_t mask) noexcept {
             flags &= (1u << flag_vis_mask_offset) - 1u;
             flags |= (mask << flag_vis_mask_offset) | flag_visibility;
@@ -618,6 +621,7 @@ public:
         : Command{Command::Tag::ECustomCommand} {}
     [[nodiscard]] virtual uint64_t uuid() const noexcept = 0;
     ~CustomCommand() noexcept override = default;
+    LUISA_MAKE_COMMAND_COMMON_ACCEPT()
 };
 
 // For custom shader-dispatch or pass
@@ -658,8 +662,6 @@ public:
         Adapter adapter{f};
         this->traverse_arguments(adapter);
     }
-
-    LUISA_MAKE_COMMAND_COMMON_ACCEPT()
 };
 
 }// namespace luisa::compute

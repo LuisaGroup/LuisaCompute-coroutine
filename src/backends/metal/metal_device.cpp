@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/8.
-//
-
 #include <luisa/core/clock.h>
 #include <luisa/core/logging.h>
 
@@ -22,8 +18,12 @@
 #include "metal_mesh.h"
 #include "metal_procedural_primitive.h"
 #include "metal_shader.h"
-#include "metal_dstorage.h"
 #include "metal_device.h"
+
+// extensions
+#include "metal_dstorage.h"
+#include "metal_pinned_memory.h"
+#include "metal_debug_capture.h"
 
 namespace luisa::compute::metal {
 
@@ -43,9 +43,6 @@ MetalDevice::MetalDevice(Context &&ctx, const DeviceConfig *config) noexcept
     LUISA_ASSERT(_handle->supportsFamily(MTL::GPUFamilyMetal3),
                  "Metal device '{}' at index {} does not support Metal 3.",
                  _handle->name()->utf8String(), device_index);
-
-    LUISA_INFO("Metal device '{}' at index {}",
-               _handle->name()->utf8String(), device_index);
 
     // create a default binary IO if none is provided
     if (config == nullptr || config->binary_io == nullptr) {
@@ -69,6 +66,7 @@ MetalDevice::MetalDevice(Context &&ctx, const DeviceConfig *config) noexcept
     compile_options->setLibraryType(MTL::LibraryTypeExecutable);
     NS::Error *error{nullptr};
     auto builtin_library = _handle->newLibrary(builtin_kernel_source, compile_options, &error);
+    builtin_library->setLabel(MTLSTR("luisa_builtin"));
 
     builtin_kernel_source->release();
     compile_options->release();
@@ -171,6 +169,9 @@ MetalDevice::MetalDevice(Context &&ctx, const DeviceConfig *config) noexcept
     builtin_swapchain_fragment_shader->release();
 
     builtin_library->release();
+
+    LUISA_INFO("Created Metal device '{}' at index {}.",
+               _handle->name()->utf8String(), device_index);
 }
 
 MetalDevice::~MetalDevice() noexcept {
@@ -305,8 +306,8 @@ void MetalDevice::dispatch(uint64_t stream_handle, CommandList &&list) noexcept 
 }
 
 SwapchainCreationInfo MetalDevice::create_swapchain(uint64_t window_handle, uint64_t stream_handle,
-                                                     uint width, uint height, bool allow_hdr,
-                                                     bool vsync, uint back_buffer_size) noexcept {
+                                                    uint width, uint height, bool allow_hdr,
+                                                    bool vsync, uint back_buffer_size) noexcept {
     return with_autorelease_pool([=, this] {
         auto swapchain = new_with_allocator<MetalSwapchain>(
             this, window_handle, width, height,
@@ -400,7 +401,7 @@ ShaderCreationInfo MetalDevice::create_shader(const ShaderOption &option, const 
 #ifdef LUISA_ENABLE_IR
         Clock clk;
         auto function = IR2AST::build(kernel);
-        LUISA_INFO("IR2AST done in {} ms.", clk.toc());
+        LUISA_VERBOSE("IR2AST done in {} ms.", clk.toc());
         return create_shader(option, function->function());
 #else
         LUISA_ERROR_WITH_LOCATION("Metal device does not support creating shader from IR types.");
@@ -468,33 +469,37 @@ void MetalDevice::destroy_event(uint64_t handle) noexcept {
     });
 }
 
-void MetalDevice::signal_event(uint64_t handle, uint64_t stream_handle) noexcept {
+void MetalDevice::signal_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept {
+    // TODO: fence not implemented
     with_autorelease_pool([=] {
         auto event = reinterpret_cast<MetalEvent *>(handle);
         auto stream = reinterpret_cast<MetalStream *>(stream_handle);
-        stream->signal(event);
+        stream->signal(event, value);
     });
 }
 
-void MetalDevice::wait_event(uint64_t handle, uint64_t stream_handle) noexcept {
+void MetalDevice::wait_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept {
+    // TODO: fence not implemented
     with_autorelease_pool([=] {
         auto event = reinterpret_cast<MetalEvent *>(handle);
         auto stream = reinterpret_cast<MetalStream *>(stream_handle);
-        stream->wait(event);
+        stream->wait(event, value);
     });
 }
 
-void MetalDevice::synchronize_event(uint64_t handle) noexcept {
+void MetalDevice::synchronize_event(uint64_t handle, uint64_t value) noexcept {
+    // TODO: fence not implemented
     with_autorelease_pool([=] {
         auto event = reinterpret_cast<MetalEvent *>(handle);
-        event->synchronize();
+        event->synchronize(value);
     });
 }
 
-bool MetalDevice::is_event_completed(uint64_t handle) const noexcept {
+bool MetalDevice::is_event_completed(uint64_t handle, uint64_t value) const noexcept {
+    // TODO: fence not implemented
     return with_autorelease_pool([=] {
         auto event = reinterpret_cast<MetalEvent *>(handle);
-        return event->is_completed();
+        return event->is_completed(value);
     });
 }
 
@@ -555,13 +560,25 @@ string MetalDevice::query(luisa::string_view property) noexcept {
 }
 
 DeviceExtension *MetalDevice::extension(luisa::string_view name) noexcept {
-    if (name == DStorageExt::name) {
-        std::scoped_lock lock{_ext_mutex};
-        if (!_dstorage_ext) { _dstorage_ext = luisa::make_unique<MetalDStorageExt>(this); }
-        return _dstorage_ext.get();
-    }
-    LUISA_WARNING_WITH_LOCATION("Device extension \"{}\" is not supported on Metal.", name);
-    return nullptr;
+    return with_autorelease_pool([=, this]() noexcept -> DeviceExtension * {
+        if (name == DStorageExt::name) {
+            std::scoped_lock lock{_ext_mutex};
+            if (!_dstorage_ext) { _dstorage_ext = luisa::make_unique<MetalDStorageExt>(this); }
+            return _dstorage_ext.get();
+        }
+        if (name == PinnedMemoryExt::name) {
+            std::scoped_lock lock{_ext_mutex};
+            if (!_pinned_memory_ext) { _pinned_memory_ext = luisa::make_unique<MetalPinnedMemoryExt>(this); }
+            return _pinned_memory_ext.get();
+        }
+        if (name == DebugCaptureExt::name) {
+            std::scoped_lock lock{_ext_mutex};
+            if (!_debug_capture_ext) { _debug_capture_ext = luisa::make_unique<MetalDebugCaptureExt>(this); }
+            return _debug_capture_ext.get();
+        }
+        LUISA_WARNING_WITH_LOCATION("Device extension \"{}\" is not supported on Metal.", name);
+        return nullptr;
+    });
 }
 
 void MetalDevice::set_name(luisa::compute::Resource::Tag resource_tag,
@@ -674,4 +691,3 @@ LUISA_EXPORT_API void backend_device_names(luisa::vector<luisa::string> &names) 
         all_devices->release();
     });
 }
-

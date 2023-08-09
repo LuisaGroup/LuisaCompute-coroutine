@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/4/7.
-//
-
 #pragma once
 
 #include <luisa/core/stl/unordered_map.h>
@@ -74,9 +70,15 @@ public:
     }
     BindlessArray &operator=(BindlessArray const &) noexcept = delete;
     // properties
-    [[nodiscard]] auto size() const noexcept { return _size; }
+    [[nodiscard]] auto size() const noexcept {
+        _check_is_valid();
+        return _size;
+    }
     // whether there are any stashed updates
-    [[nodiscard]] auto dirty() const noexcept { return !_updates.empty(); }
+    [[nodiscard]] auto dirty() const noexcept {
+        _check_is_valid();
+        return !_updates.empty();
+    }
     // on-update functions' operations will be committed by update()
     BindlessArray &remove_buffer_on_update(size_t index) noexcept;
     BindlessArray &remove_tex2d_on_update(size_t index) noexcept;
@@ -119,6 +121,7 @@ public:
 
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
+        _check_is_valid();
         return reinterpret_cast<const detail::BindlessArrayExprProxy *>(this);
     }
 };

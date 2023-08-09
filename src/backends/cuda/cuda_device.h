@@ -1,7 +1,3 @@
-//
-// Created by Mike on 7/28/2021.
-//
-
 #pragma once
 
 #include <cuda.h>
@@ -20,6 +16,7 @@ namespace luisa::compute::cuda {
 class CUDADenoiserExt;
 class CUDADStorageExt;
 class CUDATimelineEventPool;
+class CUDAEventManager;
 
 /**
  * @brief CUDA device
@@ -78,6 +75,7 @@ public:
         [[nodiscard]] auto device() const noexcept { return _device; }
         [[nodiscard]] auto context() const noexcept { return _context; }
         [[nodiscard]] auto driver_version() const noexcept { return _driver_version; }
+        void force_compute_capability(uint32_t cc) noexcept { _compute_capability = cc; }
         [[nodiscard]] auto compute_capability() const noexcept { return _compute_capability; }
         [[nodiscard]] optix::DeviceContext optix_context() const noexcept;
     };
@@ -90,7 +88,7 @@ private:
     CUfunction _bindless_array_update_function{nullptr};
     luisa::unique_ptr<CUDACompiler> _compiler;
     luisa::unique_ptr<DefaultBinaryIO> _default_io;
-    luisa::unique_ptr<CUDATimelineEventPool> _event_pool;
+    luisa::unique_ptr<CUDAEventManager> _event_manager;
     const BinaryIO *_io{nullptr};
     luisa::string _cudadevrt_library;
 
@@ -125,8 +123,7 @@ public:
     [[nodiscard]] auto cudadevrt_library() const noexcept { return luisa::string_view{_cudadevrt_library}; }
     [[nodiscard]] auto compiler() const noexcept { return _compiler.get(); }
     [[nodiscard]] auto io() const noexcept { return _io; }
-    [[nodiscard]] CUdeviceptr create_timeline_event(CUstream stream) noexcept;
-    void destroy_timeline_event(CUdeviceptr event) noexcept;
+    [[nodiscard]] auto event_manager() const noexcept { return _event_manager.get(); }
 
 public:
     bool is_c_api() const noexcept override { return false; }
@@ -151,10 +148,10 @@ public:
     void destroy_shader(uint64_t handle) noexcept override;
     ResourceCreationInfo create_event() noexcept override;
     void destroy_event(uint64_t handle) noexcept override;
-    void signal_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    void wait_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    bool is_event_completed(uint64_t handle) const noexcept override;
-    void synchronize_event(uint64_t handle) noexcept override;
+    void signal_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept override;
+    void wait_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept override;
+    bool is_event_completed(uint64_t handle, uint64_t value) const noexcept override;
+    void synchronize_event(uint64_t handle, uint64_t value) noexcept override;
     ResourceCreationInfo create_mesh(const AccelOption &option) noexcept override;
     void destroy_mesh(uint64_t handle) noexcept override;
     ResourceCreationInfo create_procedural_primitive(const AccelOption &option) noexcept override;

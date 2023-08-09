@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/7/30.
-//
-
 #include <luisa/runtime/rhi/resource.h>
 #include <luisa/runtime/device.h>
 #include <luisa/core/logging.h>
@@ -29,6 +25,10 @@ void Resource::_check_same_derived_types(const Resource &lhs,
         LUISA_ASSERT(lhs._tag == rhs._tag,
                      "Cannot move resources of different types.");
     }
+}
+
+void Resource::_error_invalid() noexcept {
+    LUISA_ERROR_WITH_LOCATION("Invalid resource.");
 }
 
 }// namespace luisa::compute

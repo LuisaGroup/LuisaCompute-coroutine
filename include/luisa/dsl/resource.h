@@ -1,10 +1,7 @@
-//
-// Created by Mike Smith on 2023/2/14.
-//
-
 #pragma once
 
 #include <luisa/runtime/buffer.h>
+#include <luisa/runtime/byte_buffer.h>
 #include <luisa/runtime/image.h>
 #include <luisa/runtime/volume.h>
 #include <luisa/runtime/bindless_array.h>
@@ -57,6 +54,14 @@ public:
     Expr(const Buffer<T> &buffer) noexcept
         : Expr{BufferView{buffer}} {}
 
+    /// Construct from Var<Buffer<T>>.
+    Expr(const Var<Buffer<T>> &buffer) noexcept
+        : Expr{buffer.expression()} {}
+
+    /// Construct from Var<BufferView<T>>.
+    Expr(const Var<BufferView<T>> &buffer) noexcept
+        : Expr{buffer.expression()} {}
+
     /// Return RefExpr
     [[nodiscard]] const RefExpr *expression() const noexcept { return _expression; }
 
@@ -87,6 +92,45 @@ public:
     [[nodiscard]] auto operator->() const noexcept { return this; }
 };
 
+template<>
+struct Expr<ByteBuffer> {
+private:
+    const RefExpr *_expression{nullptr};
+public:
+    /// Construct from RefExpr
+    explicit Expr(const RefExpr *expr) noexcept
+        : _expression{expr} {}
+
+    /// Construct from BufferView. Will call buffer_binding() to bind buffer
+    Expr(const ByteBuffer &buffer) noexcept
+        : _expression{detail::FunctionBuilder::current()->buffer_binding(
+              Type::of<ByteBuffer>(), buffer.handle(),
+              0u, buffer.size_bytes())} {}
+
+    /// Return RefExpr
+    [[nodiscard]] const RefExpr *expression() const noexcept { return _expression; }
+
+    template<typename T, typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] auto read(I &&byte_offset) const noexcept {
+        auto f = detail::FunctionBuilder::current();
+        auto expr = f->call(
+            Type::of<T>(), CallOp::BYTE_BUFFER_READ,
+            {_expression,
+             detail::extract_expression(std::forward<I>(byte_offset))});
+        return def<T>(expr);
+    }
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write(I &&byte_offset, Expr<V> value) const noexcept {
+        detail::FunctionBuilder::current()->call(
+            CallOp::BYTE_BUFFER_WRITE,
+            {_expression,
+             detail::extract_expression(std::forward<I>(byte_offset)),
+             value.expression()});
+    }
+};
+
 /// Same as Expr<Buffer<T>>
 template<typename T>
 struct Expr<BufferView<T>> : public Expr<Buffer<T>> {
@@ -112,6 +156,14 @@ public:
     /// Construct from Image. Will create texture binding.
     Expr(const Image<T> &image) noexcept
         : Expr{ImageView{image}} {}
+
+    /// Construct from Var<Image<T>>.
+    Expr(const Var<Image<T>> &image) noexcept
+        : Expr{image.expression()} {}
+
+    /// Construct from Var<ImageView<T>>.
+    Expr(const Var<ImageView<T>> &image) noexcept
+        : Expr{image.expression()} {}
 
     [[nodiscard]] auto expression() const noexcept { return _expression; }
 
@@ -166,6 +218,14 @@ public:
     /// Construct from Volume. Will create texture binding.
     Expr(const Volume<T> &volume) noexcept
         : Expr{VolumeView{volume}} {}
+
+    /// Construct from Var<Volume<T>>.
+    Expr(const Var<Volume<T>> &volume) noexcept
+        : Expr{volume.expression()} {}
+
+    /// Construct from Var<VolumeView<T>>.
+    Expr(const Var<VolumeView<T>> &volume) noexcept
+        : Expr{volume.expression()} {}
 
     [[nodiscard]] auto expression() const noexcept { return _expression; }
 
@@ -439,12 +499,34 @@ public:
         requires is_integral_expr_v<I>
     void write(I &&index, V &&value) const noexcept {
         Expr<T>{_buffer}.write(std::forward<I>(index),
-                                      std::forward<V>(value));
+                               std::forward<V>(value));
     }
     template<typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] auto atomic(I &&index) const noexcept {
         return Expr<T>{_buffer}.atomic(std::forward<I>(index));
+    }
+};
+
+class ByteBufferExprProxy {
+
+private:
+    ByteBuffer _buffer;
+
+public:
+    LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(ByteBufferExprProxy)
+
+public:
+    template<typename T, typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] auto read(I &&index) const noexcept {
+        return Expr<ByteBuffer>{_buffer}.read<T, I>(std::forward<I>(index));
+    }
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write(I &&index, V &&value) const noexcept {
+        Expr<ByteBuffer>{_buffer}.write(std::forward<I>(index),
+                               std::forward<V>(value));
     }
 };
 
@@ -536,6 +618,14 @@ struct Var<Buffer<T>> : public Expr<Buffer<T>> {
     Var(const Var &) noexcept = delete;
 };
 
+template<>
+struct Var<ByteBuffer> : public Expr<ByteBuffer> {
+    explicit Var(detail::ArgumentCreation) noexcept
+        : Expr<ByteBuffer>{detail::FunctionBuilder::current()->buffer(Type::of<ByteBuffer>())} {}
+    Var(Var &&) noexcept = default;
+    Var(const Var &) noexcept = delete;
+};
+
 template<typename T>
 struct Var<BufferView<T>> : public Expr<Buffer<T>> {
     explicit Var(detail::ArgumentCreation) noexcept
@@ -612,6 +702,27 @@ using BufferBool = BufferVar<bool>;
 using BufferBool2 = BufferVar<bool2>;
 using BufferBool3 = BufferVar<bool3>;
 using BufferBool4 = BufferVar<bool4>;
+using BufferShort = BufferVar<short>;
+using BufferShort2 = BufferVar<short2>;
+using BufferShort3 = BufferVar<short3>;
+using BufferShort4 = BufferVar<short4>;
+using BufferUShort = BufferVar<ushort>;
+using BufferUShort2 = BufferVar<ushort2>;
+using BufferUShort3 = BufferVar<ushort3>;
+using BufferUShort4 = BufferVar<ushort4>;
+using BufferSLong = BufferVar<slong>;
+using BufferSLong2 = BufferVar<slong2>;
+using BufferSLong3 = BufferVar<slong3>;
+using BufferSLong4 = BufferVar<slong4>;
+using BufferULong = BufferVar<ulong>;
+using BufferULong2 = BufferVar<ulong2>;
+using BufferULong3 = BufferVar<ulong3>;
+using BufferULong4 = BufferVar<ulong4>;
+using BufferHalf = BufferVar<half>;
+using BufferHalf2 = BufferVar<half2>;
+using BufferHalf3 = BufferVar<half3>;
+using BufferHalf4 = BufferVar<half4>;
+
 using BufferFloat2x2 = BufferVar<float2x2>;
 using BufferFloat3x3 = BufferVar<float3x3>;
 using BufferFloat4x4 = BufferVar<float4x4>;
@@ -624,5 +735,25 @@ using VolumeInt = VolumeVar<int>;
 using VolumeUInt = VolumeVar<uint>;
 using VolumeFloat = VolumeVar<float>;
 
-}// namespace luisa::compute
+inline namespace dsl {
 
+template<typename T>
+inline void pack_to(T &&x, Expr<Buffer<uint>> arr, Expr<uint> index) noexcept {
+    Expr xx{std::forward<T>(x)};
+    detail::FunctionBuilder::current()->call(
+        CallOp::PACK,
+        {xx.expression(), arr.expression(), index.expression()});
+}
+
+template<class T>
+[[nodiscard]] inline auto unpack_from(Expr<Buffer<uint>> arr, Expr<uint> index) noexcept {
+    using E = expr_value_t<T>;
+    return def<E>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<E>(), CallOp::UNPACK,
+            {arr.expression(), index.expression()}));
+}
+
+}// namespace dsl
+
+}// namespace luisa::compute

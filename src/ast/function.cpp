@@ -1,8 +1,4 @@
 //
-//
-// Created by Mike Smith on 2021/2/23.
-//
-
 #include <luisa/ast/function.h>
 #include <luisa/ast/function_builder.h>
 
@@ -30,12 +26,6 @@ uint64_t Function::BindlessArrayBinding::hash() const noexcept {
     using namespace std::string_view_literals;
     static auto seed = hash_value("__hash_bindless_array_binding"sv);
     return hash_value(handle, seed);
-}
-
-uint64_t Function::Constant::hash() const noexcept {
-    using namespace std::string_view_literals;
-    static auto seed = hash_value("__hash_constant_binding"sv);
-    return hash_combine({type->hash(), data.hash()}, seed);
 }
 
 luisa::span<const Variable> Function::builtin_variables() const noexcept {

@@ -160,7 +160,6 @@ public:
             }
         }
         Node *node = pool.create(std::forward<Key>(key), std::forward<Value>(value)...);
-        node->parent = nullptr;
         node->left = nullptr;
         node->right = nullptr;
         node->color = true;// new node must be red
@@ -303,10 +302,6 @@ public:
     }
 };
 
-template<typename K, typename V, typename Hash,
-         typename Compare, VEngine_AllocType allocType>
-class HashMap;
-
 namespace hashmap_detail {
 
 template<typename HashMap>
@@ -324,16 +319,17 @@ struct HashMapIndex : public HashMap::IndexBase {
     using HashMap::IndexBase::operator bool;
 };
 
-template<typename K, typename... Other>
-struct HashMapIndex<HashMap<K, void, Other...>> : public HashMap<K, void, Other...>::IndexBase {
+template<typename HashMap>
+struct HashSetIndex : public HashMap::IndexBase {
 
 private:
-    using HashMapType = HashMap<K, void, Other...>;
+    using HashMapType = HashMap;
     using MapType = typename HashMapType::Map;
+    using K = typename HashMap::KeyType;
 
 public:
-    HashMapIndex() noexcept = default;
-    HashMapIndex(const HashMapType *map, typename HashMapType::LinkNode *node) noexcept
+    HashSetIndex() noexcept = default;
+    HashSetIndex(const HashMapType *map, typename HashMapType::LinkNode *node) noexcept
         : HashMapType::IndexBase(map, node) {}
     K const &Get() const noexcept {
         return MapType::GetFirst(this->node->data);
@@ -344,7 +340,16 @@ public:
     K &operator*() const noexcept {
         return MapType::GetFirst(this->node->data);
     }
-    using HashMap<K, void, Other...>::IndexBase::operator bool;
+    using HashMap::IndexBase::operator bool;
+};
+template<typename V, typename HashMap>
+struct HashSetIndexType {
+    using type = HashMapIndex<HashMap>;
+};
+
+template<typename HashMap>
+struct HashSetIndexType<void, HashMap> {
+    using type = HashSetIndex<HashMap>;
 };
 
 }// namespace hashmap_detail
@@ -417,6 +422,8 @@ public:
 
         template<typename T>
         friend struct hashmap_detail::HashMapIndex;
+        template<typename T>
+        friend struct hashmap_detail::HashSetIndex;
 
     private:
         const HashMap *map;
@@ -439,7 +446,7 @@ public:
         }
     };
 
-    using Index = hashmap_detail::HashMapIndex<HashMap>;
+    using Index = typename hashmap_detail::HashSetIndexType<V, HashMap>::type;
 
     Index get_index(Iterator const &ite) {
         return Index(this, *ite.ii);
@@ -455,12 +462,11 @@ private:
     size_t mCapacity;
 
     inline static const Hash hsFunc;
-    LinkNode *GetNewLinkNode(size_t hashValue, LinkNode *newNode) {
+    void GetNewLinkNode(size_t hashValue, LinkNode *newNode) {
         newNode->hashValue = hashValue;
         newNode->arrayIndex = mSize;
         nodeArray[mSize] = newNode;
         mSize++;
-        return newNode;
     }
     void DeleteLinkNode(size_t arrayIndex) {
         if (arrayIndex != (mSize - 1)) {
@@ -556,7 +562,7 @@ public:
         }
         Allocator().Free(nodeArray);
     }
-    HashMap() noexcept : HashMap(16) {}
+    HashMap() noexcept : HashMap(4) {}
     ///////////////////////
     template<typename Key, typename... ARGS>
         requires(std::is_constructible_v<K, Key &&> && detail::MapConstructible<V, ARGS && ...>::value)
@@ -569,24 +575,6 @@ public:
 
         Map *map = reinterpret_cast<Map *>(&nodeVec[hashValue]);
         auto insertResult = map->insert_or_assign(pool, std::forward<Key>(key), std::forward<ARGS>(args)...);
-        //Add create
-        if (insertResult.second) {
-            GetNewLinkNode(hashOriginValue, insertResult.first);
-        }
-        return Index(this, insertResult.first);
-    }
-
-    template<typename Key, typename... ARGS>
-        requires(std::is_constructible_v<K, Key &&> && detail::MapConstructible<V, ARGS && ...>::value)
-    Index emplace(Key &&key, ARGS &&...args) {
-        TryResize();
-
-        size_t hashOriginValue = hsFunc(std::forward<Key>(key));
-        size_t hashValue = GetHash(hashOriginValue, mCapacity);
-        auto nodeVec = nodeArray + mCapacity;
-
-        Map *map = reinterpret_cast<Map *>(&nodeVec[hashValue]);
-        auto insertResult = map->try_insert(pool, std::forward<Key>(key), std::forward<ARGS>(args)...);
         //Add create
         if (insertResult.second) {
             GetNewLinkNode(hashOriginValue, insertResult.first);
@@ -610,6 +598,12 @@ public:
             GetNewLinkNode(hashOriginValue, insertResult.first);
         }
         return {Index(this, insertResult.first), insertResult.second};
+    }
+
+    template<typename Key, typename... ARGS>
+        requires(std::is_constructible_v<K, Key &&> && detail::MapConstructible<V, ARGS && ...>::value)
+    Index emplace(Key &&key, ARGS &&...args) {
+        return try_emplace(std::forward<Key>(key), std::forward<ARGS>(args)...).first;
     }
 
     void reserve(size_t capacity) noexcept {
@@ -659,4 +653,3 @@ public:
     [[nodiscard]] size_t capacity() const noexcept { return mCapacity; }
 };
 }// namespace vstd
-

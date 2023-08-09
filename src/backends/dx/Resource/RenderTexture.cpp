@@ -1,4 +1,3 @@
-
 #include <Resource/RenderTexture.h>
 #include <Resource/DescriptorHeap.h>
 namespace lc::dx {

@@ -44,7 +44,7 @@ private:
     DxPtr<ID3D12CommandQueue> queue;
     Microsoft::WRL::ComPtr<ID3D12Fence> cmdFence;
     vstd::LockFreeArrayQueue<AllocatorPtr> allocatorPool;
-    vstd::LockFreeArrayQueue<CallbackEvent> executedAllocators;
+    vstd::SingleThreadArrayQueue<CallbackEvent> executedAllocators;
     void ExecuteThread();
 
 public:
@@ -57,7 +57,7 @@ public:
         D3D12_COMMAND_LIST_TYPE type);
     ~CommandQueue();
     AllocatorPtr CreateAllocator(size_t maxAllocCount);
-    void AddEvent(LCEvent const *evt);
+    void AddEvent(LCEvent const *evt, uint64 fenceIdx);
     void Signal();
     void Execute(AllocatorPtr &&alloc);
     void ExecuteCallbacks(AllocatorPtr &&alloc, vstd::vector<vstd::function<void()>> &&callbacks);

@@ -116,6 +116,7 @@ class func:
     # or be called by another luisa function.
     # pyfunc: python function
     def __init__(self, pyfunc):
+        self.fence_idx = -1
         self.pyfunc = pyfunc
         self.__name__ = pyfunc.__name__
         self.compiled_results = {}  # maps (arg_type_tuple) to (function, shader_handle)
@@ -155,12 +156,14 @@ class func:
         # compile shader
         if name is None:
             name = self.__name__
+        globalvars.saved_shader_count += 1
         if async_build:
             get_global_device().impl().save_shader_async(f.builder, name)
         else:
             get_global_device().impl().save_shader(f.function, name)
         if print_cpp_header:
             front = '''#pragma once
+#include <luisa/core/stl/string.h>
 #include <luisa/runtime/device.h>
 #include <luisa/runtime/shader.h>
 '''
@@ -168,7 +171,7 @@ class func:
             type_map = {}
             type_defines = []
             r = ""
-            shader_path = Path(name.replace("\\","/"))
+            shader_path = Path(name)
             shader_name = shader_path.name.split(".")[0]
             def get_value_type_name(dtype, r):
                 if dtype in basic_dtypes:
@@ -176,19 +179,26 @@ class func:
                         return dtype.__name__, r
                     return "luisa::" + dtype.__name__, r
                 elif type(dtype).__name__ == "StructType":
-                    name = type_map.get(arg)
+                    name = type_map.get(dtype)
                     if name == None:
                         name = "Arg" + str(type_idx)
-                        type_map[arg] = name
-
+                        type_map[dtype] = name
                         r += f"struct {name} " + "{\n"
-                        for idx, ele_type in arg._py_args.items():
+                        for idx, ele_type in dtype._py_args.items():
                             ele_name, r = get_value_type_name(ele_type, r)
                             r += f"    {ele_name} {idx};\n"
                         r += "};\n"
                     return name, r
+                elif type(dtype).__name__ == "ArrayType":
+                    name = type_map.get(dtype)
+                    if name == None:
+                        ele_name, r = get_value_type_name(dtype.dtype, r)
+                        name = "std::array<" + ele_name + ", " + str(dtype.size) + ">"
+                        type_map[dtype] = name
+                    return name, r
                 else:
                     return None, r
+            byte_buffer_declared = False
             buffer_declared = False
             volume_declared = False
             image_declared = False
@@ -222,6 +232,14 @@ class func:
                         if not buffer_declared:
                             front += "#include <luisa/runtime/buffer.h>\n"
                             buffer_declared = True
+                    type_defines.append("luisa::compute::" + name)
+                elif arg.__name__ == "ByteBufferType":
+                    if name == None:
+                        name = f"ByteBuffer"
+                        type_map[arg] = name
+                        if not byte_buffer_declared:
+                            front += "#include <luisa/runtime/byte_buffer.h>\n"
+                            byte_buffer_declared = True
                     type_defines.append("luisa::compute::" + name)
                 elif arg.__name__ == "BindlessArray":
                     name = type_map.get(arg)
@@ -258,10 +276,8 @@ class func:
                 if sz != len(type_defines):
                     type_name += ", "
             func_declare += type_name + ">"
-            shader_path = str(shader_path)
-            if sys.platform == 'win32':
-                shader_path = shader_path.replace("\\", "/")
-            r += f"inline {func_declare} load" + "(luisa::compute::Device &device) {\n    return device.load_shader<" + str(dimension) + ", " + type_name + ">(\"" + shader_path + "\");\n}\n"
+            r += "using Type = " + func_declare + ";\n"
+            r += f"inline Type load" + "(luisa::compute::Device &device, luisa::string_view path) {\n    return device.load_shader<" + str(dimension) + ", " + type_name + ">(path);\n}\n"
             return front + "namespace " + shader_name + ' {\n' +  r + '}// namespace ' + shader_name + '\n'
 
     # compiles an argument-type-specialized callable/kernel
@@ -306,15 +322,21 @@ class func:
         f.function = f.builder.function()
         # compile shader
         if call_from_host:
+            globalvars.saved_shader_count += 1
             f.shader_handle = get_global_device().impl().create_shader(f.function)
         return f
 
     # looks up arg_type_tuple; compile if not existing
     # returns FuncInstanceInfo
-    def get_compiled(self, func_type: int, allow_ref: bool, argtypes: tuple, arg_info=None):
-        if (func_type,) + argtypes not in self.compiled_results:
+    def get_compiled(self, func_type: int, allow_ref: bool, argtypes: tuple, arg_info=None, custom_key=None):
+        if custom_key != None and self.fence_idx < custom_key:
+            self.fence_idx = custom_key
+            self.compiled_results.clear()
+
+        arg_features = (func_type,) + argtypes
+        if arg_features not in self.compiled_results:
             try:
-                self.compiled_results[(func_type,) + argtypes] = self.compile(func_type, allow_ref, argtypes, arg_info)
+                self.compiled_results[arg_features] = self.compile(func_type, allow_ref, argtypes, arg_info)
             except Exception as e:
                 if hasattr(e, "already_printed"):
                     # hide the verbose traceback in AST builder
@@ -323,10 +345,10 @@ class func:
                     raise e1 from None
                 else:
                     raise
-        return self.compiled_results[(func_type,) + argtypes]
+        return self.compiled_results[arg_features]
 
     # dispatch shader to stream
-    def __call__(self, *args, dispatch_size, stream=None):
+    def __call__(self, *args, dispatch_size, stream=None, dispatch_buffer_offset:int=(2**64-1)):
         get_global_device()  # check device is initialized
         if stream is None:
             stream = globalvars.vars.stream
@@ -362,7 +384,7 @@ class func:
                 assert False
         # dispatch
         if is_buffer:
-            command.set_dispatch_buffer(dispatch_size.handle)
+            command.set_dispatch_buffer(dispatch_size.handle, dispatch_buffer_offset)
         else:
             command.set_dispatch_size(*dispatch_size)
         stream.add(command.build())

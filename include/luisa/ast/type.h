@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/2/6.
-//
-
 #pragma once
 
 #include <luisa/core/stl/vector.h>
@@ -250,14 +246,15 @@ public:
     /// Type tags
     enum struct Tag : uint32_t {
         BOOL,
-        FLOAT32,
+        INT16,
+        UINT16,
         INT32,
         UINT32,
         INT64,
         UINT64,
         FLOAT16,
-        INT16,
-        UINT16,
+        FLOAT32,
+        FLOAT64,
 
         VECTOR,
         MATRIX,
@@ -411,6 +408,7 @@ public:
     [[nodiscard]] bool is_accel() const noexcept;
     [[nodiscard]] bool is_resource() const noexcept;
     [[nodiscard]] bool is_custom() const noexcept;
+    [[nodiscard]] bool is_resource() const noexcept;
 };
 
 }// namespace luisa::compute

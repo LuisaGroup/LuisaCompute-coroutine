@@ -1,10 +1,7 @@
-//
-// Created by Mike on 8/1/2021.
-//
-
 #pragma once
 
 #include <mutex>
+#include <thread>
 #include <condition_variable>
 
 #include <cuda.h>
@@ -21,6 +18,7 @@ class CUDADevice;
 struct CUDACallbackContext;
 
 class CUDAStream;
+class CUDAEvent;
 
 /**
  * @brief Stream on CUDA
@@ -31,14 +29,26 @@ class CUDAStream {
 public:
     using CallbackContainer = luisa::vector<CUDACallbackContext *>;
 
+    static constexpr auto stop_ticket = std::numeric_limits<uint64_t>::max();
+
+    struct CallbackPackage {
+        uint64_t ticket;
+        CallbackContainer callbacks;
+    };
+
 private:
     CUDADevice *_device;
     CUDAHostBufferPool _upload_pool;
     CUDAHostBufferPool _download_pool;
-    luisa::queue<CallbackContainer> _callback_lists;
+    std::thread _callback_thread;
+    std::mutex _callback_mutex;
+    std::condition_variable _callback_cv;
+    CUDAEvent *_callback_event;
+    std::atomic_uint64_t _current_ticket{0u};
+    std::atomic_uint64_t _finished_ticket{0u};
+    luisa::queue<CallbackPackage> _callback_lists;
     CUstream _stream{};
     spin_mutex _dispatch_mutex;
-    spin_mutex _callback_mutex;
 
 public:
     explicit CUDAStream(CUDADevice *device) noexcept;
@@ -49,8 +59,8 @@ public:
     [[nodiscard]] auto download_pool() noexcept { return &_download_pool; }
     void dispatch(CommandList &&command_list) noexcept;
     void synchronize() noexcept;
-    void signal(CUevent event) noexcept;
-    void wait(CUevent event) noexcept;
+    void signal(CUDAEvent *event, uint64_t value) noexcept;
+    void wait(CUDAEvent *event, uint64_t value) noexcept;
     void callback(CallbackContainer &&callbacks) noexcept;
     void set_name(luisa::string &&name) noexcept;
 };

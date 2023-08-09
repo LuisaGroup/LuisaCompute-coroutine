@@ -1,4 +1,3 @@
-
 #include <DXApi/LCEvent.h>
 #include <DXRuntime/CommandQueue.h>
 #include <DXRuntime/DStorageCommandQueue.h>
@@ -13,28 +12,31 @@ LCEvent::LCEvent(Device *device)
 LCEvent::~LCEvent() {
 }
 
-void LCEvent::Sync() const {
+void LCEvent::Sync(uint64_t fenceIdx) const {
+    auto fc = fenceIdx;
     std::unique_lock lck(eventMtx);
-    while (finishedEvent < fenceIndex) {
+    while (finishedEvent < fc) {
         cv.wait(lck);
     }
 }
-void LCEvent::Signal(CommandQueue *queue) const {
+void LCEvent::Signal(CommandQueue *queue, uint64 fenceIdx) const {
     std::lock_guard lck(eventMtx);
-    queue->Queue()->Signal(fence.Get(), ++fenceIndex);
-    queue->AddEvent(this);
+    queue->Queue()->Signal(fence.Get(), fenceIdx);
+    lastFence = std::max(lastFence, fenceIdx);
+    queue->AddEvent(this, fenceIdx);
 }
-void LCEvent::Signal(DStorageCommandQueue *queue) const {
+void LCEvent::Signal(DStorageCommandQueue *queue, uint64 fenceIdx) const {
     std::lock_guard lck(eventMtx);
-    queue->Signal(fence.Get(), fenceIndex);
-    queue->AddEvent(this);
+    queue->Signal(fence.Get(), fenceIdx);
+    lastFence = std::max(lastFence, fenceIdx);
+    queue->AddEvent(this, fenceIdx);
 }
-void LCEvent::Wait(CommandQueue *queue) const {
+void LCEvent::Wait(CommandQueue *queue, uint64 fenceIdx) const {
     std::lock_guard lck(eventMtx);
-    queue->Queue()->Wait(fence.Get(), fenceIndex);
+    queue->Queue()->Wait(fence.Get(), fenceIdx);
 }
-bool LCEvent::IsComplete() const{
+bool LCEvent::IsComplete(uint64 fenceIdx) const {
     std::lock_guard lck(eventMtx);
-    return finishedEvent >= fenceIndex;
+    return finishedEvent >= fenceIdx;
 }
 }// namespace lc::dx

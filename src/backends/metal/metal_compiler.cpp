@@ -1,15 +1,9 @@
-//
-// Created by Mike Smith on 2023/4/15.
-//
-
 #include <fstream>
 
 #include <luisa/core/clock.h>
 #include <luisa/core/logging.h>
 #include "metal_device.h"
 #include "metal_compiler.h"
-
-#define LUISA_METAL_BACKEND_DUMP_SOURCE 1
 
 namespace luisa::compute::metal {
 
@@ -32,6 +26,21 @@ namespace detail {
         CFRelease(uuid_string);
     }
     return temp_path;
+}
+
+[[nodiscard]] static auto get_bool_env(const char *name) noexcept {
+    if (auto env_c_str = getenv(name)) {
+        luisa::string env{env_c_str};
+        for (auto &c : env) { c = static_cast<char>(toupper(c)); }
+        using namespace std::string_view_literals;
+        return env != "0"sv &&
+               env != "OFF"sv &&
+               env != "FALSE"sv &&
+               env != "NO"sv &&
+               env != "DISABLE"sv &&
+               env != "DISABLED"sv;
+    }
+    return false;
 }
 
 }// namespace detail
@@ -140,10 +149,6 @@ MetalCompiler::_load_disk_archive(luisa::string_view name, bool is_aot,
     auto stream = is_aot ? io->read_shader_bytecode(name) :
                            io->read_shader_cache(name);
     if (stream == nullptr || stream->length() == 0u) {
-        LUISA_WARNING_WITH_LOCATION(
-            "Failed to load Metal shader "
-            "archive for '{}': file not found.",
-            name);
         return {};
     }
 
@@ -222,23 +227,15 @@ MetalCompiler::_load_disk_archive(luisa::string_view name, bool is_aot,
     NS::Error *error = nullptr;
     auto library = NS::TransferPtr(_device->handle()->newLibrary(url, &error));
 
-#ifndef NDEBUG
-    auto should_dump_metallib = true;
-#else
-    auto should_dump_metallib = false;
-    if (auto dump_env_c_str = getenv("LUISA_DUMP_METAL_LIBRARY")) {
-        luisa::string dump_env{dump_env_c_str};
-        for (auto &c : dump_env) { c = static_cast<char>(toupper(c)); }
-        using namespace std::string_view_literals;
-        should_dump_metallib = !dump_env.empty() &&
-                               dump_env != "0"sv &&
-                               dump_env != "OFF"sv &&
-                               dump_env != "FALSE"sv;
-    }
-#endif
+    auto should_dump_metallib =
+        MTL::CaptureManager::sharedCaptureManager()->isCapturing() ||
+        detail::get_bool_env("METAL_CAPTURE_ENABLED") ||
+        detail::get_bool_env("MTL_DEBUG_LAYER") ||
+        detail::get_bool_env("MTL_SHADER_VALIDATION") ||
+        detail::get_bool_env("LUISA_DUMP_METAL_LIBRARY");
 
     if (should_dump_metallib) {
-        LUISA_INFO_WITH_LOCATION(
+        LUISA_VERBOSE(
             "Metal shader archive for '{}' dumped to '{}'.",
             name, temp_file_path.string());
     } else {
@@ -254,9 +251,16 @@ MetalCompiler::_load_disk_archive(luisa::string_view name, bool is_aot,
     }
 
     // load kernel
+    auto ns_name = NS::String::alloc()->init(
+        const_cast<char *>(name.data()), name.size(),
+        NS::UTF8StringEncoding, false);
+    library->setLabel(ns_name);
+    ns_name->release();
     auto [pipeline_desc, pipeline] = _load_kernels_from_library(library.get(), metadata.block_size);
     if (pipeline.entry && pipeline.indirect_entry) {
-        LUISA_INFO("Loaded Metal shader archive for '{}' in {} ms.", name, clk.toc());
+        LUISA_VERBOSE(
+            "Loaded Metal shader archive for '{}' in {} ms.",
+            name, clk.toc());
     }
     return pipeline;
 }
@@ -266,15 +270,20 @@ MetalCompiler::_load_kernels_from_library(MTL::Library *library, uint3 block_siz
 
     auto load = [&](NS::String *name, bool is_indirect) noexcept -> std::pair<NS::SharedPtr<MTL::ComputePipelineDescriptor>,
                                                                               NS::SharedPtr<MTL::ComputePipelineState>> {
+        auto label = is_indirect ?
+                         library->label()->stringByAppendingString(MTLSTR(" (indirect)")) :
+                         library->label();
         auto compute_pipeline_desc = NS::TransferPtr(MTL::ComputePipelineDescriptor::alloc()->init());
         compute_pipeline_desc->setThreadGroupSizeIsMultipleOfThreadExecutionWidth(true);
         compute_pipeline_desc->setMaxTotalThreadsPerThreadgroup(block_size.x * block_size.y * block_size.z);
         compute_pipeline_desc->setSupportIndirectCommandBuffers(is_indirect);
+        compute_pipeline_desc->setLabel(label);
         NS::Error *error = nullptr;
         auto function_desc = MTL::FunctionDescriptor::alloc()->init();
         function_desc->setName(name);
         function_desc->setOptions(MTL::FunctionOptionCompileToBinary);
         auto function = NS::TransferPtr(library->newFunction(function_desc, &error));
+        function->setLabel(label);
         function_desc->release();
         if (error != nullptr) {
             LUISA_WARNING_WITH_LOCATION(
@@ -323,27 +332,43 @@ MetalShaderHandle MetalCompiler::compile(luisa::string_view src,
         auto is_aot = !option.name.empty();
         auto uses_cache = is_aot || option.enable_cache;
 
-        // try disk cache
-        if (uses_cache) {
-            if (auto pso = _load_disk_archive(name, is_aot, metadata);
-                pso.entry && pso.indirect_entry) {
-                _cache.update(hash, pso);
-                return pso;
+        if (option.enable_debug_info || detail::get_bool_env("LUISA_DUMP_SOURCE")) {
+            auto src_dump_name = luisa::format("{}.metal", name);
+            luisa::span src_dump{reinterpret_cast<const std::byte *>(src.data()), src.size()};
+            luisa::filesystem::path src_dump_path;
+            if (is_aot) {
+                src_dump_path = _device->io()->write_shader_bytecode(src_dump_name, src_dump);
+            } else if (option.enable_cache) {
+                src_dump_path = _device->io()->write_shader_cache(src_dump_name, src_dump);
             }
-            LUISA_INFO("Failed to load Metal shader archive for '{}'. "
-                       "Falling back to compilation from source.",
-                       name);
+            // TODO: attach shader source to Metal shader archive for debugging.
+            //       Is it possible without using the command line?
+            if (!src_dump_path.empty()) {
+                LUISA_VERBOSE(
+                    "Dumped Metal shader source for '{}' to '{}'.",
+                    name, src_dump_path.string());
+            }
         }
 
-#if LUISA_METAL_BACKEND_DUMP_SOURCE
-        auto src_dump_name = luisa::format("{}.metal", name);
-        luisa::span src_dump{reinterpret_cast<const std::byte *>(src.data()), src.size()};
-        if (is_aot) {
-            _device->io()->write_shader_bytecode(src_dump_name, src_dump);
-        } else if (option.enable_cache) {
-            _device->io()->write_shader_cache(src_dump_name, src_dump);
+        // try disk cache
+        if (uses_cache) {
+            if (option.enable_debug_info) {
+                LUISA_WARNING_WITH_LOCATION(
+                    "Debug information is enabled for Metal shader '{}'. "
+                    "The disk cache will not be loaded.",
+                    name);
+            } else {
+                if (auto pso = _load_disk_archive(name, is_aot, metadata);
+                    pso.entry && pso.indirect_entry) {
+                    _cache.update(hash, pso);
+                    return pso;
+                }
+                LUISA_VERBOSE(
+                    "Failed to load Metal shader archive for '{}'. "
+                    "Falling back to compilation from source.",
+                    name);
+            }
         }
-#endif
 
         // no cache found, compile from source
         auto source = NS::String::alloc()->init(const_cast<char *>(src.data()),
@@ -362,6 +387,7 @@ MetalShaderHandle MetalCompiler::compile(luisa::string_view src,
 
         NS::Error *error;
         auto library = NS::TransferPtr(_device->handle()->newLibrary(source, options, &error));
+        library->setLabel(NS::String::string(name.c_str(), NS::UTF8StringEncoding));
         source->release();
         options->release();
         if (error != nullptr) {
@@ -399,4 +425,3 @@ MetalShaderHandle MetalCompiler::load(luisa::string_view name,
 }
 
 }// namespace luisa::compute::metal
-

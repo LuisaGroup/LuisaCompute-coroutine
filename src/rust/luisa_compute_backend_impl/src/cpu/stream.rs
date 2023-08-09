@@ -6,7 +6,6 @@ use luisa_compute_ir::{
 };
 use parking_lot::{Condvar, Mutex, RwLock};
 use rayon;
-use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::{
     collections::VecDeque,
     sync::{atomic::AtomicUsize, Arc},
@@ -16,9 +15,13 @@ use std::{
     collections::{HashMap, HashSet},
     process::abort,
 };
+use std::{
+    panic::{RefUnwindSafe, UnwindSafe},
+    sync::atomic::AtomicBool,
+};
 
 use super::{
-    accel::{AccelImpl, MeshImpl},
+    accel::{AccelImpl, GeometryImpl},
     resource::{BindlessArrayImpl, BufferImpl},
     shader::ShaderImpl,
     texture::TextureImpl,
@@ -27,24 +30,84 @@ use crate::panic_abort;
 use bumpalo::Bump;
 use luisa_compute_cpu_kernel_defs as defs;
 
-#[derive(Clone)]
 struct Work {
-    f: Arc<dyn Fn() + Send + Sync>,
+    f: Box<dyn FnOnce() + Send + Sync>,
     callback: (extern "C" fn(*mut u8), *mut u8),
 }
 
 unsafe impl Send for Work {}
 
 unsafe impl Sync for Work {}
-
+pub(super) struct StagingBuffers {
+    bump: Bump,
+    buffers: Vec<*mut u8>,
+}
+unsafe impl Send for StagingBuffers {}
+unsafe impl Sync for StagingBuffers {}
+impl StagingBuffers {
+    unsafe fn allocate(&mut self, ptr: *const u8, size: usize) {
+        let bump = &mut self.bump;
+        let buffer = bump
+            .alloc_layout(std::alloc::Layout::from_size_align(size, 256).unwrap())
+            .as_ptr();
+        std::ptr::copy_nonoverlapping(ptr, buffer, size);
+        self.buffers.push(buffer);
+    }
+    unsafe fn allocate_all(&mut self, command_list: &[api::Command]) {
+        for cmd in command_list {
+            match cmd {
+                api::Command::BufferUpload(cmd) => {
+                    let size = cmd.size;
+                    self.allocate(cmd.data, size);
+                }
+                api::Command::TextureUpload(cmd) => {
+                    let texture = &*(cmd.texture.0 as *mut TextureImpl);
+                    let level: u8 = cmd.level.try_into().unwrap();
+                    let view = texture.view(level);
+                    let size = view.unpadded_data_size();
+                    self.allocate(cmd.data, size);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+struct StagingBufferPool {
+    pool: Mutex<VecDeque<StagingBuffers>>,
+}
+impl StagingBufferPool {
+    fn new() -> Self {
+        Self {
+            pool: Mutex::new(VecDeque::new()),
+        }
+    }
+    fn push(&self, buffers: StagingBuffers) {
+        let mut pool = self.pool.lock();
+        pool.push_back(buffers);
+    }
+    fn allocate(&self, command_list: &[api::Command]) -> StagingBuffers {
+        let mut pool = self.pool.lock();
+        let mut buffers = if let Some(buffers) = pool.pop_front() {
+            buffers
+        } else {
+            StagingBuffers {
+                bump: Bump::new(),
+                buffers: Vec::new(),
+            }
+        };
+        unsafe {
+            buffers.allocate_all(command_list);
+        }
+        buffers
+    }
+}
 struct StreamContext {
     queue: Mutex<VecDeque<Work>>,
     new_work: Condvar,
     sync: Condvar,
     work_count: AtomicUsize,
     finished_count: AtomicUsize,
-    error: Mutex<Option<String>>,
-    staging_buffers: Mutex<(Bump, Vec<*mut u8>)>,
+    staging_buffer_pool: StagingBufferPool,
 }
 
 pub(super) struct StreamImpl {
@@ -66,8 +129,7 @@ impl StreamImpl {
             sync: Condvar::new(),
             work_count: AtomicUsize::new(0),
             finished_count: AtomicUsize::new(0),
-            error: Mutex::new(None),
-            staging_buffers: Mutex::new((Bump::new(), Vec::new())),
+            staging_buffer_pool: StagingBufferPool::new(),
         });
         let private_thread = {
             let ctx = ctx.clone();
@@ -82,9 +144,10 @@ impl StreamImpl {
                             break;
                         }
                         let work = guard.pop_front().unwrap();
+                        let Work { f, callback } = work;
                         drop(guard);
-                        (work.f)();
-                        (work.callback.0)(work.callback.1);
+                        f();
+                        (callback.0)(callback.1);
                         ctx.finished_count
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         guard = ctx.queue.lock();
@@ -102,9 +165,6 @@ impl StreamImpl {
             ctx,
         }
     }
-    pub(super) fn has_error(&self) -> bool {
-        self.ctx.error.lock().is_some()
-    }
     pub(super) fn synchronize(&self) {
         let mut guard = self.ctx.queue.lock();
         while self
@@ -118,19 +178,15 @@ impl StreamImpl {
         {
             self.ctx.sync.wait(&mut guard);
         }
-        let error = self.ctx.error.lock();
-        if error.is_some() {
-            panic_abort!("{}", error.as_ref().unwrap());
-        }
     }
     pub(super) fn enqueue(
         &self,
-        work: impl Fn() + Send + Sync + 'static,
+        work: impl FnOnce() + Send + Sync + 'static,
         callback: (extern "C" fn(*mut u8), *mut u8),
     ) {
         let mut guard = self.ctx.queue.lock();
         guard.push_back(Work {
-            f: Arc::new(work),
+            f: Box::new(work),
             callback,
         });
         self.ctx
@@ -150,75 +206,35 @@ impl StreamImpl {
         let nthreads = pool.current_num_threads();
         pool.scope(|s| {
             for _ in 0..nthreads {
-                s.spawn(|_| {
-                    let result = std::panic::catch_unwind(|| {
-                        // let counter = unsafe { &*(p_counter as *const AtomicUsize) };
-                        loop {
-                            let index =
-                                counter.fetch_add(block, std::sync::atomic::Ordering::Relaxed);
-                            if index >= count {
-                                break;
-                            }
+                s.spawn(|_| loop {
+                    let index = counter.fetch_add(block, std::sync::atomic::Ordering::Relaxed);
+                    if index >= count {
+                        break;
+                    }
 
-                            for i in index..(index + block).min(count) {
-                                kernel(i);
-                            }
-                        }
-                    });
-                    if let Err(_) = result {
-                        log::error!("kernel execution aborted");
+                    for i in index..(index + block).min(count) {
+                        kernel(i);
                     }
                 });
             }
         });
     }
-    unsafe fn allocate_staging_buffer(&self, ptr: *const u8, size: usize) {
-        let mut lk = self.ctx.staging_buffers.lock();
-        let (bump, buffers) = &mut *lk;
-        let buffer = bump
-            .alloc_layout(std::alloc::Layout::from_size_align(size, 256).unwrap())
-            .as_ptr();
-        std::ptr::copy_nonoverlapping(ptr, buffer, size);
-        buffers.push(buffer);
+    pub(super) fn allocate_staging_buffers(&self, command_list: &[api::Command]) -> StagingBuffers {
+        self.ctx.staging_buffer_pool.allocate(command_list)
     }
-    unsafe fn allocate_staging_buffers(&self, command_list: &[api::Command]) {
-        for cmd in command_list {
-            match cmd {
-                api::Command::BufferUpload(cmd) => {
-                    let buffer = &*(cmd.buffer.0 as *mut BufferImpl);
-                    let _lk = buffer.lock.try_write().unwrap();
-                    let size = cmd.size;
-                    self.allocate_staging_buffer(cmd.data, size);
-                }
-                api::Command::TextureUpload(cmd) => {
-                    let texture = &*(cmd.texture.0 as *mut TextureImpl);
-                    let level: u8 = cmd.level.try_into().unwrap();
-                    let _lk = texture.locks[level as usize].try_write().unwrap();
-                    let view = texture.view(level);
-                    let size = view.unpadded_data_size();
-                    self.allocate_staging_buffer(cmd.data, size);
-                }
-                _ => {}
-            }
-        }
-    }
-    pub(super) fn dispatch(&self, command_list: &[api::Command]) {
+    pub(super) fn dispatch(
+        &self,
+        mut staging_buffers: StagingBuffers,
+        command_list: &[api::Command],
+    ) {
         unsafe {
-            self.allocate_staging_buffers(command_list);
-            let mut lk = self.ctx.staging_buffers.lock();
-            let (bump, buffers) = &mut *lk;
+            let bump = &mut staging_buffers.bump;
+            let buffers = &mut staging_buffers.buffers;
             let mut cnt = 0;
             for cmd in command_list {
-                {
-                    let err = self.ctx.error.lock();
-                    if err.is_some() {
-                        break;
-                    }
-                }
                 match cmd {
                     api::Command::BufferUpload(cmd) => {
                         let buffer = &*(cmd.buffer.0 as *mut BufferImpl);
-                        let _lk = buffer.lock.try_write().unwrap();
                         let offset = cmd.offset;
                         let size = cmd.size;
                         // let data = cmd.data;
@@ -228,7 +244,6 @@ impl StreamImpl {
                     }
                     api::Command::BufferDownload(cmd) => {
                         let buffer = &*(cmd.buffer.0 as *mut BufferImpl);
-                        let _lk = buffer.lock.try_read().unwrap();
                         let offset = cmd.offset;
                         let size = cmd.size;
                         let data = cmd.data;
@@ -237,8 +252,6 @@ impl StreamImpl {
                     api::Command::BufferCopy(cmd) => {
                         let src = &*(cmd.src.0 as *mut BufferImpl);
                         let dst = &*(cmd.dst.0 as *mut BufferImpl);
-                        let _src_lk = src.lock.try_read().unwrap();
-                        let _dst_lk = dst.lock.try_write().unwrap();
                         assert_ne!(src.data, dst.data);
                         let src_offset = cmd.src_offset;
                         let dst_offset = cmd.dst_offset;
@@ -252,9 +265,7 @@ impl StreamImpl {
                     api::Command::BufferToTextureCopy(cmd) => {
                         let buffer = &*(cmd.buffer.0 as *mut BufferImpl);
                         let texture = &*(cmd.texture.0 as *mut TextureImpl);
-                        let _buffer_lk = buffer.lock.try_read().unwrap();
                         let level: u8 = cmd.texture_level.try_into().unwrap();
-                        let _texture_lk = texture.locks[level as usize].try_write().unwrap();
                         let dim = texture.dimension;
                         let view = texture.view(level);
                         assert_eq!(cmd.storage, texture.storage);
@@ -270,8 +281,6 @@ impl StreamImpl {
                         let buffer = &*(cmd.buffer.0 as *mut BufferImpl);
                         let texture = &*(cmd.texture.0 as *mut TextureImpl);
                         let level: u8 = cmd.texture_level.try_into().unwrap();
-                        let _texture_lk = texture.locks[level as usize].try_read().unwrap();
-                        let _buffer_lk = buffer.lock.try_write().unwrap();
                         let dim = texture.dimension;
                         let view = texture.view(level);
                         assert_eq!(cmd.storage, texture.storage);
@@ -286,7 +295,6 @@ impl StreamImpl {
                     api::Command::TextureUpload(cmd) => {
                         let texture = &*(cmd.texture.0 as *mut TextureImpl);
                         let level: u8 = cmd.level.try_into().unwrap();
-                        let _lk = texture.locks[level as usize].try_write().unwrap();
                         let dim = texture.dimension;
                         let view = texture.view(level);
                         assert_eq!(cmd.storage, texture.storage);
@@ -302,7 +310,6 @@ impl StreamImpl {
                     api::Command::TextureDownload(cmd) => {
                         let texture = &*(cmd.texture.0 as *mut TextureImpl);
                         let level: u8 = cmd.level.try_into().unwrap();
-                        let _lk = texture.locks[level as usize].try_read().unwrap();
                         let dim = texture.dimension;
                         assert_eq!(cmd.storage, texture.storage);
                         let view = texture.view(level);
@@ -319,8 +326,6 @@ impl StreamImpl {
                         let dst_level: u8 = cmd.dst_level.try_into().unwrap();
                         let src_view = src.view(src_level);
                         let dst_view = dst.view(dst_level);
-                        let _src_lk = src.locks[src_level as usize].try_read().unwrap();
-                        let _dst_lk = dst.locks[dst_level as usize].try_write().unwrap();
                         assert_eq!(cmd.storage, src.storage);
                         assert_eq!(cmd.storage, dst.storage);
                         assert_eq!(src_view.size, cmd.size);
@@ -356,7 +361,7 @@ impl StreamImpl {
                         let args = Arc::new(args);
                         let ctx = Arc::new(ShaderDispatchContext {
                             shader: shader as *const _,
-                            error: &self.ctx.error,
+                            terminated: AtomicBool::new(false),
                         });
                         let kernel_args = defs::KernelFnArgs {
                             captured: shader.captures.as_ptr(),
@@ -407,8 +412,8 @@ impl StreamImpl {
                         );
                     }
                     api::Command::MeshBuild(mesh_build) => {
-                        let mesh = &mut *(mesh_build.mesh.0 as *mut MeshImpl);
-                        mesh.build(mesh_build);
+                        let mesh = &mut *(mesh_build.mesh.0 as *mut GeometryImpl);
+                        mesh.build_mesh(mesh_build);
                     }
                     api::Command::AccelBuild(accel_build) => {
                         let accel = &mut *(accel_build.accel.0 as *mut AccelImpl);
@@ -418,6 +423,7 @@ impl StreamImpl {
                                 accel_build.modifications,
                                 accel_build.modifications_count,
                             ),
+                            accel_build.update_instance_buffer_only,
                         );
                     }
                     api::Command::BindlessArrayUpdate(bindless_update) => {
@@ -427,13 +433,15 @@ impl StreamImpl {
                             bindless_update.modifications_count,
                         ));
                     }
-                    api::Command::ProceduralPrimitiveBuild(_) => {
-                        todo!()
+                    api::Command::ProceduralPrimitiveBuild(mesh_build) => {
+                        let mesh = &mut *(mesh_build.handle.0 as *mut GeometryImpl);
+                        mesh.build_procedural(mesh_build);
                     }
                 }
             }
             bump.reset();
             buffers.clear();
+            self.ctx.staging_buffer_pool.push(staging_buffers);
         }
     }
 }
@@ -566,12 +574,16 @@ extern "C" fn trace_any(accel: *const std::ffi::c_void, ray: &defs::Ray, mask: u
 }
 
 extern "C" fn instance_transform(accel: *const std::ffi::c_void, instance_id: u32) -> defs::Mat4 {
+    /*
+    0 1 2 3
+    4 5 6 7
+    8 9 10 11 */
     unsafe {
         let accel = &*(accel as *const AccelImpl);
         let affine = accel.instance_transform(instance_id);
         defs::Mat4([
-            affine[0], affine[1], affine[2], 0.0, affine[3], affine[4], affine[5], 0.0, affine[6],
-            affine[7], affine[8], 0.0, affine[9], affine[10], affine[11], 1.0,
+            affine[0], affine[4], affine[8], 0.0, affine[1], affine[5], affine[9], 0.0, affine[2],
+            affine[6], affine[10], 0.0, affine[3], affine[7], affine[11], 1.0,
         ])
     }
 }
@@ -581,20 +593,26 @@ extern "C" fn set_instance_transform(
     instance_id: u32,
     transform: &defs::Mat4,
 ) {
+    /*
+       0   4   8    12
+       1   5   9    13
+       2   6   10   14
+       3   7   11   15
+    */
     unsafe {
         let accel = &*(accel as *const AccelImpl);
         let affine = [
             transform.0[0],
-            transform.0[1],
-            transform.0[2],
             transform.0[4],
-            transform.0[5],
-            transform.0[6],
             transform.0[8],
-            transform.0[9],
-            transform.0[10],
             transform.0[12],
+            transform.0[1],
+            transform.0[5],
+            transform.0[9],
             transform.0[13],
+            transform.0[2],
+            transform.0[6],
+            transform.0[10],
             transform.0[14],
         ];
         accel.set_instance_transform(instance_id, affine);
@@ -625,5 +643,5 @@ extern "C" fn ray_query(
 }
 pub(crate) struct ShaderDispatchContext {
     pub(crate) shader: *const ShaderImpl,
-    pub(crate) error: *const Mutex<Option<String>>,
+    pub(crate) terminated: AtomicBool,
 }

@@ -33,6 +33,7 @@ private:
     vstd::unordered_map<vstd::string, ExtPtr> exts;
 
 public:
+    uint compute_warp_size() const noexcept override { return _native->compute_warp_size(); }
     static void check_stream(uint64_t stream, StreamFunc func, uint64_t custom_cmd_id = 0);
     static void add_custom_stream(uint64_t handle, StreamOption &&opt);
     void *native_handle() const noexcept override;
@@ -77,10 +78,10 @@ public:
     // event
     ResourceCreationInfo create_event() noexcept override;
     void destroy_event(uint64_t handle) noexcept override;
-    void signal_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    void wait_event(uint64_t handle, uint64_t stream_handle) noexcept override;
-    bool is_event_completed(uint64_t handle) const noexcept override;
-    void synchronize_event(uint64_t handle) noexcept override;
+    void signal_event(uint64_t handle, uint64_t stream_handle, uint64_t fence) noexcept override;
+    void wait_event(uint64_t handle, uint64_t stream_handle, uint64_t fence) noexcept override;
+    bool is_event_completed(uint64_t handle, uint64_t fence) const noexcept override;
+    void synchronize_event(uint64_t handle, uint64_t fence) noexcept override;
 
     // accel
     ResourceCreationInfo create_mesh(

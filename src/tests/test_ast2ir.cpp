@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2022/10/24.
-//
-
 #include <iostream>
 #include <chrono>
 #include <numeric>
@@ -35,7 +31,7 @@ int main(int argc, char *argv[]) {
 
     Context context{argv[0]};
     if (argc <= 1) {
-        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, ispc, metal", argv[0]);
+        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, cpu, metal", argv[0]);
         exit(1);
     }
     Device device = context.create_device(argv[1]);
@@ -165,7 +161,7 @@ int main(int argc, char *argv[]) {
 
     // test ir
     clock.tic();
-    auto ir = AST2IR{}.convert_kernel(kernel_def.function()->function());
+    auto ir = AST2IR::build_kernel(kernel_def.function()->function());
     LUISA_INFO("AST2IR done in {} ms.", clock.toc());
 
     // dump json

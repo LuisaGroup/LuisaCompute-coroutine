@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/3/18.
-//
-
 #include <utility>
 
 #include <luisa/core/logging.h>
@@ -16,6 +12,7 @@ Stream Device::create_stream(StreamTag stream_tag) noexcept {
 }
 
 void Stream::_dispatch(CommandList &&list) noexcept {
+    _check_is_valid();
     if (!list.empty()) {
 #ifndef NDEBUG
         for (auto &&i : list.commands()) {
@@ -36,7 +33,11 @@ Stream::Delegate Stream::operator<<(luisa::unique_ptr<Command> &&cmd) noexcept {
     return std::move(delegate) << std::move(cmd);
 }
 
-void Stream::_synchronize() noexcept { device()->synchronize_stream(handle()); }
+void Stream::_synchronize() noexcept {
+    _check_is_valid();
+    device()->synchronize_stream(handle());
+}
+
 Stream::Stream(DeviceInterface *device, StreamTag stream_tag) noexcept
     : Stream{device, stream_tag, device->create_stream(stream_tag)} {}
 
@@ -62,7 +63,7 @@ Stream::Delegate::Delegate(Stream::Delegate &&s) noexcept
     s._stream = nullptr;
 }
 
-Stream::Delegate &&Stream::Delegate::operator<<(luisa::unique_ptr<Command> &&cmd) && noexcept {
+Stream::Delegate Stream::Delegate::operator<<(luisa::unique_ptr<Command> &&cmd) && noexcept {
     if (!_command_list.callbacks().empty()) { _commit(); }
     _command_list.append(std::move(cmd));
     return std::move(*this);
@@ -73,7 +74,7 @@ Stream &Stream::Delegate::operator<<(CommandList::Commit &&commit) && noexcept {
     return *_stream << std::move(commit);
 }
 
-Stream::Delegate &&Stream::Delegate::operator<<(luisa::move_only_function<void()> &&f) && noexcept {
+Stream::Delegate Stream::Delegate::operator<<(luisa::move_only_function<void()> &&f) && noexcept {
     _command_list.add_callback(std::move(f));
     return std::move(*this);
 }
@@ -95,7 +96,7 @@ Stream::Delegate Stream::operator<<(luisa::move_only_function<void()> &&f) noexc
 }
 
 Stream &Stream::operator<<(CommandList::Commit &&commit) noexcept {
-    _dispatch(std::move(commit._list));
+    _dispatch(std::move(commit).command_list());
     return *this;
 }
 
@@ -109,4 +110,3 @@ Stream::~Stream() noexcept {
 }
 
 }// namespace luisa::compute
-

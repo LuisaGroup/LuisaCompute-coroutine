@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/6/24.
-//
-
 #pragma once
 
 #include <luisa/core/basic_types.h>
@@ -32,7 +28,8 @@ struct TriangleHit {
     float2 bary;
     float committed_ray_t;
 };
-
+static_assert(sizeof(TriangleHit) == 24u, "TriangleHit size mismatch");
+static_assert(alignof(TriangleHit) == 8u, "TriangleHit align mismatch");
 // Return type of RayQuery::procedural_candidate(), it represents a hit of procedural-primitive
 struct ProceduralHit {
     uint inst;

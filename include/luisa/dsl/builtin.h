@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/4/13.
-//
-
 #pragma once
 
 #include <luisa/core/constants.h>
@@ -232,6 +228,36 @@ template<typename T>
         return CallOp::MAKE_FLOAT3;
     } else if constexpr (std::is_same_v<T, float4>) {
         return CallOp::MAKE_FLOAT4;
+    } else if constexpr (std::is_same_v<T, half2>) {
+        return CallOp::MAKE_HALF2;
+    } else if constexpr (std::is_same_v<T, half3>) {
+        return CallOp::MAKE_HALF3;
+    } else if constexpr (std::is_same_v<T, half4>) {
+        return CallOp::MAKE_HALF4;
+    } else if constexpr (std::is_same_v<T, short2>) {
+        return CallOp::MAKE_SHORT2;
+    } else if constexpr (std::is_same_v<T, short3>) {
+        return CallOp::MAKE_SHORT3;
+    } else if constexpr (std::is_same_v<T, short4>) {
+        return CallOp::MAKE_SHORT4;
+    } else if constexpr (std::is_same_v<T, ushort2>) {
+        return CallOp::MAKE_USHORT2;
+    } else if constexpr (std::is_same_v<T, ushort3>) {
+        return CallOp::MAKE_USHORT3;
+    } else if constexpr (std::is_same_v<T, ushort4>) {
+        return CallOp::MAKE_USHORT4;
+    } else if constexpr (std::is_same_v<T, slong2>) {
+        return CallOp::MAKE_LONG2;
+    } else if constexpr (std::is_same_v<T, slong3>) {
+        return CallOp::MAKE_LONG3;
+    } else if constexpr (std::is_same_v<T, slong4>) {
+        return CallOp::MAKE_LONG4;
+    } else if constexpr (std::is_same_v<T, ulong2>) {
+        return CallOp::MAKE_ULONG2;
+    } else if constexpr (std::is_same_v<T, ulong3>) {
+        return CallOp::MAKE_ULONG3;
+    } else if constexpr (std::is_same_v<T, ulong4>) {
+        return CallOp::MAKE_ULONG4;
     } else {
         static_assert(always_false_v<T>);
     }
@@ -581,12 +607,27 @@ using luisa::make_float3;
 using luisa::make_float3x3;
 using luisa::make_float4;
 using luisa::make_float4x4;
+using luisa::make_half2;
+using luisa::make_half3;
+using luisa::make_half4;
 using luisa::make_int2;
 using luisa::make_int3;
 using luisa::make_int4;
+using luisa::make_short2;
+using luisa::make_short3;
+using luisa::make_short4;
+using luisa::make_slong2;
+using luisa::make_slong3;
+using luisa::make_slong4;
 using luisa::make_uint2;
 using luisa::make_uint3;
 using luisa::make_uint4;
+using luisa::make_ulong2;
+using luisa::make_ulong3;
+using luisa::make_ulong4;
+using luisa::make_ushort2;
+using luisa::make_ushort3;
+using luisa::make_ushort4;
 
 #define LUISA_MAKE_VECTOR(type)                                  \
     template<typename S>                                         \
@@ -758,10 +799,17 @@ using luisa::make_uint4;
     [[nodiscard]] inline auto make_##type##4(Tv && v) noexcept { \
         return detail::make_vector4<type>(std::forward<Tv>(v));  \
     }
+
 LUISA_MAKE_VECTOR(bool)
 LUISA_MAKE_VECTOR(int)
 LUISA_MAKE_VECTOR(uint)
 LUISA_MAKE_VECTOR(float)
+LUISA_MAKE_VECTOR(short)
+LUISA_MAKE_VECTOR(ushort)
+LUISA_MAKE_VECTOR(slong)
+LUISA_MAKE_VECTOR(ulong)
+LUISA_MAKE_VECTOR(half)
+
 #undef LUISA_MAKE_VECTOR
 
 // make float2x2
@@ -1059,10 +1107,11 @@ template<typename E, typename X>
 template<typename L, typename R, typename T>
     requires any_dsl_v<L, R, T> && is_float_or_vector_expr_v<L> && is_float_or_vector_expr_v<R> && is_float_or_vector_expr_v<T>
 [[nodiscard]] inline auto smoothstep(L &&left, R &&right, T &&x) noexcept {
-    auto edge0 = def(std::forward<L>(left));
-    auto edge1 = def(std::forward<R>(right));
-    auto t = saturate((std::forward<T>(x) - edge0) / (edge1 - edge0));
-    return t * t * fma(t, -2.0f, 3.0f);
+    return detail::make_vector_call<float>(
+        CallOp::SMOOTHSTEP,
+        std::forward<L>(left),
+        std::forward<R>(right),
+        std::forward<T>(x));
 }
 
 /// Abs of float or vector.
@@ -1117,6 +1166,42 @@ template<typename X, typename Y>
         CallOp::MAX,
         std::forward<X>(x),
         std::forward<Y>(y));
+}
+
+/// Reduce sum.
+template<typename T>
+    requires is_dsl_v<T> && is_vector_expr_v<T>
+[[nodiscard]] inline auto reduce_sum(T &&x) noexcept {
+    using E = vector_expr_element_t<T>;
+    return def<E>(detail::FunctionBuilder::current()->call(
+        Type::of<E>(), CallOp::REDUCE_SUM, {LUISA_EXPR(x)}));
+}
+
+/// Reduce product.
+template<typename T>
+    requires is_dsl_v<T> && is_vector_expr_v<T>
+[[nodiscard]] inline auto reduce_prod(T &&x) noexcept {
+    using E = vector_expr_element_t<T>;
+    return def<E>(detail::FunctionBuilder::current()->call(
+        Type::of<E>(), CallOp::REDUCE_PRODUCT, {LUISA_EXPR(x)}));
+}
+
+/// Reduce min.
+template<typename T>
+    requires is_dsl_v<T> && is_vector_expr_v<T>
+[[nodiscard]] inline auto reduce_min(T &&x) noexcept {
+    using E = vector_expr_element_t<T>;
+    return def<E>(detail::FunctionBuilder::current()->call(
+        Type::of<E>(), CallOp::REDUCE_MIN, {LUISA_EXPR(x)}));
+}
+
+/// Reduce max.
+template<typename T>
+    requires is_dsl_v<T> && is_vector_expr_v<T>
+[[nodiscard]] inline auto reduce_max(T &&x) noexcept {
+    using E = vector_expr_element_t<T>;
+    return def<E>(detail::FunctionBuilder::current()->call(
+        Type::of<E>(), CallOp::REDUCE_MAX, {LUISA_EXPR(x)}));
 }
 
 /// Clz. Count leading zeros.
@@ -1580,14 +1665,12 @@ void requires_grad(T &&...args) noexcept {
 }
 
 /// Mark that a variable does not require gradient
-template<typename... T>
-    requires any_dsl_v<T...>
-void detach(T &&...args) noexcept {
-    auto builder = detail::FunctionBuilder::current();
-    auto do_detach = [builder]<typename X>(X &&x) noexcept {
-        builder->call(CallOp::DETACH, {LUISA_EXPR(x)});
-    };
-    (do_detach(std::forward<T>(args)), ...);
+template<typename T>
+    requires is_dsl_v<T>
+auto detach(T &&x) noexcept {
+    using X = expr_value_t<T>;
+    return def<X>(detail::FunctionBuilder::current()->call(
+        Type::of<X>(), CallOp::DETACH, {LUISA_EXPR(x)}));
 }
 
 /// Back-propagate gradient from the variable with the given gradient
@@ -1629,9 +1712,191 @@ inline void sync_block() noexcept {
         CallOp::SYNCHRONIZE_BLOCK, {});
 }
 
+[[nodiscard]] inline auto warp_lane_count() noexcept {
+    return def<uint>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint>(), CallOp::WARP_LANE_COUNT,
+            {}));
+}
+[[nodiscard]] inline auto warp_lane_index() noexcept {
+    return def<uint>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint>(), CallOp::WARP_LANE_INDEX,
+            {}));
+}
+
+[[nodiscard]] inline auto warp_is_first_active_lane() noexcept {
+    return def<bool>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<bool>(), CallOp::WARP_IS_FIRST_ACTIVE_LANE,
+            {}));
+}
+
+template<typename X>
+    requires is_scalar_expr_v<X> || is_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_all_equal(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    if constexpr (vector_dimension_v<T> == 1) {
+        return def<bool>(
+            detail::FunctionBuilder::current()->call(
+                Type::of<bool>(), CallOp::WARP_ACTIVE_ALL_EQUAL,
+                {LUISA_EXPR(value)}));
+    } else {
+        using Ret = Vector<bool, vector_dimension_v<T>>;
+        return def<Ret>(
+            detail::FunctionBuilder::current()->call(
+                Type::of<Ret>(), CallOp::WARP_ACTIVE_ALL_EQUAL,
+                {LUISA_EXPR(value)}));
+    }
+}
+
+template<typename X>
+    requires is_int_or_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_bit_and(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_BIT_AND,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires is_int_or_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_bit_or(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_BIT_OR,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires is_int_or_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_bit_Xor(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_BIT_XOR,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_count_bits(Expr<bool> value) {
+    return def<uint>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint>(), CallOp::WARP_ACTIVE_COUNT_BITS,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_prefix_count_bits(Expr<bool> value) {
+    return def<uint>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint>(), CallOp::WARP_PREFIX_COUNT_BITS,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_all(Expr<bool> value) {
+    return def<bool>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<bool>(), CallOp::WARP_ACTIVE_ALL,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_any(Expr<bool> value) {
+    return def<bool>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<bool>(), CallOp::WARP_ACTIVE_ANY,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_bit_mask(Expr<bool> value) {
+    return def<uint4>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint4>(), CallOp::WARP_ACTIVE_BIT_MASK,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_min(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_MIN,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_max(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_MAX,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_product(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_PRODUCT,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_sum(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_SUM,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_prefix_product(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_PREFIX_PRODUCT,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_prefix_sum(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_PREFIX_SUM,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X, typename Y>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X> || is_matrix_expr_v<X>) && (is_integral_expr_v<Y>)
+[[nodiscard]] inline auto warp_read_lane_at(X &&value, Y &&index) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_READ_LANE_AT,
+            {LUISA_EXPR(value), LUISA_EXPR(index)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X> || is_matrix_expr_v<X>)
+[[nodiscard]] inline auto warp_read_first_lane(X &&value) {
+    using T = expr_value_t<std::remove_cvref_t<X>>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_READ_FIRST_LANE,
+            {LUISA_EXPR(value)}));
+}
+
 #undef LUISA_EXPR
 
 }// namespace dsl
 
 }// namespace luisa::compute
-

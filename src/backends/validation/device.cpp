@@ -144,6 +144,11 @@ void Device::dispatch(
     auto str = RWResource::get<Stream>(stream_handle);
     str->dispatch(_native.get(), list);
     str->check_compete();
+    list._callbacks.emplace(
+        list._callbacks.begin(),
+        [str, executed_layer = str->executed_layer()]() {
+            str->sync_layer(executed_layer);
+        });
     _native->dispatch(stream_handle, std::move(list));
 }
 
@@ -202,27 +207,27 @@ void Device::destroy_event(uint64_t handle) noexcept {
     RWResource::dispose(handle);
     _native->destroy_event(handle);
 }
-void Device::signal_event(uint64_t handle, uint64_t stream_handle) noexcept {
+void Device::signal_event(uint64_t handle, uint64_t stream_handle, uint64_t fence) noexcept {
     check_stream(stream_handle, StreamFunc::Signal);
     auto evt = RWResource::get<Event>(handle);
     auto stream = RWResource::get<Stream>(stream_handle);
-    stream->signal(evt);
-    _native->signal_event(handle, stream_handle);
+    stream->signal(evt, fence);
+    _native->signal_event(handle, stream_handle, fence);
 }
-void Device::wait_event(uint64_t handle, uint64_t stream_handle) noexcept {
+void Device::wait_event(uint64_t handle, uint64_t stream_handle, uint64_t fence) noexcept {
     check_stream(stream_handle, StreamFunc::Wait);
     auto evt = RWResource::get<Event>(handle);
     auto stream = RWResource::get<Stream>(stream_handle);
-    stream->wait(evt);
-    _native->wait_event(handle, stream_handle);
+    stream->wait(evt, fence);
+    _native->wait_event(handle, stream_handle, fence);
 }
-bool Device::is_event_completed(uint64_t handle) const noexcept {
-    return _native->is_event_completed(handle);
+bool Device::is_event_completed(uint64_t handle, uint64_t fence) const noexcept {
+    return _native->is_event_completed(handle, fence);
 }
-void Device::synchronize_event(uint64_t handle) noexcept {
+void Device::synchronize_event(uint64_t handle, uint64_t fence) noexcept {
     auto evt = RWResource::get<Event>(handle);
-    evt->sync();
-    _native->synchronize_event(handle);
+    evt->sync(fence);
+    _native->synchronize_event(handle, fence);
 }
 
 // accel

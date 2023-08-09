@@ -4,18 +4,16 @@ use crate::panic_abort;
 use lazy_static::lazy_static;
 use libloading::Symbol;
 use serde::{Deserialize, Serialize};
-use std::env::{current_dir, current_exe, var};
+use std::env::{current_exe, var};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::ops::Deref;
-use std::process::{abort, exit};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::yield_now;
+use std::sync::atomic::Ordering;
 use std::{
     cell::RefCell,
     collections::HashMap,
     ffi::{CStr, CString},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 enum LLVMContext {}
@@ -320,12 +318,30 @@ impl LLVMPaths {
     fn override_from_env(&mut self) {
         match var("LUISA_LLVM_PATH") {
             Ok(s) => {
+                if !Path::new(&s).exists() {
+                    panic_abort!(
+                        "LUISA_LLVM_PATH is set to {}, but the path does not exist",
+                        s
+                    );
+                }
+                if Path::new(&s).is_dir() {
+                    panic_abort!("LUISA_LLVM_PATH is set to {}, but the path is a directory. Should be path to library", s);
+                }
                 self.llvm = s;
             }
             Err(_) => {}
         }
         match var("LUISA_CLANG_PATH") {
             Ok(s) => {
+                if !Path::new(&s).exists() {
+                    panic_abort!(
+                        "LUISA_CLANG_PATH is set to {}, but the path does not exist",
+                        s
+                    );
+                }
+                if Path::new(&s).is_dir() {
+                    panic_abort!("LUISA_CLANG_PATH is set to {}, but the path is a directory. Should be path to executable", s);
+                }
                 self.clang = s;
             }
             Err(_) => {}
@@ -352,7 +368,7 @@ impl LLVMPaths {
                     match var("LUISA_CLANG_PATH") {
                         Ok(s) => s,
                         Err(_) => {
-                            panic_abort!("Could not find clang. Please set LUISA_CLANG_PATH to the path of clang++")
+                            panic_abort!("Could not find clang. Please set LUISA_CLANG_PATH to the path of clang++ executable")
                         }
                     }
                 }),
@@ -363,7 +379,12 @@ impl LLVMPaths {
                     match var("LUISA_LLVM_PATH") {
                         Ok(s) => s,
                         Err(_) => {
-                            panic_abort!("Could not find LLVM. Please set LUISA_LLVM_PATH to the path of LLVM")
+                            let libllvm = if !cfg!(target_os = "windows") {
+                                "libLLVM.so"
+                            } else {
+                                "LLVM-C.dll"
+                            };
+                            panic_abort!("Could not find LLVM. Please set LUISA_LLVM_PATH to the path of {}", libllvm);
                         }
                     }
                 }),
@@ -441,14 +462,30 @@ impl LibLLVM {
             panic_abort!("only x86_64 and aarch64 are supported");
         }
         unsafe {
-            let lib = libloading::Library::new(&llvm_lib_path()).unwrap();
-            let LLVMContextCreate = lift(lib.get(b"LLVMContextCreate").unwrap());
-            let LLVMParseIRInContext = lift(lib.get(b"LLVMParseIRInContext").unwrap());
+            let path = llvm_lib_path();
+            let lib = libloading::Library::new(&path).unwrap_or_else(|e| {
+                panic_abort!("Failed to load LLVM: could not load {}, error: {}", path, e);
+            });
+            log::info!("Loading LLVM functions from {}", path);
+            macro_rules! load {
+                ($name:expr) => {
+                    lift(lib.get($name).unwrap_or_else(|e| {
+                        panic_abort!(
+                            "Failed to load LLVM function {}: could not load {}, error: {}",
+                            std::str::from_utf8($name).unwrap(),
+                            path,
+                            e
+                        );
+                    }))
+                };
+            }
+            let LLVMContextCreate = load!(b"LLVMContextCreate");
+            let LLVMParseIRInContext = load!(b"LLVMParseIRInContext");
             let LLVMCreateMemoryBufferWithMemoryRange =
-                lift(lib.get(b"LLVMCreateMemoryBufferWithMemoryRange").unwrap());
-            let LLVMParseBitcodeInContext2 = lift(lib.get(b"LLVMParseBitcodeInContext2").unwrap());
-            let LLVMDumpModule = lift(lib.get(b"LLVMDumpModule").unwrap());
-            let LLVMLinkInMCJIT = lift(lib.get(b"LLVMLinkInMCJIT").unwrap());
+                load!(b"LLVMCreateMemoryBufferWithMemoryRange");
+            let LLVMParseBitcodeInContext2 = load!(b"LLVMParseBitcodeInContext2");
+            let LLVMDumpModule = load!(b"LLVMDumpModule");
+            let LLVMLinkInMCJIT = load!(b"LLVMLinkInMCJIT");
 
             let LLVMInitializeNativeTarget = lift(
                 lib.get(if cfg!(target_arch = "x86_64") {
@@ -505,47 +542,36 @@ impl LibLLVM {
                 .unwrap(),
             );
 
-            let LLVMContextDispose = lift(lib.get(b"LLVMContextDispose").unwrap());
-            let LLVMDisposeModule = lift(lib.get(b"LLVMDisposeModule").unwrap());
-            let LLVMDisposeMemoryBuffer = lift(lib.get(b"LLVMDisposeMemoryBuffer").unwrap());
-            let LLVMOrcCreateNewThreadSafeContext =
-                lift(lib.get(b"LLVMOrcCreateNewThreadSafeContext").unwrap());
-            let LLVMOrcThreadSafeContextGetContext =
-                lift(lib.get(b"LLVMOrcThreadSafeContextGetContext").unwrap());
-            let LLVMOrcCreateNewThreadSafeModule =
-                lift(lib.get(b"LLVMOrcCreateNewThreadSafeModule").unwrap());
-            let LLVMOrcDisposeThreadSafeModule =
-                lift(lib.get(b"LLVMOrcDisposeThreadSafeModule").unwrap());
-            let LLVMOrcDisposeThreadSafeContext =
-                lift(lib.get(b"LLVMOrcDisposeThreadSafeContext").unwrap());
-            let LLVMOrcCreateLLJIT = lift(lib.get(b"LLVMOrcCreateLLJIT").unwrap());
-            let LLVMOrcDisposeLLJIT = lift(lib.get(b"LLVMOrcDisposeLLJIT").unwrap());
-            let LLVMOrcLLJITGetMainJITDylib =
-                lift(lib.get(b"LLVMOrcLLJITGetMainJITDylib").unwrap());
+            let LLVMContextDispose = load!(b"LLVMContextDispose");
+            let LLVMDisposeModule = load!(b"LLVMDisposeModule");
+            let LLVMDisposeMemoryBuffer = load!(b"LLVMDisposeMemoryBuffer");
+            let LLVMOrcCreateNewThreadSafeContext = load!(b"LLVMOrcCreateNewThreadSafeContext");
+            let LLVMOrcThreadSafeContextGetContext = load!(b"LLVMOrcThreadSafeContextGetContext");
+            let LLVMOrcCreateNewThreadSafeModule = load!(b"LLVMOrcCreateNewThreadSafeModule");
+            let LLVMOrcDisposeThreadSafeModule = load!(b"LLVMOrcDisposeThreadSafeModule");
+            let LLVMOrcDisposeThreadSafeContext = load!(b"LLVMOrcDisposeThreadSafeContext");
+            let LLVMOrcCreateLLJIT = load!(b"LLVMOrcCreateLLJIT");
+            let LLVMOrcDisposeLLJIT = load!(b"LLVMOrcDisposeLLJIT");
+            let LLVMOrcLLJITGetMainJITDylib = load!(b"LLVMOrcLLJITGetMainJITDylib");
 
-            let LLVMOrcLLJITAddLLVMIRModule =
-                lift(lib.get(b"LLVMOrcLLJITAddLLVMIRModule").unwrap());
-            let LLVMOrcLLJITLookup = lift(lib.get(b"LLVMOrcLLJITLookup").unwrap());
-            let LLVMGetErrorMessage = lift(lib.get(b"LLVMGetErrorMessage").unwrap());
-            let LLVMDisposeErrorMessage = lift(lib.get(b"LLVMDisposeErrorMessage").unwrap());
-            let LLVMOrcCreateDumpObjects = lift(lib.get(b"LLVMOrcCreateDumpObjects").unwrap());
+            let LLVMOrcLLJITAddLLVMIRModule = load!(b"LLVMOrcLLJITAddLLVMIRModule");
+            let LLVMOrcLLJITLookup = load!(b"LLVMOrcLLJITLookup");
+            let LLVMGetErrorMessage = load!(b"LLVMGetErrorMessage");
+            let LLVMDisposeErrorMessage = load!(b"LLVMDisposeErrorMessage");
+            let LLVMOrcCreateDumpObjects = load!(b"LLVMOrcCreateDumpObjects");
             let LLVMOrcObjectTransformLayerSetTransform =
-                lift(lib.get(b"LLVMOrcObjectTransformLayerSetTransform").unwrap());
-            let LLVMOrcLLJITGetObjTransformLayer =
-                lift(lib.get(b"LLVMOrcLLJITGetObjTransformLayer").unwrap());
-            let LLVMOrcDumpObjects_CallOperator =
-                lift(lib.get(b"LLVMOrcDumpObjects_CallOperator").unwrap());
-            let LLVMGetTargetFromName = lift(lib.get(b"LLVMGetTargetFromName").unwrap());
-            let LLVMCreateTargetMachine = lift(lib.get(b"LLVMCreateTargetMachine").unwrap());
-            let LLVMCreatePassBuilderOptions =
-                lift(lib.get(b"LLVMCreatePassBuilderOptions").unwrap());
-            let LLVMDisposePassBuilderOptions =
-                lift(lib.get(b"LLVMDisposePassBuilderOptions").unwrap());
-            let LLVMRunPasses = lift(lib.get(b"LLVMRunPasses").unwrap());
-            let LLVMOrcAbsoluteSymbols = lift(lib.get(b"LLVMOrcAbsoluteSymbols").unwrap());
-            let LLVMOrcLLJITMangleAndIntern =
-                lift(lib.get(b"LLVMOrcLLJITMangleAndIntern").unwrap());
-            let LLVMOrcJITDylibDefine = lift(lib.get(b"LLVMOrcJITDylibDefine").unwrap());
+                load!(b"LLVMOrcObjectTransformLayerSetTransform");
+            let LLVMOrcLLJITGetObjTransformLayer = load!(b"LLVMOrcLLJITGetObjTransformLayer");
+            let LLVMOrcDumpObjects_CallOperator = load!(b"LLVMOrcDumpObjects_CallOperator");
+            let LLVMGetTargetFromName = load!(b"LLVMGetTargetFromName");
+            let LLVMCreateTargetMachine = load!(b"LLVMCreateTargetMachine");
+            let LLVMCreatePassBuilderOptions = load!(b"LLVMCreatePassBuilderOptions");
+            let LLVMDisposePassBuilderOptions = load!(b"LLVMDisposePassBuilderOptions");
+            let LLVMRunPasses = load!(b"LLVMRunPasses");
+            let LLVMOrcAbsoluteSymbols = load!(b"LLVMOrcAbsoluteSymbols");
+            let LLVMOrcLLJITMangleAndIntern = load!(b"LLVMOrcLLJITMangleAndIntern");
+            let LLVMOrcJITDylibDefine = load!(b"LLVMOrcJITDylibDefine");
+            log::info!("LLVM functions loaded from {}", path);
             LibLLVM {
                 lib,
                 LLVMOrcJITDylibDefine,
@@ -605,7 +631,7 @@ impl LibLLVM {
     }
 }
 
-pub(crate) fn compile_llvm_ir(name: &String, path_: &String) -> KernelFn {
+pub(crate) fn compile_llvm_ir(name: &String, path_: &String) -> Option<KernelFn> {
     init_llvm();
     unsafe {
         let c = CONTEXT.lock();
@@ -613,7 +639,7 @@ pub(crate) fn compile_llvm_ir(name: &String, path_: &String) -> KernelFn {
             let mut c = c.borrow_mut();
             let c = c.as_mut().unwrap();
             if let Some(record) = c.cached_functions.get(path_) {
-                return *record;
+                return Some(*record);
             }
         }
         let record = {
@@ -649,7 +675,8 @@ pub(crate) fn compile_llvm_ir(name: &String, path_: &String) -> KernelFn {
             if (lib.LLVMParseBitcodeInContext2)(ctx, bc_buffer, &mut module as *mut LLVMModuleRef)
                 != 0
             {
-                panic_abort!("LLVMParseBitcodeInContext2 failed");
+                log::error!("LLVMParseBitcodeInContext2 failed");
+                return None;
             }
             // let mut msg: *mut i8 = std::ptr::null_mut();
             // if (lib.LLVMParseIRInContext)(
@@ -679,11 +706,13 @@ pub(crate) fn compile_llvm_ir(name: &String, path_: &String) -> KernelFn {
             let err = (lib.LLVMOrcLLJITAddLLVMIRModule)(c.jit, main_jd, tsm);
             if !err.is_null() {
                 lib.handle_error(err);
+                return None;
             }
             let mut addr: LLVMOrcExecutorAddress = 0;
             let err = (lib.LLVMOrcLLJITLookup)(c.jit, &mut addr, name.as_ptr());
             if !err.is_null() {
                 lib.handle_error(err);
+                return None;
             }
             (lib.LLVMOrcDisposeThreadSafeContext)(tsctx);
             let function = std::mem::transmute(addr as *mut u8);
@@ -694,7 +723,7 @@ pub(crate) fn compile_llvm_ir(name: &String, path_: &String) -> KernelFn {
             let c = c.as_mut().unwrap();
             c.cached_functions.insert(path_.clone(), record);
         }
-        record
+        Some(record)
     }
 }
 
@@ -791,18 +820,31 @@ impl Context {
                 {
                     let ctx = ctx as *const ShaderDispatchContext;
                     let ctx = &*ctx;
+                    if ctx.terminated.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    loop {
+                        let current = ctx.terminated.load(Ordering::SeqCst);
+                        if current {
+                            return;
+                        }
+                        match ctx.terminated.compare_exchange(
+                            current,
+                            true,
+                            Ordering::SeqCst,
+                            Ordering::Acquire,
+                        ) {
+                            Ok(false) => break,
+                            _ => return,
+                        }
+                    }
                     let shader = ctx.shader as *const ShaderImpl;
                     let shader = &*shader;
-                    let mut err = (&*ctx.error).lock();
-                    if err.is_none() {
-                        *err = Some(shader.messages[msg as usize].clone());
-                    }
-                    if cfg!(target_os = "windows") {
-                        eprintln!("{}", shader.messages[msg as usize]);
-                    }
+
+                    eprintln!("{}", shader.messages[msg as usize]);
                 }
 
-                panic!("##lc_kernel##");
+                panic!("kernel execution aborted");
             }
             add_symbol!(lc_abort, lc_abort);
             add_symbol!(__stack_chk_fail, libc::abort);
@@ -822,6 +864,24 @@ impl Context {
                 {
                     let ctx = ctx as *const ShaderDispatchContext;
                     let ctx = &*ctx;
+                    if ctx.terminated.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    loop {
+                        let current = ctx.terminated.load(Ordering::SeqCst);
+                        if current {
+                            return;
+                        }
+                        match ctx.terminated.compare_exchange(
+                            current,
+                            true,
+                            Ordering::SeqCst,
+                            Ordering::Acquire,
+                        ) {
+                            Ok(false) => break,
+                            _ => return,
+                        }
+                    }
                     let msg = CStr::from_ptr(msg).to_str().unwrap().to_string();
                     let idx = msg.find("{}").unwrap();
                     let mut display = String::new();
@@ -831,15 +891,9 @@ impl Context {
                     display.push_str(&msg[idx + 2..idx + 2 + idx2]);
                     display.push_str(&format!("{}", j));
                     display.push_str(&msg[idx + 2 + idx2 + 2..]);
-                    if cfg!(target_os = "windows") {
-                        eprintln!("{}", display);
-                    }
-                    let mut err = (&*ctx.error).lock();
-                    if err.is_none() {
-                        *err = Some(display);
-                    }
+                    eprintln!("{}", display);
                 }
-                panic!("##lc_kernel##");
+                panic!("kernel execution aborted");
             }
             add_symbol!(lc_abort_and_print_sll, lc_abort_and_print_sll);
             // min/max/abs/acos/asin/asinh/acosh/atan/atanh/atan2/
@@ -868,8 +922,18 @@ impl Context {
                 *s = a;
                 *c = b;
             }
+            #[repr(C)]
+            struct F32x2 {
+                x: f32,
+                y: f32,
+            }
+            extern "C" fn sincos_stret(x: f32) -> F32x2 {
+                let (x, y) = x.sin_cos();
+                F32x2 { x, y }
+            }
             add_symbol!(rsqrtf, rsqrtf);
             add_symbol!(sincosf, sincos_);
+            add_symbol!(__sincosf_stret, sincos_stret);
         }
         let work_dir = CString::new("").unwrap();
         let ident = CString::new("").unwrap();
@@ -904,29 +968,75 @@ fn target_name() -> String {
     if cfg!(target_arch = "x86_64") {
         "x86-64".to_string()
     } else if cfg!(target_arch = "aarch64") {
-        "aarch64".to_string()
+        "arm64".to_string()
     } else {
         panic_abort!("unsupported target")
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 fn cpu_features() -> Vec<String> {
-    if cfg!(target_arch = "x86_64") {
-        // "+avx,+avx2,+fma,+popcnt,+sse4.1,+sse4.2,+sse4a".to_string()
-        vec![
-            "avx".into(),
-            "avx2".into(),
-            "fma".into(),
-            "popcnt".into(),
-            "sse4.1".into(),
-            "sse4.2".into(),
-            "sse4a".into(),
-        ]
-    } else if cfg!(target_arch = "aarch64") {
-        vec!["neon".into()]
-    } else {
-        panic_abort!("unsupported target")
-    }
+    vec!["neon".into()]
+}
+
+#[rustfmt::skip]
+#[cfg(target_arch = "x86_64")]
+fn cpu_features() -> Vec<String> {
+    let mut features = vec![];
+    if is_x86_feature_detected!("aes") { features.push("aes"); }
+    if is_x86_feature_detected!("pclmulqdq") { features.push("pclmulqdq"); }
+    if is_x86_feature_detected!("rdrand") { features.push("rdrand"); }
+    if is_x86_feature_detected!("rdseed") { features.push("rdseed"); }
+    if is_x86_feature_detected!("tsc") { features.push("tsc"); }
+    if is_x86_feature_detected!("mmx") { features.push("mmx"); }
+    if is_x86_feature_detected!("sse") { features.push("sse"); }
+    if is_x86_feature_detected!("sse2") { features.push("sse2"); }
+    if is_x86_feature_detected!("sse3") { features.push("sse3"); }
+    if is_x86_feature_detected!("ssse3") { features.push("ssse3"); }
+    if is_x86_feature_detected!("sse4.1") { features.push("sse4.1"); }
+    if is_x86_feature_detected!("sse4.2") { features.push("sse4.2"); }
+    if is_x86_feature_detected!("sse4a") { features.push("sse4a"); }
+    if is_x86_feature_detected!("sha") { features.push("sha"); }
+    if is_x86_feature_detected!("avx") { features.push("avx"); }
+    if is_x86_feature_detected!("avx2") { features.push("avx2"); }
+    if is_x86_feature_detected!("avx512f") { features.push("avx512f"); }
+    if is_x86_feature_detected!("avx512cd") { features.push("avx512cd"); }
+    if is_x86_feature_detected!("avx512er") { features.push("avx512er"); }
+    if is_x86_feature_detected!("avx512pf") { features.push("avx512pf"); }
+    if is_x86_feature_detected!("avx512bw") { features.push("avx512bw"); }
+    if is_x86_feature_detected!("avx512dq") { features.push("avx512dq"); }
+    if is_x86_feature_detected!("avx512vl") { features.push("avx512vl"); }
+    if is_x86_feature_detected!("avx512ifma") { features.push("avx512ifma"); }
+    if is_x86_feature_detected!("avx512vbmi") { features.push("avx512vbmi"); }
+    if is_x86_feature_detected!("avx512vpopcntdq") { features.push("avx512vpopcntdq"); }
+    if is_x86_feature_detected!("avx512vbmi2") { features.push("avx512vbmi2"); }
+    if is_x86_feature_detected!("gfni") { features.push("gfni"); }
+    if is_x86_feature_detected!("vaes") { features.push("vaes"); }
+    if is_x86_feature_detected!("vpclmulqdq") { features.push("vpclmulqdq"); }
+    if is_x86_feature_detected!("avx512vnni") { features.push("avx512vnni"); }
+    if is_x86_feature_detected!("avx512bitalg") { features.push("avx512bitalg"); }
+    if is_x86_feature_detected!("avx512bf16") { features.push("avx512bf16"); }
+    if is_x86_feature_detected!("avx512vp2intersect") { features.push("avx512vp2intersect"); }
+    if is_x86_feature_detected!("f16c") { features.push("f16c"); }
+    if is_x86_feature_detected!("fma") { features.push("fma"); }
+    if is_x86_feature_detected!("bmi1") { features.push("bmi1"); }
+    if is_x86_feature_detected!("bmi2") { features.push("bmi2"); }
+    if is_x86_feature_detected!("abm") { features.push("abm"); }
+    if is_x86_feature_detected!("lzcnt") { features.push("lzcnt"); }
+    if is_x86_feature_detected!("tbm") { features.push("tbm"); }
+    if is_x86_feature_detected!("popcnt") { features.push("popcnt"); }
+    if is_x86_feature_detected!("fxsr") { features.push("fxsr"); }
+    if is_x86_feature_detected!("xsave") { features.push("xsave"); }
+    if is_x86_feature_detected!("xsaveopt") { features.push("xsaveopt"); }
+    if is_x86_feature_detected!("xsaves") { features.push("xsaves"); }
+    if is_x86_feature_detected!("xsavec") { features.push("xsavec"); }
+    if is_x86_feature_detected!("cmpxchg16b") { features.push("cmpxchg16b"); }
+    if is_x86_feature_detected!("adx") { features.push("adx"); }
+    if is_x86_feature_detected!("rtm") { features.push("rtm"); }
+    // this breaks msvc shipped with vs2019
+    // if is_x86_feature_detected!("movbe") { features.push("movbe"); }
+    // if is_x86_feature_detected!("ermsb") { features.push("ermsb"); }
+    features.into_iter().map(|s| s.to_string()).collect()
 }
 
 fn target_triple() -> String {
@@ -938,7 +1048,7 @@ fn target_triple() -> String {
         if cfg!(target_arch = "x86_64") {
             "x86_64-apple-darwin".to_string()
         } else if cfg!(target_arch = "aarch64") {
-            "aarch64-apple-darwin".to_string()
+            "arm64-apple-darwin".to_string()
         } else {
             panic_abort!("unsupported target")
         }

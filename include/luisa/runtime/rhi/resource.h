@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/7/30.
-//
-
 #pragma once
 
 #include <luisa/core/dll_export.h>
@@ -14,6 +10,10 @@ namespace luisa::compute {
 
 class DeviceInterface;
 class Device;
+
+namespace detail {
+class ShaderInvokeBase;
+}// namespace detail
 
 constexpr auto invalid_resource_handle = ~0ull;
 
@@ -131,6 +131,7 @@ struct ShaderOption {
 class LC_RUNTIME_API Resource {
 
     friend class Device;
+    friend class detail::ShaderInvokeBase;
 
 public:
     enum struct Tag : uint32_t {
@@ -159,6 +160,9 @@ private:
     ResourceCreationInfo _info{};
     Tag _tag{};
 
+private:
+    [[noreturn]] static void _error_invalid() noexcept;
+
 protected:
     static void _check_same_derived_types(const Resource &lhs,
                                           const Resource &rhs) noexcept;
@@ -181,6 +185,12 @@ protected:
         }
     }
 
+    void _check_is_valid() const noexcept {
+#ifndef NDEBUG
+        if (!*this) [[unlikely]] { _error_invalid(); }
+#endif
+    }
+
 protected:
     // protected constructors for derived classes
     Resource() noexcept { _info.invalidate(); }
@@ -195,7 +205,7 @@ public:
     Resource &operator=(const Resource &) noexcept = delete;
     [[nodiscard]] auto device() const noexcept { return _device.get(); }
     [[nodiscard]] auto handle() const noexcept { return _info.handle; }
-    [[nodiscard]] void *native_handle() const noexcept { return _info.native_handle; }
+    [[nodiscard]] auto native_handle() const noexcept { return _info.native_handle; }
     [[nodiscard]] auto tag() const noexcept { return _tag; }
     [[nodiscard]] explicit operator bool() const noexcept { return _info.valid(); }
     void set_name(luisa::string_view name) const noexcept;

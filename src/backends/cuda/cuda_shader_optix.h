@@ -1,7 +1,3 @@
-//
-// Created by Mike on 3/18/2023.
-//
-
 #include <luisa/core/spin_mutex.h>
 #include <luisa/core/stl/string.h>
 #include <luisa/core/stl/unordered_map.h>
@@ -11,6 +7,7 @@
 namespace luisa::compute::cuda {
 
 class CUDACommandEncoder;
+struct CUDAShaderMetadata;
 
 class CUDAShaderOptiX final : public CUDAShader {
 
@@ -43,9 +40,8 @@ private:
 
 public:
     CUDAShaderOptiX(optix::DeviceContext optix_ctx,
-                    const char *ptx, size_t ptx_size,
-                    const char *entry, bool enable_debug,
-                    luisa::vector<Usage> argument_usages,
+                    const char *ptx, size_t ptx_size, const char *entry,
+                    const CUDAShaderMetadata &metadata,
                     luisa::vector<ShaderDispatchCommand::Argument> bound_arguments = {}) noexcept;
     ~CUDAShaderOptiX() noexcept override;
     [[nodiscard]] void *handle() const noexcept override { return _pipeline; }

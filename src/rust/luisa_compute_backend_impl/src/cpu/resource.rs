@@ -6,14 +6,12 @@ use std::{
 
 use luisa_compute_api_types::{BindlessArrayUpdateModification, BindlessArrayUpdateOperation};
 use luisa_compute_cpu_kernel_defs as defs;
-use luisa_compute_ir::{context::type_hash, ir::Type, CArc};
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Condvar, Mutex};
 
 use super::texture::TextureImpl;
 
 pub struct EventImpl {
     pub mutex: Mutex<u64>,
-    pub host: AtomicU64,
     pub device: AtomicU64,
     pub on_signal: Condvar,
 }
@@ -21,19 +19,14 @@ impl EventImpl {
     pub fn new() -> Self {
         Self {
             mutex: Mutex::new(0),
-            host: AtomicU64::new(0),
             device: AtomicU64::new(0),
             on_signal: Condvar::new(),
         }
     }
-    pub fn signal(&self) {
+    pub fn signal(&self, ticket: u64) {
         let _lk = self.mutex.lock();
-        self.device.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.device.fetch_max(ticket, std::sync::atomic::Ordering::SeqCst);
         self.on_signal.notify_all();
-    }
-    pub fn record(&self) {
-        let _lk = self.mutex.lock();
-        self.host.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     pub fn wait(&self, ticket: u64) {
         let mut lk = self.mutex.lock();
@@ -44,14 +37,15 @@ impl EventImpl {
             self.on_signal.wait(&mut lk);
         }
     }
-    pub fn synchronize(&self) {
-        let ticket = self.host.load(std::sync::atomic::Ordering::Relaxed);
+    pub fn synchronize(&self, ticket: u64) {
         self.wait(ticket);
+    }
+    pub fn is_completed(&self, ticket: u64) -> bool {
+        return self.device.load(std::sync::atomic::Ordering::SeqCst) >= ticket;
     }
 }
 #[repr(C)]
 pub struct BufferImpl {
-    pub lock: RwLock<()>,
     pub data: *mut u8,
     pub size: usize,
     pub align: usize,
@@ -134,7 +128,6 @@ impl BufferImpl {
         let layout = Layout::from_size_align(size, align).unwrap();
         let data = unsafe { std::alloc::alloc_zeroed(layout) };
         Self {
-            lock: RwLock::new(()),
             data,
             size,
             align,

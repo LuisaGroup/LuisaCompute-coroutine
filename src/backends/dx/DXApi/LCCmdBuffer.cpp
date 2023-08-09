@@ -490,7 +490,7 @@ public:
             auto buffer = reinterpret_cast<Buffer *>(t.handle);
             bindProps->emplace_back();
             BeforeDispatch();
-            bd->DispatchComputeIndirect(cs, *buffer, *bindProps);
+            bd->DispatchComputeIndirect(cs, *buffer, t.offset, *bindProps);
         } else {
             auto &&t = cmd->dispatch_size();
             // auto bfView = bd->GetCB()->GetAlloc()->GetTempUploadBuffer(16, 16);
@@ -868,7 +868,7 @@ void LCCmdBuffer::Execute(
     auto allocator = queue.CreateAllocator(maxAlloc);
     bool cmdListIsEmpty = true;
     {
-        std::lock_guard lck{mtx};
+        std::unique_lock lck{mtx};
         tracker.listType = allocator->Type();
         LCPreProcessVisitor ppVisitor;
         ppVisitor.stateTracker = &tracker;
@@ -907,8 +907,8 @@ void LCCmdBuffer::Execute(
         ID3D12DescriptorHeap *h[2] = {
             device->globalHeap->GetHeap(),
             device->samplerHeap->GetHeap()};
-        for (auto &&lst : cmdLists) {
-            cmdListIsEmpty = cmdListIsEmpty && lst.empty();
+        for (auto lst : cmdLists) {
+            cmdListIsEmpty = cmdListIsEmpty && (lst == nullptr);
             if (!cmdListIsEmpty) {
                 cmdBuffer->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
             }
@@ -919,8 +919,9 @@ void LCCmdBuffer::Execute(
             ppVisitor.bottomAccelDatas->clear();
             ppVisitor.buildAccelSize = 0;
             // Preprocess: record resources' states
-            for (auto &&i : lst)
-                i->accept(ppVisitor);
+            for (auto i = lst; i != nullptr; i = i->p_next) {
+                i->cmd->accept(ppVisitor);
+            }
             visitor.bottomAccelData = ppVisitor.bottomAccelDatas->data();
             DefaultBuffer const *accelScratchBuffer;
             if (ppVisitor.buildAccelSize) {
@@ -951,8 +952,9 @@ void LCCmdBuffer::Execute(
                 cmdBuilder);
             visitor.bufferVec = ppVisitor.argVecs->data();
             // Execute commands
-            for (auto &&i : lst)
-                i->accept(visitor);
+            for (auto i = lst; i != nullptr; i = i->p_next) {
+                i->cmd->accept(visitor);
+            }
             if (!updateAccel.empty()) {
                 tracker.ClearFence();
                 tracker.RecordState(
@@ -970,15 +972,17 @@ void LCCmdBuffer::Execute(
                     });
                 }
                 tracker.RestoreState(cmdBuilder);
+                auto localUpdateAccel = std::move(updateAccel);
+                lck.unlock();
                 queue.ForceSync(
                     allocator,
                     *cmdBuffer);
-                for (auto &&i : updateAccel) {
+                for (auto &&i : localUpdateAccel) {
                     i.accel.visit([&](auto &&p) {
                         p->CheckAccel(cmdBuilder);
                     });
                 }
-                updateAccel.clear();
+                lck.lock();
             }
             tracker.ClearFence();
         }

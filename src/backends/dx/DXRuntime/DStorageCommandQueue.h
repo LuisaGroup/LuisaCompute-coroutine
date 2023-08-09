@@ -34,7 +34,6 @@ class DStorageCommandQueue : public CmdQueueBase{
                       bool wakeupThread)
             : evt{std::forward<Arg>(arg)}, fence{fence}, wakeupThread{wakeupThread} {}
     };
-    IDStorageFactory *factory;
     std::mutex mtx;
     std::mutex exec_mtx;
     std::thread thd;
@@ -45,14 +44,14 @@ class DStorageCommandQueue : public CmdQueueBase{
     DSTORAGE_REQUEST_SOURCE_TYPE sourceType;
     bool enabled = true;
     ComPtr<IDStorageQueue2> queue;
-    vstd::LockFreeArrayQueue<CallbackEvent> executedAllocators;
+    vstd::SingleThreadArrayQueue<CallbackEvent> executedAllocators;
     void ExecuteThread();
 
 public:
-    void Signal(ID3D12Fence *fence, UINT64 &value);
+    void Signal(ID3D12Fence *fence, UINT64 value);
     uint64 LastFrame() const { return lastFrame; }
     DStorageCommandQueue(IDStorageFactory *factory, Device *device, luisa::compute::DStorageStreamSource source);
-    void AddEvent(LCEvent const *evt);
+    void AddEvent(LCEvent const *evt, uint64 fenceIdx);
     uint64 Execute(luisa::compute::CommandList &&list);
     void Complete(uint64 fence);
     void Complete();

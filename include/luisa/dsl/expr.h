@@ -140,7 +140,8 @@ struct Expr
 /// Class of Expr<std::array<T, N>>
 template<typename T, size_t N>
 struct Expr<std::array<T, N>>
-    : detail::ExprEnableSubscriptAccess<Expr<std::array<T, N>>>,
+    : detail::ExprEnableBitwiseCast<Expr<std::array<T, N>>>,
+      detail::ExprEnableSubscriptAccess<Expr<std::array<T, N>>>,
       detail::ExprEnableGetMemberByIndex<Expr<std::array<T, N>>> {
     LUISA_EXPR_COMMON(std::array<T, N>)
 };
@@ -148,7 +149,8 @@ struct Expr<std::array<T, N>>
 /// Class of Expr<T[N]>
 template<typename T, size_t N>
 struct Expr<T[N]>
-    : detail::ExprEnableSubscriptAccess<Expr<T[N]>>,
+    : detail::ExprEnableBitwiseCast<Expr<T[N]>>,
+      detail::ExprEnableSubscriptAccess<Expr<T[N]>>,
       detail::ExprEnableGetMemberByIndex<Expr<T[N]>> {
     LUISA_EXPR_COMMON(T[N])
 };
@@ -156,7 +158,8 @@ struct Expr<T[N]>
 /// Class of Expr<Matrix><N>>. Can be constructed from Matrix<N>
 template<size_t N>
 struct Expr<Matrix<N>>
-    : detail::ExprEnableSubscriptAccess<Expr<Matrix<N>>>,
+    : detail::ExprEnableBitwiseCast<Expr<Matrix<N>>>,
+      detail::ExprEnableSubscriptAccess<Expr<Matrix<N>>>,
       detail::ExprEnableGetMemberByIndex<Expr<Matrix<N>>> {
     LUISA_EXPR_COMMON(Matrix<N>)
     LUISA_EXPR_FROM_LITERAL(Matrix<N>)
@@ -233,6 +236,10 @@ struct ExprEnableStaticCast {
             expr_value_t<T>, expr_value_t<Dest>>
     [[nodiscard]] auto cast() const noexcept {
         auto src = def(*static_cast<const T *>(this));
+        if constexpr (std::is_same_v<expr_value_t<T>,
+                                     expr_value_t<Dest>>) {
+            return src;
+        }
         using TrueDest = expr_value_t<Dest>;
         return def<TrueDest>(
             FunctionBuilder::current()->cast(
@@ -250,12 +257,22 @@ struct ExprEnableBitwiseCast {
             expr_value_t<T>, expr_value_t<Dest>>
     [[nodiscard]] auto as() const noexcept {
         auto src = def(*static_cast<const T *>(this));
+        using TrueSrc = expr_value_t<T>;
         using TrueDest = expr_value_t<Dest>;
+        // cast between same types is a no-op
+        if constexpr (std::is_same_v<TrueSrc, TrueDest>) {
+            return src;
+        }
+        // cast between integral types can be reduced to a static cast
+        auto op = CastOp::BITWISE;
+        if constexpr (is_scalar_v<TrueSrc> && is_integral_v<TrueSrc> &&
+                      is_scalar_v<TrueDest> && is_integral_v<TrueDest>) {
+            op = CastOp::STATIC;
+        }
         return def<TrueDest>(
             FunctionBuilder::current()->cast(
                 Type::of<TrueDest>(),
-                CastOp::BITWISE,
-                src.expression()));
+                op, src.expression()));
     }
 };
 
@@ -308,4 +325,3 @@ Expr(T) -> Expr<T>;
     ~Class() noexcept = delete;
 
 }// namespace luisa::compute
-

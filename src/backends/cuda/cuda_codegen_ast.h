@@ -1,7 +1,3 @@
-//
-// Created by Mike on 2021/11/8.
-//
-
 #pragma once
 
 #include <luisa/ast/function.h>
@@ -10,6 +6,8 @@
 
 namespace luisa::compute::cuda {
 
+class CUDAConstantPrinter;
+
 /**
  * @brief CUDA code generator
  * 
@@ -17,6 +15,7 @@ namespace luisa::compute::cuda {
 class CUDACodegenAST final : private TypeVisitor, private ExprVisitor, private StmtVisitor {
 
 public:
+    friend class CUDAConstantPrinter;
     class RayQueryLowering;
 
 private:
@@ -47,6 +46,7 @@ private:
     void visit(const RefExpr *expr) override;
     void visit(const CallExpr *expr) override;
     void visit(const CastExpr *expr) override;
+    void visit(const TypeIDExpr *expr) override;
     void visit(const BreakStmt *stmt) override;
     void visit(const ContinueStmt *stmt) override;
     void visit(const ReturnStmt *stmt) override;
@@ -82,7 +82,9 @@ private:
 public:
     CUDACodegenAST(StringScratch &scratch, bool allow_indirect) noexcept;
     ~CUDACodegenAST() noexcept override;
-    void emit(Function f, luisa::string_view native_include);
+    void emit(Function f,
+              luisa::string_view device_lib,
+              luisa::string_view native_include);
 };
 
 }// namespace luisa::compute::cuda

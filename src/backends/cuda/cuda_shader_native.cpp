@@ -1,7 +1,3 @@
-//
-// Created by Mike on 3/18/2023.
-//
-
 #include <fstream>
 
 #include <luisa/runtime/rhi/command.h>

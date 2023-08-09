@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/6/30.
-//
-
 #pragma once
 
 #include <bitset>
@@ -88,10 +84,12 @@ enum struct CallOp : uint32_t {
     ANY,// (boolN)
 
     SELECT,  // (vecN, vecN, boolN)
-    CLAMP,   // (vecN, vecN,vecN)
+    CLAMP,   // (vecN, vecN, vecN)
     SATURATE,// (vecN)
-    LERP,    // (vecN, vecN,vecN)
-    STEP,    // (x, y): (x >= y) ? 1 : 0
+    LERP,    // (vecN, vecN, vecN)
+
+    SMOOTHSTEP,// (vecN, vecN, vecN)
+    STEP,       // (x, y): (x >= y) ? 1 : 0
 
     ABS,// (vecN)
     MIN,// (vecN)
@@ -174,31 +172,37 @@ enum struct CallOp : uint32_t {
     BUFFER_READ,  /// [(buffer, index) -> value]: reads the index-th element in buffer
     BUFFER_WRITE, /// [(buffer, index, value) -> void]: writes value into the index-th element of buffer
     BUFFER_SIZE,  /// [(buffer) -> size]
+
+    BYTE_BUFFER_READ,  /// [(buffer, byte_index) -> value]: reads the index-th element in buffer
+    BYTE_BUFFER_WRITE, /// [(buffer, byte_index, value) -> void]: writes value into the index-th element of buffer
+    BYTE_BUFFER_SIZE,  /// [(buffer) -> size_bytes]
+
     TEXTURE_READ, /// [(texture, coord) -> value]
     TEXTURE_WRITE,/// [(texture, coord, value) -> void]
     TEXTURE_SIZE, /// [(texture) -> Vector<uint, dim>]
 
-    BINDLESS_TEXTURE2D_SAMPLE,         // (bindless_array, index: uint, uv: float2): float4
-    BINDLESS_TEXTURE2D_SAMPLE_LEVEL,   // (bindless_array, index: uint, uv: float2, level: float): float4
-    BINDLESS_TEXTURE2D_SAMPLE_GRAD,    // (bindless_array, index: uint, uv: float2, ddx: float2, ddy: float2): float4
+    BINDLESS_TEXTURE2D_SAMPLE,           // (bindless_array, index: uint, uv: float2): float4
+    BINDLESS_TEXTURE2D_SAMPLE_LEVEL,     // (bindless_array, index: uint, uv: float2, level: float): float4
+    BINDLESS_TEXTURE2D_SAMPLE_GRAD,      // (bindless_array, index: uint, uv: float2, ddx: float2, ddy: float2): float4
     BINDLESS_TEXTURE2D_SAMPLE_GRAD_LEVEL,// (bindless_array, index: uint, uv: float2, ddx: float2, ddy: float2,  mip_clamp: float): float4
-    BINDLESS_TEXTURE3D_SAMPLE,         // (bindless_array, index: uint, uv: float3): float4
-    BINDLESS_TEXTURE3D_SAMPLE_LEVEL,   // (bindless_array, index: uint, uv: float3, level: float): float4
-    BINDLESS_TEXTURE3D_SAMPLE_GRAD,    // (bindless_array, index: uint, uv: float3, ddx: float3, ddy: float3): float4
-    BINDLESS_TEXTURE3D_SAMPLE_GRAD_LEVEL,    // (bindless_array, index: uint, uv: float3, ddx: float3, ddy: float3,  mip_clamp: float): float4
-    BINDLESS_TEXTURE2D_READ,           // (bindless_array, index: uint, coord: uint2): float4
-    BINDLESS_TEXTURE3D_READ,           // (bindless_array, index: uint, coord: uint3): float4
-    BINDLESS_TEXTURE2D_READ_LEVEL,     // (bindless_array, index: uint, coord: uint2, level: uint): float4
-    BINDLESS_TEXTURE3D_READ_LEVEL,     // (bindless_array, index: uint, coord: uint3, level: uint): float4
-    BINDLESS_TEXTURE2D_SIZE,           // (bindless_array, index: uint): uint2
-    BINDLESS_TEXTURE3D_SIZE,           // (bindless_array, index: uint): uint3
-    BINDLESS_TEXTURE2D_SIZE_LEVEL,     // (bindless_array, index: uint, level: uint): uint2
-    BINDLESS_TEXTURE3D_SIZE_LEVEL,     // (bindless_array, index: uint, level: uint): uint3
+    BINDLESS_TEXTURE3D_SAMPLE,           // (bindless_array, index: uint, uv: float3): float4
+    BINDLESS_TEXTURE3D_SAMPLE_LEVEL,     // (bindless_array, index: uint, uv: float3, level: float): float4
+    BINDLESS_TEXTURE3D_SAMPLE_GRAD,      // (bindless_array, index: uint, uv: float3, ddx: float3, ddy: float3): float4
+    BINDLESS_TEXTURE3D_SAMPLE_GRAD_LEVEL,// (bindless_array, index: uint, uv: float3, ddx: float3, ddy: float3,  mip_clamp: float): float4
+    BINDLESS_TEXTURE2D_READ,             // (bindless_array, index: uint, coord: uint2): float4
+    BINDLESS_TEXTURE3D_READ,             // (bindless_array, index: uint, coord: uint3): float4
+    BINDLESS_TEXTURE2D_READ_LEVEL,       // (bindless_array, index: uint, coord: uint2, level: uint): float4
+    BINDLESS_TEXTURE3D_READ_LEVEL,       // (bindless_array, index: uint, coord: uint3, level: uint): float4
+    BINDLESS_TEXTURE2D_SIZE,             // (bindless_array, index: uint): uint2
+    BINDLESS_TEXTURE3D_SIZE,             // (bindless_array, index: uint): uint3
+    BINDLESS_TEXTURE2D_SIZE_LEVEL,       // (bindless_array, index: uint, level: uint): uint2
+    BINDLESS_TEXTURE3D_SIZE_LEVEL,       // (bindless_array, index: uint, level: uint): uint3
 
     BINDLESS_BUFFER_READ,             // (bindless_array, index: uint, elem_index: uint): expr->type()
     BINDLESS_BYTE_ADDRESS_BUFFER_READ,// (bindless_array, index: uint, offset_bytes: uint): expr->type()
-    BINDLESS_BUFFER_SIZE,             // (bindless_array, index: uint) -> size
-    BINDLESS_BUFFER_TYPE,             // (bindless_array, index: uint) -> type
+    BINDLESS_BUFFER_SIZE,             // (bindless_array, index: uint, stride: uint) -> size
+    BINDLESS_BUFFER_TYPE,             // (bindless_array, index: uint) -> uint64 (type id of the element); the returned value
+                                      // could be compared with the value of a TypeIDExpr to examine the type of the buffer
 
     MAKE_BOOL2, // (bool, bool2)
     MAKE_BOOL3, // (bool, bool3)
@@ -228,10 +232,16 @@ enum struct CallOp : uint32_t {
     MAKE_HALF2,  // (scalar, vec2)
     MAKE_HALF3,  // (scalar, vec3)
     MAKE_HALF4,  // (scalar, vec4)
+    MAKE_DOUBLE2,// (scalar, vec2)
+    MAKE_DOUBLE3,// (scalar, vec3)
+    MAKE_DOUBLE4,// (scalar, vec4)
 
     MAKE_FLOAT2X2,// (float2x2) / (float3x3) / (float4x4)
     MAKE_FLOAT3X3,// (float2x2) / (float3x3) / (float4x4)
     MAKE_FLOAT4X4,// (float2x2) / (float3x3) / (float4x4)
+
+    // debugging
+    ASSERT,// (bool) -> void
 
     // optimization hints
     ASSUME,     // ()
@@ -241,13 +251,17 @@ enum struct CallOp : uint32_t {
     ZERO,
     ONE,
 
+    // Pack/unpack to array<uint, ceil(sizeof(T)/4))
+    PACK,   // (T) -> array<uint, ceil(sizeof(T)/4))
+    UNPACK, // (array<uint, ceil(sizeof(T)/4)) -> T
+
     // autodiff ops
-    REQUIRES_GRADIENT,
-    GRADIENT,
-    GRADIENT_MARKER,
-    ACCUMULATE_GRADIENT,
-    BACKWARD,
-    DETACH,
+    REQUIRES_GRADIENT,  // (expr) -> void
+    GRADIENT,           // (expr) -> expr
+    GRADIENT_MARKER,    // (ref, expr) -> void
+    ACCUMULATE_GRADIENT,// (ref, expr) -> void
+    BACKWARD,           // (expr) -> void
+    DETACH,             // (expr) -> expr
 
     // ray tracing
     RAY_TRACING_INSTANCE_TRANSFORM,     // (Accel, uint)
@@ -275,9 +289,33 @@ enum struct CallOp : uint32_t {
     // partial derivative
     DDX,// (arg: float vector): float vector
     DDY,// (arg: float vector): float vector
+    
+    // Wave:
+    WARP_LANE_COUNT, // (): uint
+    WARP_LANE_INDEX, // (): uint
+    WARP_IS_FIRST_ACTIVE_LANE, // (): bool
+    WARP_ACTIVE_ALL_EQUAL, // (scalar/vector): boolN
+    WARP_ACTIVE_BIT_AND, // (intN): intN
+    WARP_ACTIVE_BIT_OR, // (intN): intN
+    WARP_ACTIVE_BIT_XOR, // (intN): intN
+    WARP_ACTIVE_COUNT_BITS, // (bool): uint
+    WARP_ACTIVE_MAX, // (type: scalar/vector/matrix): type
+    WARP_ACTIVE_MIN, // (type: scalar/vector/matrix): type
+    WARP_ACTIVE_PRODUCT, // (type: scalar/vector/matrix): type
+    WARP_ACTIVE_SUM, // (type: scalar/vector/matrix): type
+    WARP_ACTIVE_ALL, // (bool): bool
+    WARP_ACTIVE_ANY, // (bool): bool
+    WARP_ACTIVE_BIT_MASK, // (bool): uint4 (uint4 contained 128-bit)
+    WARP_PREFIX_COUNT_BITS, // (bool): uint (count bits before this lane)
+    WARP_PREFIX_SUM, // (bool): uint (count bits before this lane)
+    WARP_PREFIX_PRODUCT, // (bool): uint (count bits before this lane)
+    WARP_READ_LANE_AT, // (type, index: uint): type (read this variable's value at this lane)
+    WARP_READ_FIRST_LANE, // (type, index: uint): type (read this variable's value at first lane)
+
 
     // indirect
     INDIRECT_CLEAR_DISPATCH_BUFFER,  // (Buffer): void
+    INDIRECT_SET_DISPATCH_KERNEL,// (Buffer, uint offset, uint3 block_size, uint3 dispatch_size, uint kernel_id)
     INDIRECT_EMPLACE_DISPATCH_KERNEL,// (Buffer, uint3 block_size, uint3 dispatch_size, uint kernel_id)
 
 };
@@ -285,30 +323,18 @@ enum struct CallOp : uint32_t {
 static constexpr size_t call_op_count = to_underlying(CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL) + 1u;
 
 [[nodiscard]] constexpr auto is_atomic_operation(CallOp op) noexcept {
-    return op == CallOp::ATOMIC_EXCHANGE ||
-           op == CallOp::ATOMIC_COMPARE_EXCHANGE ||
-           op == CallOp::ATOMIC_FETCH_ADD ||
-           op == CallOp::ATOMIC_FETCH_SUB ||
-           op == CallOp::ATOMIC_FETCH_AND ||
-           op == CallOp::ATOMIC_FETCH_OR ||
-           op == CallOp::ATOMIC_FETCH_XOR ||
-           op == CallOp::ATOMIC_FETCH_MIN ||
-           op == CallOp::ATOMIC_FETCH_MAX;
+    auto op_value = luisa::to_underlying(op);
+    return op_value >= luisa::to_underlying(CallOp::ATOMIC_EXCHANGE) && op_value <= luisa::to_underlying(CallOp::ATOMIC_FETCH_MAX);
+}
+
+[[nodiscard]] constexpr auto is_autodiff_operation(CallOp op) noexcept {
+    auto op_value = luisa::to_underlying(op);
+    return op_value >= luisa::to_underlying(CallOp::REQUIRES_GRADIENT) && op_value <= luisa::to_underlying(CallOp::DETACH);
 }
 
 [[nodiscard]] constexpr auto is_vector_maker(CallOp op) noexcept {
-    return op == CallOp::MAKE_BOOL2 ||
-           op == CallOp::MAKE_BOOL3 ||
-           op == CallOp::MAKE_BOOL4 ||
-           op == CallOp::MAKE_INT2 ||
-           op == CallOp::MAKE_INT3 ||
-           op == CallOp::MAKE_INT4 ||
-           op == CallOp::MAKE_UINT2 ||
-           op == CallOp::MAKE_UINT3 ||
-           op == CallOp::MAKE_UINT4 ||
-           op == CallOp::MAKE_FLOAT2 ||
-           op == CallOp::MAKE_FLOAT3 ||
-           op == CallOp::MAKE_FLOAT4;
+    auto op_value = luisa::to_underlying(op);
+    return op_value >= luisa::to_underlying(CallOp::MAKE_BOOL2) && op_value <= luisa::to_underlying(CallOp::MAKE_FLOAT4);
 }
 
 [[nodiscard]] constexpr auto is_matrix_maker(CallOp op) noexcept {
@@ -316,7 +342,6 @@ static constexpr size_t call_op_count = to_underlying(CallOp::INDIRECT_EMPLACE_D
            op == CallOp::MAKE_FLOAT3X3 ||
            op == CallOp::MAKE_FLOAT4X4;
 }
-
 /**
  * @brief Set of call operations.
  * 
@@ -363,6 +388,10 @@ public:
                test(CallOp::RAY_TRACING_QUERY_ALL) ||
                test(CallOp::RAY_TRACING_QUERY_ANY);
     }
+    [[nodiscard]] auto uses_ray_query() const noexcept {
+        return test(CallOp::RAY_TRACING_QUERY_ALL) ||
+               test(CallOp::RAY_TRACING_QUERY_ANY);
+    }
     [[nodiscard]] auto uses_atomic() const noexcept {
         return test(CallOp::ATOMIC_FETCH_ADD) ||
                test(CallOp::ATOMIC_FETCH_SUB) ||
@@ -373,6 +402,14 @@ public:
                test(CallOp::ATOMIC_EXCHANGE) ||
                test(CallOp::ATOMIC_EXCHANGE) ||
                test(CallOp::ATOMIC_COMPARE_EXCHANGE);
+    }
+    [[nodiscard]] auto uses_autodiff() const noexcept {
+        return test(CallOp::REQUIRES_GRADIENT) ||
+               test(CallOp::GRADIENT) ||
+               test(CallOp::GRADIENT_MARKER) ||
+               test(CallOp::ACCUMULATE_GRADIENT) ||
+               test(CallOp::BACKWARD) ||
+               test(CallOp::DETACH);
     }
 };
 

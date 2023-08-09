@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/15.
-//
-
 #pragma once
 
 #include <luisa/core/stl/queue.h>
@@ -11,6 +7,8 @@
 #include <luisa/runtime/command_list.h>
 #include "metal_api.h"
 #include "metal_stage_buffer_pool.h"
+
+LUISA_EXTERN_C void luisa_compute_metal_stream_print_function_logs(MTL::LogContainer *logs);
 
 namespace luisa::compute::metal {
 
@@ -41,8 +39,8 @@ protected:
 public:
     MetalStream(MTL::Device *device, size_t max_commands) noexcept;
     virtual ~MetalStream() noexcept;
-    virtual void signal(MetalEvent *event) noexcept;
-    virtual void wait(MetalEvent *event) noexcept;
+    virtual void signal(MetalEvent *event, uint64_t value) noexcept;
+    virtual void wait(MetalEvent *event, uint64_t value) noexcept;
     virtual void synchronize() noexcept;
     virtual void dispatch(CommandList &&list) noexcept;
     void present(MetalSwapchain *swapchain, MetalTexture *image) noexcept;

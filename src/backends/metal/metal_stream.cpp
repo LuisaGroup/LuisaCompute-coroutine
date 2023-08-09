@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/15.
-//
-
 #include <luisa/core/logging.h>
 #include "metal_event.h"
 #include "metal_texture.h"
@@ -43,15 +39,15 @@ MetalStageBufferPool *MetalStream::download_pool() noexcept {
     return _download_pool.get();
 }
 
-void MetalStream::signal(MetalEvent *event) noexcept {
+void MetalStream::signal(MetalEvent *event, uint64_t value) noexcept {
     auto command_buffer = _queue->commandBufferWithUnretainedReferences();
-    event->signal(command_buffer);
+    event->signal(command_buffer, value);
     command_buffer->commit();
 }
 
-void MetalStream::wait(MetalEvent *event) noexcept {
+void MetalStream::wait(MetalEvent *event, uint64_t value) noexcept {
     auto command_buffer = _queue->commandBufferWithUnretainedReferences();
-    event->wait(command_buffer);
+    event->wait(command_buffer, value);
     command_buffer->commit();
 }
 
@@ -125,8 +121,18 @@ void MetalStream::submit(MTL::CommandBuffer *command_buffer,
             for (auto callback : callbakcs) { callback->recycle(); }
         });
     }
+#ifndef NDEBUG
+    command_buffer->addCompletedHandler(^(MTL::CommandBuffer *cb) noexcept {
+        if (auto error = cb->error()) {
+            LUISA_WARNING("CommandBuffer execution error: {}.",
+                          error->localizedDescription()->utf8String());
+        }
+        if (auto logs = cb->logs()) {
+            luisa_compute_metal_stream_print_function_logs(logs);
+        }
+    });
+#endif
     command_buffer->commit();
 }
 
 }// namespace luisa::compute::metal
-

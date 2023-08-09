@@ -18,8 +18,10 @@
 
 namespace lc::validation {
 Stream::Stream(uint64_t handle, StreamTag stream_tag) : RWResource{handle, Tag::STREAM, false}, _stream_tag{stream_tag} {}
-void Stream::signal(Event *evt) {
-    evt->signaled.force_emplace(this, _executed_layer);
+std::recursive_mutex stream_global_lock;
+void Stream::signal(Event *evt, uint64_t fence) {
+    std::lock_guard lck{stream_global_lock};
+    evt->signaled.force_emplace(this, Event::Signaled{fence, _executed_layer});
 }
 uint64_t Stream::stream_synced_frame(Stream *stream) const {
     auto iter = waited_stream.find(stream);
@@ -29,9 +31,12 @@ uint64_t Stream::stream_synced_frame(Stream *stream) const {
         return iter->second;
     }
 }
-void Stream::wait(Event *evt) {
+void Stream::wait(Event *evt, uint64_t fence) {
+    std::lock_guard lck{stream_global_lock};
     for (auto &&i : evt->signaled) {
-        waited_stream.force_emplace(i.first, i.second);
+        if (fence >= i.second.event_fence) {
+            waited_stream.force_emplace(i.first, i.second.stream_fence);
+        }
     }
 }
 namespace detail {
@@ -49,10 +54,11 @@ static vstd::string usage_name(Usage usage) {
 }
 }// namespace detail
 void Stream::check_compete() {
+    std::lock_guard lck{stream_global_lock};
     for (auto &&iter : res_usages) {
         auto res = iter.first;
         for (auto &&stream_iter : res->info()) {
-            auto other_stream = stream_iter.first.lock().get();
+            auto other_stream = RWResource::get<Stream>(stream_iter.first);
             if (!other_stream || other_stream == this) continue;
             auto synced_frame = stream_synced_frame(other_stream);
             if (stream_iter.second.last_frame > synced_frame) {
@@ -78,7 +84,6 @@ void Stream::check_compete() {
         }
     }
 }
-std::mutex stream_global_lock;
 void Stream::dispatch() {
     std::lock_guard lck{stream_global_lock};
     _executed_layer++;
@@ -366,6 +371,7 @@ void Stream::dispatch(DeviceInterface *dev, CommandList &cmd_list) {
     }
 }
 void Stream::sync_layer(uint64_t layer) {
+    std::lock_guard lck{stream_global_lock};
     if (_synced_layer >= layer) return;
     _synced_layer = layer;
     for (auto &&i : waited_stream) {
@@ -376,11 +382,22 @@ void Stream::sync_layer(uint64_t layer) {
 void Stream::sync() {
     sync_layer(_executed_layer);
 }
-void Event::sync() {
+void Event::sync(uint64_t fence) {
+    std::lock_guard lck{stream_global_lock};
+    vstd::vector<Stream *> removed_stream;
     for (auto &&i : signaled) {
-        i.first->sync_layer(i.second);
+        if (fence >= i.second.event_fence) {
+            i.first->sync_layer(i.second.stream_fence);
+            removed_stream.emplace_back(i.first);
+        }
     }
-    signaled.clear();
+    if (removed_stream.size() == signaled.size()) {
+        signaled.clear();
+    } else {
+        for (auto &&i : removed_stream) {
+            signaled.erase(i);
+        }
+    }
 }
 vstd::string Stream::stream_tag() const {
     switch (_stream_tag) {

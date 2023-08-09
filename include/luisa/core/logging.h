@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/2/2.
-//
-
 #pragma once
 
 #include <string_view>
@@ -112,6 +108,9 @@ LC_CORE_API void log_flush() noexcept;
 /// LUISA_ERROR with file and line information
 #define LUISA_ERROR_WITH_LOCATION(fmt, ...) \
     LUISA_ERROR(fmt " [{}:{}]" __VA_OPT__(, ) __VA_ARGS__, __FILE__, __LINE__)
+
+#define LUISA_NOT_IMPLEMENTED() \
+    LUISA_ERROR_WITH_LOCATION("Not implemented.")
 
 #define LUISA_ASSERT(x, fmt, ...)                \
     do {                                         \

@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/3/18.
-//
-
 #pragma once
 
 #include <luisa/core/concepts.h>
@@ -12,16 +8,13 @@
 #ifdef LUISA_ENABLE_API
 #include <luisa/api/common.h>
 #endif
-
+namespace lc::validation {
+class Device;
+}// namespace lc::validation
 namespace luisa::compute {
 
-namespace detail {
-class CommandListConverter;
-}// namespace detail
-
 class LC_RUNTIME_API CommandList : concepts::Noncopyable {
-
-    friend class detail::CommandListConverter;
+    friend class lc::validation::Device;
 
 public:
     class Commit;
@@ -32,12 +25,6 @@ private:
     CommandContainer _commands;
     CallbackContainer _callbacks;
     bool _committed{false};
-
-#ifdef LUISA_ENABLE_API
-    // For backends that use C API only
-    // DO NOT USE THIS FIELD OTHERWISE
-    luisa::optional<LCCommandList> _c_list;
-#endif
 
 public:
     CommandList() noexcept = default;
@@ -66,8 +53,6 @@ private:
     CommandList _list;
 
 private:
-    friend class lc::validation::Stream;
-    friend class Stream;
     friend class CommandList;
     explicit Commit(CommandList &&list) noexcept
         : _list{std::move(list)} {}
@@ -76,7 +61,7 @@ private:
 public:
     Commit &operator=(Commit &&) noexcept = delete;
     Commit &operator=(const Commit &) noexcept = delete;
+    [[nodiscard]] auto command_list() && noexcept { return std::move(_list); }
 };
 
 }// namespace luisa::compute
-

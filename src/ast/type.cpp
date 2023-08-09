@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/2/6.
-//
-
 #include <bit>
 #include <charconv>
 #include <utility>
@@ -131,6 +127,7 @@ const Type *TypeRegistry::custom_type(luisa::string_view name) noexcept {
                      name != "ulong" &&
                      name != "float" &&
                      name != "half" &&
+                     name != "double" &&
                      name != "bool" &&
                      !name.starts_with("vector<") &&
                      !name.starts_with("matrix<") &&
@@ -173,7 +170,9 @@ void TypeRegistry::traverse(TypeVisitor &visitor) const noexcept {
 }
 
 const TypeImpl *TypeRegistry::_decode(luisa::string_view desc) noexcept {
-
+    if (desc == "void") [[unlikely]] {
+        return nullptr;
+    }
     auto hash = _compute_hash(desc);
     if (auto iter = _type_set.find(TypeDescAndHash{desc, hash});
         iter != _type_set.cend()) { return *iter; }
@@ -240,37 +239,23 @@ const TypeImpl *TypeRegistry::_decode(luisa::string_view desc) noexcept {
     info->hash = hash;
 
     auto type_identifier = read_identifier();
-#define TRY_PARSE_SCALAR_TYPE_16(T, TAG) \
+#define TRY_PARSE_SCALAR_TYPE(T, TAG, s) \
     if (type_identifier == #T##sv) {     \
         info->tag = Type::Tag::TAG;      \
-        info->size = 2u;                 \
-        info->alignment = 2u;            \
+        info->size = s;                  \
+        info->alignment = s;             \
         info->dimension = 1u;            \
     } else
-#define TRY_PARSE_SCALAR_TYPE_64(T, TAG) \
-    if (type_identifier == #T##sv) {     \
-        info->tag = Type::Tag::TAG;      \
-        info->size = 8u;                 \
-        info->alignment = 8u;            \
-        info->dimension = 1u;            \
-    } else
-#define TRY_PARSE_SCALAR_TYPE(T, TAG) \
-    if (type_identifier == #T##sv) {  \
-        info->tag = Type::Tag::TAG;   \
-        info->size = sizeof(T);       \
-        info->alignment = alignof(T); \
-        info->dimension = 1u;         \
-    } else
-    TRY_PARSE_SCALAR_TYPE(bool, BOOL)
-    TRY_PARSE_SCALAR_TYPE(float, FLOAT32)
-    TRY_PARSE_SCALAR_TYPE(int, INT32)
-    TRY_PARSE_SCALAR_TYPE(uint, UINT32)
-    TRY_PARSE_SCALAR_TYPE_16(half, FLOAT16)
-    TRY_PARSE_SCALAR_TYPE_16(short, INT16)
-    TRY_PARSE_SCALAR_TYPE_16(ushort, UINT16)
-    TRY_PARSE_SCALAR_TYPE_64(long, INT64)
-    TRY_PARSE_SCALAR_TYPE_64(ulong, UINT64)
-#undef TRY_PARSE_SCALAR_TYPE_16
+    TRY_PARSE_SCALAR_TYPE(bool, BOOL, 1u)
+    TRY_PARSE_SCALAR_TYPE(short, INT16, 2u)
+    TRY_PARSE_SCALAR_TYPE(ushort, UINT16, 2u)
+    TRY_PARSE_SCALAR_TYPE(int, INT32, 4u)
+    TRY_PARSE_SCALAR_TYPE(uint, UINT32, 4u)
+    TRY_PARSE_SCALAR_TYPE(long, INT64, 8u)
+    TRY_PARSE_SCALAR_TYPE(ulong, UINT64, 8u)
+    TRY_PARSE_SCALAR_TYPE(half, FLOAT16, 2u)
+    TRY_PARSE_SCALAR_TYPE(float, FLOAT32, 4u)
+    TRY_PARSE_SCALAR_TYPE(double, FLOAT64, 8u)
 #undef TRY_PARSE_SCALAR_TYPE
     if (type_identifier == "vector"sv) {
         info->tag = Type::Tag::VECTOR;
@@ -364,7 +349,7 @@ const TypeImpl *TypeRegistry::_decode(luisa::string_view desc) noexcept {
         match('<');
         auto m = info->members.emplace_back(_decode(split()));
         match('>');
-        if (m->is_buffer() || m->is_texture()) [[unlikely]] {
+        if (m && (m->is_buffer() || m->is_texture())) [[unlikely]] {
             LUISA_ERROR_WITH_LOCATION(
                 "Buffers are not allowed to "
                 "hold buffers or images.");
@@ -495,11 +480,36 @@ uint Type::dimension() const noexcept {
 }
 
 bool Type::is_scalar() const noexcept {
-    return to_underlying(tag()) < to_underlying(Tag::VECTOR);
+    switch (tag()) {
+        case Tag::BOOL:
+        case Tag::FLOAT32:
+        case Tag::INT32:
+        case Tag::UINT32:
+        case Tag::INT64:
+        case Tag::UINT64:
+        case Tag::FLOAT16:
+        case Tag::INT16:
+        case Tag::UINT16:
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool Type::is_arithmetic() const noexcept {
-    return to_underlying(tag()) > to_underlying(Tag::BOOL) && to_underlying(tag()) < to_underlying(Tag::VECTOR);
+    switch (tag()) {
+        case Tag::FLOAT32:
+        case Tag::INT32:
+        case Tag::UINT32:
+        case Tag::INT64:
+        case Tag::UINT64:
+        case Tag::FLOAT16:
+        case Tag::INT16:
+        case Tag::UINT16:
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool Type::is_basic() const noexcept {
@@ -608,5 +618,8 @@ bool Type::is_resource() const noexcept {
     return is_buffer() || is_texture() || is_bindless_array() || is_accel();
 }
 
-}// namespace luisa::compute
+bool Type::is_resource() const noexcept {
+    return is_buffer() || is_texture() || is_bindless_array() || is_accel();
+}
 
+}// namespace luisa::compute

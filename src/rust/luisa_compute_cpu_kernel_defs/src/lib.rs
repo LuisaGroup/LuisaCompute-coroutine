@@ -40,7 +40,7 @@ impl Default for BufferView {
     }
 }
 #[repr(C, align(16))]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Ray {
     pub orig_x: f32,
     pub orig_y: f32,
@@ -66,7 +66,7 @@ pub enum HitType {
 }
 
 #[repr(C, align(8))]
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Debug)]
 pub struct CommitedHit {
     pub inst: u32,
     pub prim: u32,
@@ -80,6 +80,7 @@ impl CommitedHit {
         self.prim = hit.prim;
         self.bary = hit.bary;
         self.hit_type = HitType::Triangle as u32;
+        self.committed_ray_t = hit.committed_ray_t;
     }
     pub fn set_from_procedural_hit(&mut self, hit: ProceduralHit, t: f32) {
         self.inst = hit.inst;
@@ -102,15 +103,7 @@ pub struct ProceduralHit {
     pub inst: u32,
     pub prim: u32,
 }
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Hit {
-    pub inst_id: u32,
-    pub prim_id: u32,
-    pub u: f32,
-    pub v: f32,
-    pub t: f32,
-}
+pub type Hit = TriangleHit;
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
 pub struct Mat4(pub [f32; 16]);

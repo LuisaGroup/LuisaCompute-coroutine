@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2022/12/19.
-//
-
 #include <luisa/core/stl/hash.h>
 #include <luisa/ast/variable.h>
 

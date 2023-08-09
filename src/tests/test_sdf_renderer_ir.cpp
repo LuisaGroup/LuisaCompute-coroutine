@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/6/25.
-//
-
 #include <atomic>
 #include <numbers>
 #include <numeric>
@@ -188,12 +184,12 @@ int main(int argc, char *argv[]) {
 
     Context context{argv[0]};
     if (argc <= 1) {
-        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, ispc, metal", argv[0]);
+        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, cpu, metal", argv[0]);
         exit(1);
     }
     Device device = context.create_device(argv[1]);
     //    auto render = device.compile(render_kernel);
-    auto render_kernel_ir = AST2IR{}.convert_kernel(render_kernel.function()->function());
+    auto render_kernel_ir = AST2IR::build_kernel(render_kernel.function()->function());
     auto render = device.compile<2, Image<uint>, Image<float>, uint>(render_kernel_ir->get());
 
     static constexpr auto width = 1280u;

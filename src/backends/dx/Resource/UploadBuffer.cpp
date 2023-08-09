@@ -1,4 +1,3 @@
-
 #include <Resource/UploadBuffer.h>
 namespace lc::dx {
 UploadBuffer::UploadBuffer(

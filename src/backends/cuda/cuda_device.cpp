@@ -1,7 +1,3 @@
-//
-// Created by Mike on 7/28/2021.
-//
-
 #include <cstring>
 #include <fstream>
 #include <future>
@@ -28,6 +24,7 @@
 #include "cuda_procedural_primitive.h"
 #include "cuda_accel.h"
 #include "cuda_stream.h"
+#include "cuda_event.h"
 #include "cuda_codegen_ast.h"
 #include "cuda_compiler.h"
 #include "cuda_bindless_array.h"
@@ -44,7 +41,12 @@
 #include "cuda_ext.h"
 
 #define LUISA_CUDA_ENABLE_OPTIX_VALIDATION 0
-#define LUISA_CUDA_DUMP_SOURCE 1
+static const bool LUISA_CUDA_DUMP_SOURCE = ([]{
+    // read env LUISA_DUMP_SOURCE
+    auto env = std::getenv("LUISA_DUMP_SOURCE");
+    if (env == nullptr) return false;
+    return std::string_view{env} == "1";
+})();
 #define LUISA_CUDA_KERNEL_DEBUG 1
 
 namespace luisa::compute::cuda {
@@ -91,52 +93,6 @@ namespace luisa::compute::cuda {
                               luisa::to_underlying(format));
 }
 
-class CUDATimelineEventPool {
-
-public:
-    static constexpr auto event_count_per_buffer = 128u;
-
-private:
-    CUDADevice *_device;
-    luisa::vector<CUdeviceptr> _buffers;
-    luisa::vector<CUdeviceptr> _available_slots;
-    spin_mutex _mutex;
-
-public:
-    explicit CUDATimelineEventPool(CUDADevice *device) noexcept
-        : _device{device} {}
-    ~CUDATimelineEventPool() noexcept {
-        for (auto buffer : _buffers) {
-            LUISA_CHECK_CUDA(cuMemFree(buffer));
-        }
-    }
-    [[nodiscard]] auto device() const noexcept { return _device; }
-    [[nodiscard]] CUdeviceptr create(CUstream stream) noexcept {
-        auto ptr = [this] {
-            std::scoped_lock lock{_mutex};
-            if (_available_slots.empty()) {
-                CUdeviceptr buffer{};
-                LUISA_CHECK_CUDA(cuMemAlloc(&buffer, event_count_per_buffer * sizeof(CUevent)));
-                _buffers.emplace_back(buffer);
-                _available_slots.reserve(event_count_per_buffer);
-                for (auto i = event_count_per_buffer - 1u; i != 0u; i--) {
-                    _available_slots.emplace_back(buffer + i * sizeof(CUevent));
-                }
-            }
-            auto ptr = _available_slots.back();
-            _available_slots.pop_back();
-            return ptr;
-        }();
-        LUISA_CHECK_CUDA(cuStreamWriteValue64(
-            stream, ptr, 0ull, CU_STREAM_WRITE_VALUE_DEFAULT));
-        return ptr;
-    }
-    [[nodiscard]] auto destroy(CUdeviceptr ptr) noexcept {
-        std::scoped_lock lock{_mutex};
-        _available_slots.emplace_back(ptr);
-    }
-};
-
 CUDADevice::CUDADevice(Context &&ctx,
                        size_t device_id,
                        const BinaryIO *io) noexcept
@@ -147,8 +103,7 @@ CUDADevice::CUDADevice(Context &&ctx,
         _io = _default_io.get();
     }
     _compiler = luisa::make_unique<CUDACompiler>(this);
-
-    auto sm_option = luisa::format("-arch=sm_{}", handle().compute_capability());
+    auto sm_option = luisa::format("-arch=compute_{}", handle().compute_capability());
     std::array options{sm_option.c_str(),
                        "--std=c++17",
                        "--use_fast_math",
@@ -161,14 +116,24 @@ CUDADevice::CUDADevice(Context &&ctx,
     luisa::string builtin_kernel_src{
         luisa_cuda_builtin_cuda_builtin_kernels,
         sizeof(luisa_cuda_builtin_cuda_builtin_kernels)};
-    auto builtin_kernel_ptx = _compiler->compile(builtin_kernel_src, options);
+    auto builtin_kernel_ptx = _compiler->compile(builtin_kernel_src, "luisa_builtin.cu", options);
 
     // prepare default shaders
-    with_handle([this, &builtin_kernel_ptx] {
-        LUISA_CHECK_CUDA(cuCtxResetPersistingL2Cache());
-        LUISA_CHECK_CUDA(cuCtxSetCacheConfig(CU_FUNC_CACHE_PREFER_L1));
-        LUISA_CHECK_CUDA(cuModuleLoadData(
-            &_builtin_kernel_module, builtin_kernel_ptx.data()));
+    with_handle([&] {
+        auto error = cuModuleLoadData(&_builtin_kernel_module, builtin_kernel_ptx.data());
+        if (error != CUDA_SUCCESS) {
+            const char *error_string = nullptr;
+            cuGetErrorString(error, &error_string);
+            LUISA_WARNING_WITH_LOCATION(
+                "Failed to load built-in kernels: {}. "
+                "Re-trying with lower compute capability...",
+                error_string ? error_string : "Unknown error");
+            _handle.force_compute_capability(60u);
+            options.front() = "-arch=compute_60";
+            builtin_kernel_ptx = _compiler->compile(builtin_kernel_src, "luisa_builtin.cu", options);
+            error = cuModuleLoadData(&_builtin_kernel_module, builtin_kernel_ptx.data());
+        }
+        LUISA_CHECK_CUDA(error);
         LUISA_CHECK_CUDA(cuModuleGetFunction(
             &_accel_update_function, _builtin_kernel_module,
             "update_accel"));
@@ -198,7 +163,7 @@ CUDADevice::CUDADevice(Context &&ctx,
     }
 
     // event pool
-    _event_pool = luisa::make_unique<CUDATimelineEventPool>(this);
+    _event_manager = luisa::make_unique<CUDAEventManager>(handle().uuid());
 }
 
 CUDADevice::~CUDADevice() noexcept {
@@ -377,9 +342,9 @@ void CUDADevice::present_display_in_stream(uint64_t stream_handle, uint64_t swap
 }
 
 [[nodiscard]] inline luisa::optional<CUDAShaderMetadata>
-parse_shader_metadata(luisa::string_view ptx,
+parse_shader_metadata(luisa::string_view data,
                       luisa::string_view name) noexcept {
-    if (ptx.empty()) {
+    if (data.empty()) {
         LUISA_WARNING_WITH_LOCATION(
             "Failed to parse shader metadata for '{}': "
             "PTX source is empty.",
@@ -387,15 +352,14 @@ parse_shader_metadata(luisa::string_view ptx,
         return luisa::nullopt;
     }
     constexpr luisa::string_view metadata_prefix = "// METADATA: ";
-    if (!ptx.starts_with(metadata_prefix)) {
+    if (!data.starts_with(metadata_prefix)) {
         LUISA_WARNING_WITH_LOCATION(
             "Failed to parse shader metadata for '{}': "
             "PTX source does not start with metadata prefix.",
             name);
         return luisa::nullopt;
     }
-    auto m = ptx.substr(metadata_prefix.size(),
-                        ptx.find('\n') - metadata_prefix.size());
+    auto m = data.substr(metadata_prefix.size());
     auto metadata = deserialize_cuda_shader_metadata(m);
     if (!metadata) {
         LUISA_WARNING_WITH_LOCATION(
@@ -408,7 +372,8 @@ parse_shader_metadata(luisa::string_view ptx,
 }
 
 template<bool allow_update_expected_metadata>
-[[nodiscard]] inline luisa::string load_shader_ptx(BinaryStream *ptx_stream,
+[[nodiscard]] inline luisa::string load_shader_ptx(BinaryStream *metadata_stream,
+                                                   BinaryStream *ptx_stream,
                                                    luisa::string_view name,
                                                    bool warn_not_found,
                                                    std::conditional_t<allow_update_expected_metadata,
@@ -416,7 +381,8 @@ template<bool allow_update_expected_metadata>
                                                                       const CUDAShaderMetadata> &
                                                        expected_metadata) noexcept {
     // check if the stream is valid
-    if (ptx_stream == nullptr || ptx_stream->length() == 0u) {
+    if (ptx_stream == nullptr || ptx_stream->length() == 0u ||
+        metadata_stream == nullptr || metadata_stream->length() == 0u) {
         if (warn_not_found) {
             LUISA_WARNING_WITH_LOCATION(
                 "Shader '{}' is not found in cache. "
@@ -424,20 +390,28 @@ template<bool allow_update_expected_metadata>
                 "The shader will be recompiled.",
                 name);
         } else {
-            LUISA_INFO("Shader '{}' is not found in cache. "
-                       "The shader will be recompiled.",
-                       name);
+            LUISA_VERBOSE("Shader '{}' is not found in cache. "
+                          "The shader will be recompiled.",
+                          name);
         }
         return {};
     }
-    // read the ptx string from stream
+    // read metadata string from stream
+    luisa::string meta_data;
+    meta_data.resize(metadata_stream->length());
+    metadata_stream->read(luisa::span{
+        reinterpret_cast<std::byte *>(meta_data.data()),
+        meta_data.size() * sizeof(char)});
+
+    // read ptx
     luisa::string ptx_data;
     ptx_data.resize(ptx_stream->length());
     ptx_stream->read(luisa::span{
         reinterpret_cast<std::byte *>(ptx_data.data()),
         ptx_data.size() * sizeof(char)});
+
     // parse metadata
-    auto metadata = parse_shader_metadata(ptx_data, name);
+    auto metadata = parse_shader_metadata(meta_data, name);
     if (!metadata) {
         LUISA_WARNING_WITH_LOCATION(
             "Shader '{}' is found in cache, but its metadata is invalid. "
@@ -481,37 +455,48 @@ ShaderCreationInfo CUDADevice::_create_shader(luisa::string name,
                                                 expected_metadata.checksum); }
     if (!name.ends_with(".ptx") &&
         !name.ends_with(".PTX")) { name.append(".ptx"); }
+    auto metadata_name = luisa::format("{}.metadata", name);
 
     // try disk cache
     auto ptx = [&] {
         luisa::unique_ptr<BinaryStream> ptx_stream;
+        luisa::unique_ptr<BinaryStream> metadata_stream;
         if (uses_user_path) {
             ptx_stream = _io->read_shader_bytecode(name);
+            metadata_stream = _io->read_shader_bytecode(metadata_name);
         } else if (option.enable_cache) {
             ptx_stream = _io->read_shader_cache(name);
+            metadata_stream = _io->read_shader_cache(metadata_name);
         }
         return load_shader_ptx<false>(
-            ptx_stream.get(), name, false, expected_metadata);
+            metadata_stream.get(), ptx_stream.get(),
+            name, false, expected_metadata);
     }();
 
     // compile if not found in cache
     if (ptx.empty()) {
-#if LUISA_CUDA_DUMP_SOURCE
-        luisa::span src_data{reinterpret_cast<const std::byte *>(source.data()), source.size()};
-        auto src_name = luisa::format("{}.cu", name);
-        if (uses_user_path) {
-            _io->write_shader_bytecode(src_name, src_data);
-        } else if (option.enable_cache) {
-            _io->write_shader_cache(src_name, src_data);
+        luisa::filesystem::path src_dump_path;
+        if (option.enable_debug_info || LUISA_CUDA_DUMP_SOURCE) {
+            luisa::span src_data{reinterpret_cast<const std::byte *>(source.data()), source.size()};
+            auto src_name = luisa::format("{}.cu", name);
+            if (uses_user_path) {
+                src_dump_path = _io->write_shader_bytecode(src_name, src_data);
+            } else if (option.enable_cache) {
+                src_dump_path = _io->write_shader_cache(src_name, src_data);
+            }
         }
-#endif
-        ptx = _compiler->compile(source, nvrtc_options, &expected_metadata);
+        luisa::string src_filename{src_dump_path.string()};
+        ptx = _compiler->compile(source, src_filename, nvrtc_options, &expected_metadata);
         if (!ptx.empty()) {
             luisa::span ptx_data{reinterpret_cast<const std::byte *>(ptx.data()), ptx.size()};
+            auto metadata = luisa::format("// METADATA: {}\n\n", serialize_cuda_shader_metadata(expected_metadata));
+            luisa::span metadata_data{reinterpret_cast<const std::byte *>(metadata.data()), metadata.size()};
             if (uses_user_path) {
                 _io->write_shader_bytecode(name, ptx_data);
+                _io->write_shader_bytecode(metadata_name, metadata_data);
             } else if (option.enable_cache) {
                 _io->write_shader_cache(name, ptx_data);
+                _io->write_shader_cache(metadata_name, metadata_data);
             }
         }
     }
@@ -524,11 +509,8 @@ ShaderCreationInfo CUDADevice::_create_shader(luisa::string name,
     auto p = with_handle([&]() noexcept -> CUDAShader * {
         if (expected_metadata.kind == CUDAShaderMetadata::Kind::RAY_TRACING) {
             return new_with_allocator<CUDAShaderOptiX>(
-                handle().optix_context(),
-                ptx.data(), ptx.size(), "__raygen__main",
-                option.enable_debug_info,
-                expected_metadata.argument_usages,
-                std::move(bound_arguments));
+                handle().optix_context(), ptx.data(), ptx.size(),
+                "__raygen__main", expected_metadata, std::move(bound_arguments));
         }
         return new_with_allocator<CUDAShaderNative>(
             this, ptx.data(), ptx.size(), "kernel_main",
@@ -552,8 +534,8 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
     Clock clk;
     StringScratch scratch;
     CUDACodegenAST codegen{scratch, !_cudadevrt_library.empty()};
-    codegen.emit(kernel, option.native_include);
-    LUISA_INFO("Generated CUDA source in {} ms.", clk.toc());
+    codegen.emit(kernel, _compiler->device_library(), option.native_include);
+    LUISA_VERBOSE("Generated CUDA source in {} ms.", clk.toc());
 
     // process bound arguments
     luisa::vector<ShaderDispatchCommand::Argument> bound_arguments;
@@ -615,6 +597,11 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
         nvrtc_options.emplace_back("-use_fast_math");
     }
 
+    // TODO: use OptiX IR for ray tracing shaders
+    //    if (kernel.requires_raytracing()) {
+    //        nvrtc_options.emplace_back("--optix-ir");
+    //    }
+
     // compute hash
     auto src_hash = _compiler->compute_hash(scratch.string(), nvrtc_options);
 
@@ -625,6 +612,9 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
                     CUDAShaderMetadata::Kind::RAY_TRACING :
                     CUDAShaderMetadata::Kind::COMPUTE,
         .enable_debug = option.enable_debug_info,
+        .requires_trace_closest = kernel.propagated_builtin_callables().test(CallOp::RAY_TRACING_TRACE_CLOSEST),
+        .requires_trace_any = kernel.propagated_builtin_callables().test(CallOp::RAY_TRACING_TRACE_ANY),
+        .requires_ray_query = kernel.propagated_builtin_callables().uses_ray_query(),
         .block_size = kernel.block_size(),
         .argument_types = [kernel] {
             luisa::vector<luisa::string> types;
@@ -648,7 +638,7 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, const i
 #ifdef LUISA_ENABLE_IR
     Clock clk;
     auto function = IR2AST::build(kernel);
-    LUISA_INFO("IR2AST done in {} ms.", clk.toc());
+    LUISA_VERBOSE("IR2AST done in {} ms.", clk.toc());
     return create_shader(option, function->function());
 #else
     LUISA_ERROR_WITH_LOCATION("CUDA device does not support creating shader from IR types.");
@@ -662,6 +652,7 @@ ShaderCreationInfo CUDADevice::load_shader(luisa::string_view name_in,
     luisa::string name{name_in};
     if (!name.ends_with(".ptx") &&
         !name.ends_with(".PTX")) { name.append(".ptx"); }
+    auto metadata_name = luisa::format("{}.metadata", name);
 
     // prepare (incomplete) metadata
     CUDAShaderMetadata metadata{
@@ -678,8 +669,9 @@ ShaderCreationInfo CUDADevice::load_shader(luisa::string_view name_in,
 
     // load ptx
     auto ptx = [&] {
+        auto metadata_stream = _io->read_shader_bytecode(metadata_name);
         auto ptx_stream = _io->read_shader_bytecode(name);
-        return load_shader_ptx<true>(ptx_stream.get(), name, true, metadata);
+        return load_shader_ptx<true>(metadata_stream.get(), ptx_stream.get(), name, true, metadata);
     }();
     if (ptx.empty()) {
         LUISA_WARNING_WITH_LOCATION("Failed to load shader bytecode from {}.", name);
@@ -696,10 +688,8 @@ ShaderCreationInfo CUDADevice::load_shader(luisa::string_view name_in,
     auto p = with_handle([&]() noexcept -> CUDAShader * {
         if (metadata.kind == CUDAShaderMetadata::Kind::RAY_TRACING) {
             return new_with_allocator<CUDAShaderOptiX>(
-                handle().optix_context(),
-                ptx.data(), ptx.size(), "__raygen__main",
-                metadata.enable_debug,
-                metadata.argument_usages);
+                handle().optix_context(), ptx.data(), ptx.size(),
+                "__raygen__main", metadata);
         }
         return new_with_allocator<CUDAShaderNative>(
             this, ptx.data(), ptx.size(), "kernel_main",
@@ -726,50 +716,44 @@ void CUDADevice::destroy_shader(uint64_t handle) noexcept {
 }
 
 ResourceCreationInfo CUDADevice::create_event() noexcept {
-    auto event_handle = with_handle([] {
-        CUevent event = nullptr;
-        LUISA_CHECK_CUDA(cuEventCreate(
-            &event, CU_EVENT_BLOCKING_SYNC | CU_EVENT_DISABLE_TIMING));
-        return event;
+    auto event_handle = with_handle([this] {
+        return _event_manager->create();
     });
     return {.handle = reinterpret_cast<uint64_t>(event_handle),
-            .native_handle = event_handle};
+            .native_handle = event_handle->handle()};
 }
 
 void CUDADevice::destroy_event(uint64_t handle) noexcept {
-    with_handle([event = reinterpret_cast<CUevent>(handle)] {
-        LUISA_CHECK_CUDA(cuEventDestroy(event));
+    with_handle([this, handle] {
+        auto event = reinterpret_cast<CUDAEvent *>(handle);
+        _event_manager->destroy(event);
     });
 }
 
-void CUDADevice::signal_event(uint64_t handle, uint64_t stream_handle) noexcept {
+void CUDADevice::signal_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept {
     with_handle([=] {
-        auto event = reinterpret_cast<CUevent>(handle);
+        auto event = reinterpret_cast<CUDAEvent *>(handle);
         auto stream = reinterpret_cast<CUDAStream *>(stream_handle);
-        stream->signal(event);
+        stream->signal(event, value);
     });
 }
 
-void CUDADevice::wait_event(uint64_t handle, uint64_t stream_handle) noexcept {
+void CUDADevice::wait_event(uint64_t handle, uint64_t stream_handle, uint64_t value) noexcept {
     with_handle([=] {
-        auto event = reinterpret_cast<CUevent>(handle);
+        auto event = reinterpret_cast<CUDAEvent *>(handle);
         auto stream = reinterpret_cast<CUDAStream *>(stream_handle);
-        stream->wait(event);
+        stream->wait(event, value);
     });
 }
 
-bool CUDADevice::is_event_completed(uint64_t handle) const noexcept {
-    return with_handle([=] {
-        auto event = reinterpret_cast<CUevent>(handle);
-        return cuEventQuery(event) == CUDA_SUCCESS;
-    });
+bool CUDADevice::is_event_completed(uint64_t handle, uint64_t value) const noexcept {
+    auto event = reinterpret_cast<CUDAEvent *>(handle);
+    return event->is_completed(value);
 }
 
-void CUDADevice::synchronize_event(uint64_t handle) noexcept {
-    with_handle([=] {
-        auto event = reinterpret_cast<CUevent>(handle);
-        LUISA_CHECK_CUDA(cuEventSynchronize(event));
-    });
+void CUDADevice::synchronize_event(uint64_t handle, uint64_t value) noexcept {
+    auto event = reinterpret_cast<CUDAEvent *>(handle);
+    event->synchronize(value);
 }
 
 ResourceCreationInfo CUDADevice::create_mesh(const AccelOption &option) noexcept {
@@ -842,11 +826,30 @@ DeviceExtension *CUDADevice::extension(luisa::string_view name) noexcept {
 
 namespace detail {
 
+static constexpr auto required_cuda_version_major = 11;
+static constexpr auto required_cuda_version_minor = 7;
+static constexpr auto required_cuda_version = required_cuda_version_major * 1000 + required_cuda_version_minor * 10;
+
 static void initialize() {
     // global init
     static std::once_flag flag;
     std::call_once(flag, [] {
+        // CUDA
         LUISA_CHECK_CUDA(cuInit(0));
+        // check driver version
+        auto driver_version = 0;
+        LUISA_CHECK_CUDA(cuDriverGetVersion(&driver_version));
+        auto driver_version_major = driver_version / 1000;
+        auto driver_version_minor = (driver_version % 1000) / 10;
+        LUISA_ASSERT(driver_version >= required_cuda_version,
+                     "CUDA driver version {}.{} is too old (>= {}.{} required). "
+                     "Please update your driver.",
+                     driver_version_major, driver_version_minor,
+                     required_cuda_version_major, required_cuda_version_minor);
+        LUISA_VERBOSE("Successfully initialized CUDA "
+                      "backend with driver version {}.{}.",
+                      driver_version_major, driver_version_minor);
+        // OptiX
         static_cast<void>(optix::api());
     });
 }
@@ -885,8 +888,8 @@ CUDADevice::Handle::Handle(size_t index) noexcept {
     auto unified_addressing = 0;
     LUISA_CHECK_CUDA(cuDeviceGetAttribute(&can_map_host_memory, CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY, _device));
     LUISA_CHECK_CUDA(cuDeviceGetAttribute(&unified_addressing, CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING, _device));
-    LUISA_INFO("Device {} can map host memory: {}", index, can_map_host_memory != 0);
-    LUISA_INFO("Device {} supports unified addressing: {}", index, unified_addressing != 0);
+    LUISA_VERBOSE("Device {} can map host memory: {}", index, can_map_host_memory != 0);
+    LUISA_VERBOSE("Device {} supports unified addressing: {}", index, unified_addressing != 0);
 
     auto format_uuid = [](auto uuid) noexcept {
         luisa::string result;
@@ -916,7 +919,7 @@ CUDADevice::Handle::~Handle() noexcept {
         LUISA_CHECK_OPTIX(optix::api().deviceContextDestroy(_optix_context));
     }
     LUISA_CHECK_CUDA(cuDevicePrimaryCtxRelease(_device));
-    LUISA_INFO("Destroyed CUDA device: {}.", name());
+    LUISA_VERBOSE("Destroyed CUDA device: {}.", name());
 }
 
 std::string_view CUDADevice::Handle::name() const noexcept {
@@ -938,7 +941,7 @@ optix::DeviceContext CUDADevice::Handle::optix_context() const noexcept {
         optix_options.logCallbackFunction = [](uint level, const char *tag, const char *message, void *) noexcept {
             auto log = luisa::format("Logs from OptiX ({}): {}", tag, message);
             if (level >= 4) {
-                LUISA_INFO("{}", log);
+                LUISA_VERBOSE("{}", log);
             } else [[unlikely]] {
                 LUISA_WARNING("{}", log);
             }
@@ -976,7 +979,6 @@ void CUDADevice::set_name(luisa::compute::Resource::Tag resource_tag,
                 reinterpret_cast<CUDAStream *>(handle)->set_name(std::move(name));
                 break;
             case Resource::Tag::EVENT:
-                nvtxNameCuEventA(reinterpret_cast<CUevent>(handle), name.c_str());
                 break;
             case Resource::Tag::SHADER:
                 reinterpret_cast<CUDAShader *>(handle)->set_name(std::move(name));
@@ -992,16 +994,9 @@ void CUDADevice::set_name(luisa::compute::Resource::Tag resource_tag,
             case Resource::Tag::DSTORAGE_PINNED_MEMORY: break;
             case Resource::Tag::SPARSE_BUFFER: break;
             case Resource::Tag::SPARSE_TEXTURE: break;
+            default: break;
         }
     });
-}
-
-CUdeviceptr CUDADevice::create_timeline_event(CUstream stream) noexcept {
-    return _event_pool->create(stream);
-}
-
-void CUDADevice::destroy_timeline_event(CUdeviceptr event) noexcept {
-    _event_pool->destroy(event);
 }
 
 }// namespace luisa::compute::cuda

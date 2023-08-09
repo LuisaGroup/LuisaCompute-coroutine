@@ -3,23 +3,23 @@
 use std::{cell::RefCell, sync::Arc};
 
 use self::{
-    accel::{AccelImpl, MeshImpl},
+    accel::{AccelImpl, GeometryImpl},
     resource::{BindlessArrayImpl, BufferImpl, EventImpl},
     stream::{convert_capture, StreamImpl},
     texture::TextureImpl,
 };
 use super::Backend;
-use crate::panic_abort;
-use crate::SwapChainForCpuContext;
+use crate::{cpu::llvm::LLVM_PATH, SwapChainForCpuContext};
+use crate::{cpu::shader::clang_args, panic_abort};
 use api::{AccelOption, CreatedBufferInfo, CreatedResourceInfo, PixelStorage};
 use libc::c_void;
-use log::info;
+use log::debug;
 use luisa_compute_api_types as api;
 use luisa_compute_cpu_kernel_defs as defs;
 use luisa_compute_ir::{context::type_hash, ir, CArc};
 use parking_lot::RwLock;
 mod codegen;
-use codegen::sha256;
+use codegen::sha256_short;
 mod accel;
 mod llvm;
 mod resource;
@@ -149,13 +149,8 @@ impl Backend for RustBackend {
         unsafe {
             let stream = &*(stream_.0 as *mut StreamImpl);
             let command_list = command_list.to_vec();
-            stream.enqueue(
-                move || {
-                    let stream = &*(stream_.0 as *mut StreamImpl);
-                    stream.dispatch(&command_list)
-                },
-                callback,
-            );
+            let sb = stream.allocate_staging_buffers(&command_list);
+            stream.enqueue(move || stream.dispatch(sb, &command_list), callback);
         }
     }
 
@@ -247,35 +242,53 @@ impl Backend for RustBackend {
         //     println!("{}", debug);
         // }
         let tic = std::time::Instant::now();
-        let gened = codegen::cpp::CpuCodeGen::run(&kernel);
-        info!(
-            "kernel source generated in {:.3}ms",
+        let mut gened = codegen::cpp::CpuCodeGen::run(&kernel);
+        debug!(
+            "Source generated in {:.3}ms",
             (std::time::Instant::now() - tic).as_secs_f64() * 1e3
         );
-        let hash = sha256(&gened.source);
+        let args = clang_args();
+        let args = args.join(",");
+        gened.source.push_str(&format!(
+            "\n// clang args: {}\n// clang path: {}\n// llvm path:{}",
+            args, LLVM_PATH.clang, LLVM_PATH.llvm
+        ));
+        let hash = sha256_short(&gened.source);
         let gened_src = gened.source.replace("##kernel_fn##", &hash);
-        let lib_path = shader::compile(hash.clone(), gened_src).unwrap();
-        let mut captures = vec![];
-        let mut custom_ops = vec![];
-        unsafe {
-            for c in kernel.captures.as_ref() {
-                captures.push(convert_capture(*c));
+        let mut shader = None;
+        for tries in 0..2 {
+            let lib_path = shader::compile(&hash, &gened_src, tries == 1).unwrap();
+            let mut captures = vec![];
+            let mut custom_ops = vec![];
+            unsafe {
+                for c in kernel.captures.as_ref() {
+                    captures.push(convert_capture(*c));
+                }
+                for op in kernel.cpu_custom_ops.as_ref() {
+                    custom_ops.push(defs::CpuCustomOp {
+                        func: op.func,
+                        data: op.data,
+                    });
+                }
             }
-            for op in kernel.cpu_custom_ops.as_ref() {
-                custom_ops.push(defs::CpuCustomOp {
-                    func: op.func,
-                    data: op.data,
-                });
+            shader = shader::ShaderImpl::new(
+                hash.clone(),
+                lib_path,
+                captures,
+                custom_ops,
+                kernel.block_size,
+                &gened.messages,
+            );
+            if shader.is_some() {
+                break;
+            }
+            if tries == 0 {
+                log::error!("Failed to compile kernel. Could LLVM be updated? Retrying");
+            } else {
+                panic_abort!("Failed to compile kernel. Aborting");
             }
         }
-        let shader = Box::new(shader::ShaderImpl::new(
-            hash,
-            lib_path,
-            captures,
-            custom_ops,
-            kernel.block_size,
-            gened.messages,
-        ));
+        let shader = Box::new(shader.unwrap());
         let shader = Box::into_raw(shader);
         luisa_compute_api_types::CreatedShaderInfo {
             resource: CreatedResourceInfo {
@@ -319,41 +332,45 @@ impl Backend for RustBackend {
         }
     }
 
-    fn signal_event(&self, event: api::Event, stream: api::Stream) {
+    fn signal_event(&self, event: api::Event, stream: api::Stream, value: u64) {
         unsafe {
             let event = &*(event.0 as *mut EventImpl);
             let stream = &*(stream.0 as *mut StreamImpl);
-            event.record();
             stream.enqueue(
                 move || {
-                    event.signal();
+                    event.signal(value);
                 },
                 (empty_callback, std::ptr::null_mut()),
             )
         }
     }
-    fn wait_event(&self, event: luisa_compute_api_types::Event, stream: api::Stream) {
+    fn wait_event(&self, event: luisa_compute_api_types::Event, stream: api::Stream, value: u64) {
         unsafe {
             let event = &*(event.0 as *mut EventImpl);
             let stream = &*(stream.0 as *mut StreamImpl);
-            let ticket = event.host.load(std::sync::atomic::Ordering::Acquire);
             stream.enqueue(
                 move || {
-                    event.wait(ticket);
+                    event.wait(value);
                 },
                 (empty_callback, std::ptr::null_mut()),
             );
         }
     }
-    fn synchronize_event(&self, event: luisa_compute_api_types::Event) {
+    fn synchronize_event(&self, event: luisa_compute_api_types::Event, value: u64) {
         unsafe {
             let event = &*(event.0 as *mut EventImpl);
-            event.synchronize();
+            event.synchronize(value);
+        }
+    }
+    fn is_event_completed(&self, event: luisa_compute_api_types::Event, value: u64) -> bool {
+        unsafe {
+            let event = &*(event.0 as *mut EventImpl);
+            event.is_completed(value)
         }
     }
     fn create_mesh(&self, option: AccelOption) -> api::CreatedResourceInfo {
         unsafe {
-            let mesh = Box::new(MeshImpl::new(
+            let mesh = Box::new(GeometryImpl::new(
                 option.hint,
                 option.allow_compaction,
                 option.allow_update,
@@ -365,17 +382,31 @@ impl Backend for RustBackend {
             }
         }
     }
-    fn create_procedural_primitive(&self, _option: api::AccelOption) -> api::CreatedResourceInfo {
-        todo!()
+    fn create_procedural_primitive(&self, option: api::AccelOption) -> api::CreatedResourceInfo {
+        unsafe {
+            let mesh = Box::new(GeometryImpl::new(
+                option.hint,
+                option.allow_compaction,
+                option.allow_update,
+            ));
+            let mesh = Box::into_raw(mesh);
+            api::CreatedResourceInfo {
+                handle: mesh as u64,
+                native_handle: mesh as *mut std::ffi::c_void,
+            }
+        }
     }
     fn destroy_mesh(&self, mesh: api::Mesh) {
         unsafe {
-            let mesh = mesh.0 as *mut MeshImpl;
+            let mesh = mesh.0 as *mut GeometryImpl;
             drop(Box::from_raw(mesh));
         }
     }
-    fn destroy_procedural_primitive(&self, _primitive: api::ProceduralPrimitive) {
-        todo!()
+    fn destroy_procedural_primitive(&self, primitive: api::ProceduralPrimitive) {
+        unsafe {
+            let mesh = primitive.0 as *mut GeometryImpl;
+            drop(Box::from_raw(mesh));
+        }
     }
     fn create_accel(&self, _option: AccelOption) -> api::CreatedResourceInfo {
         unsafe {

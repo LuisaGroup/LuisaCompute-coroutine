@@ -268,7 +268,7 @@ public:
 
 
 //                command_buffer << synchronize();
-                command_buffer << _kernel_info[1u].dispatch();
+                command_buffer << _kernel_info[1u].dispatch();  // separated kernels
                 launch_state_count -= generate_count;
                 queue_empty = false;
                 continue;
@@ -282,6 +282,13 @@ public:
 
                 // TODO: dispatch different shaders by state tags
                 // get launch kernel from IR
+                for (auto iter = _kernel_info.begin(); iter != _kernel_info.end(); ++iter) {
+                    if (iter->first == dispatch_index) {
+                        command_buffer << iter->second.dispatch();
+                        break;
+                    }
+                }
+                LUISA_ERROR_WITH_LOCATION("Unexpected dispatch index: ", dispatch_index);
             };
         }
     }

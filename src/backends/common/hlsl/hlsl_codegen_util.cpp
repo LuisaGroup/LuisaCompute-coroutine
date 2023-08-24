@@ -181,6 +181,20 @@ void CodegenUtility::GetVariableName(Variable::Tag type, uint id, vstd::StringBu
             LUISA_ASSERT(opt->isRaster, "object id only allowed in raster shader");
             str << "obj_id"sv;
             break;
+        case Variable::Tag::WARP_LANE_COUNT:
+            if (opt->funcType == CodegenStackData::FuncType::Callable) {
+                str << "_wrpct"sv;
+            } else {
+                str << "WaveGetLaneCount()"sv;
+            }
+            break;
+        case Variable::Tag::WARP_LANE_ID:
+            if (opt->funcType == CodegenStackData::FuncType::Callable) {
+                str << "_wrpid"sv;
+            } else {
+                str << "WaveGetLaneIndex()"sv;
+            }
+            break;
         case Variable::Tag::LOCAL:
             switch (opt->funcType) {
                 case CodegenStackData::FuncType::Kernel:
@@ -1123,12 +1137,6 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         case CallOp::OUTER_PRODUCT: str << "_outer_product"; break;
         case CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION: str << "_mat_comp_mul"; break;
         case CallOp::BINDLESS_BUFFER_TYPE: LUISA_NOT_IMPLEMENTED(); break;
-        case CallOp::WARP_LANE_COUNT:
-            str << "WaveGetLaneCount"sv;
-            break;
-        case CallOp::WARP_LANE_INDEX:
-            str << "WaveGetLaneIndex"sv;
-            break;
         case CallOp::WARP_IS_FIRST_ACTIVE_LANE:
             str << "WaveIsFirstLane"sv;
             break;
@@ -1177,10 +1185,10 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         case CallOp::WARP_ACTIVE_BIT_MASK:
             str << "WaveActiveBallot"sv;
             break;
-        case CallOp::WARP_READ_LANE_AT:
+        case CallOp::WARP_READ_LANE:
             str << "WaveReadLaneAt"sv;
             break;
-        case CallOp::WARP_READ_FIRST_LANE:
+        case CallOp::WARP_READ_FIRST_ACTIVE_LANE:
             str << "WaveReadLaneFirst"sv;
             break;
         case CallOp::BACKWARD:
@@ -1851,8 +1859,10 @@ void CodegenUtility::CodegenProperties(
             default: break;
         }
     }
-    if (uavArgCount > 8) {
-        LUISA_ERROR("Writable resources' count must be less than 8.");
+    if (uavArgCount > 64) [[unlikely]] {
+        LUISA_WARNING("Writable resources' count greater than 8 may cause crash.");
+    } else if (uavArgCount > 64) [[unlikely]] {
+        LUISA_ERROR("Writable resources' count must be less than 64.");
     }
 }
 vstd::MD5 CodegenUtility::GetTypeMD5(vstd::span<Type const *const> types) {

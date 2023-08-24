@@ -228,9 +228,7 @@ void export_op(py::module &m) {
         .value("REDUCE_MAX", CallOp::REDUCE_MAX)
         .value("OUTER_PRODUCT", CallOp::OUTER_PRODUCT)
         .value("MATRIX_COMPONENT_WISE_MULTIPLICATION", CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION)
-        
-        .value("WARP_LANE_COUNT", CallOp::WARP_LANE_COUNT)
-        .value("WARP_LANE_INDEX", CallOp::WARP_LANE_INDEX)
+    
         .value("WARP_IS_FIRST_ACTIVE_LANE", CallOp::WARP_IS_FIRST_ACTIVE_LANE)
         .value("WARP_ACTIVE_ALL_EQUAL", CallOp::WARP_ACTIVE_ALL_EQUAL)
         .value("WARP_ACTIVE_BIT_AND", CallOp::WARP_ACTIVE_BIT_AND)
@@ -247,6 +245,6 @@ void export_op(py::module &m) {
         .value("WARP_PREFIX_COUNT_BITS", CallOp::WARP_PREFIX_COUNT_BITS)
         .value("WARP_PREFIX_SUM", CallOp::WARP_PREFIX_SUM)
         .value("WARP_PREFIX_PRODUCT", CallOp::WARP_PREFIX_PRODUCT)
-        .value("WARP_READ_LANE_AT", CallOp::WARP_READ_LANE_AT)
-        .value("WARP_READ_FIRST_LANE", CallOp::WARP_READ_FIRST_LANE);
+        .value("WARP_READ_LANE", CallOp::WARP_READ_LANE)
+        .value("WARP_READ_FIRST_ACTIVE_LANE", CallOp::WARP_READ_FIRST_ACTIVE_LANE);
 }

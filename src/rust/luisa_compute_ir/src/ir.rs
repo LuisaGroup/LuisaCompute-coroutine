@@ -2,7 +2,7 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use half::f16;
 
-use crate::usage_detect::detect_usage;
+use crate::analysis::usage_detect::detect_usage;
 use crate::*;
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
@@ -1053,6 +1053,19 @@ pub enum Instruction {
     },
     AdDetach(Pooled<BasicBlock>),
     Comment(CBoxedSlice<u8>),
+    CoroSplitMark {
+        token: u32,
+    },
+    CoroSuspend {
+        token: u32,
+    },
+    CoroResume {
+        token: u32,
+    },
+    CoroFrame {
+        token: u32,
+        body: Pooled<BasicBlock>
+    },
 }
 
 extern "C" fn eq_impl<T: UserNodeData>(a: *const u8, b: *const u8) -> bool {
@@ -2204,6 +2217,22 @@ impl IrBuilder {
         let node = new_node(&self.pools, node);
         self.append(node);
         node
+    }
+    pub fn coro_suspend(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroSuspend { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
+    pub fn coro_resume(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroResume { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
     }
     pub fn finish(self) -> Pooled<BasicBlock> {
         self.bb

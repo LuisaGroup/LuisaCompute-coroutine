@@ -8,6 +8,8 @@ pub mod ref2ret;
 
 pub mod reg2mem;
 
+pub mod split;
+
 use crate::ir;
 
 pub trait Transform {

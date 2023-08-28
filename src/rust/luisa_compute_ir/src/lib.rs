@@ -8,7 +8,7 @@ pub mod context;
 mod display;
 pub mod serialize;
 pub mod transform;
-mod usage_detect;
+pub mod analysis;
 
 use ir::{ArrayType, Primitive, Type};
 

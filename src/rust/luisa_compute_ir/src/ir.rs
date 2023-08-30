@@ -1064,7 +1064,7 @@ pub enum Instruction {
     },
     CoroFrame {
         token: u32,
-        body: Pooled<BasicBlock>
+        body: Pooled<BasicBlock>,
     },
 }
 

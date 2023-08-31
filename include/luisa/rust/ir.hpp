@@ -616,6 +616,10 @@ struct Instruction {
         RayQuery,
         AdDetach,
         Comment,
+        CoroSplitMark,
+        CoroSuspend,
+        CoroResume,
+        CoroFrame,
     };
 
     struct Local_Body {
@@ -694,6 +698,23 @@ struct Instruction {
         CBoxedSlice<uint8_t> _0;
     };
 
+    struct CoroSplitMark_Body {
+        uint32_t token;
+    };
+
+    struct CoroSuspend_Body {
+        uint32_t token;
+    };
+
+    struct CoroResume_Body {
+        uint32_t token;
+    };
+
+    struct CoroFrame_Body {
+        uint32_t token;
+        Pooled<BasicBlock> body;
+    };
+
     Tag tag;
     union {
         Local_Body local;
@@ -712,6 +733,10 @@ struct Instruction {
         RayQuery_Body ray_query;
         AdDetach_Body ad_detach;
         Comment_Body comment;
+        CoroSplitMark_Body coro_split_mark;
+        CoroSuspend_Body coro_suspend;
+        CoroResume_Body coro_resume;
+        CoroFrame_Body coro_frame;
     };
 };
 

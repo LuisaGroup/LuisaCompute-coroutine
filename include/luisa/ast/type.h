@@ -438,7 +438,6 @@ public:
     [[nodiscard]] bool is_accel() const noexcept;
     [[nodiscard]] bool is_resource() const noexcept;
     [[nodiscard]] bool is_custom() const noexcept;
-    [[nodiscard]] bool is_resource() const noexcept;
 };
 
 }// namespace luisa::compute

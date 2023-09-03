@@ -213,6 +213,10 @@ impl Ref2RetImpl {
                     self.transform_block(body)
                 }
                 Instruction::Comment(_) => {}
+                Instruction::CoroSplitMark { .. }
+                | Instruction::CoroSuspend { .. }
+                | Instruction::CoroResume { .. }
+                | Instruction::CoroFrame { .. } => {}
             }
         }
     }

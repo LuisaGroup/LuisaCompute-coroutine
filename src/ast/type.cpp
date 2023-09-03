@@ -619,8 +619,4 @@ bool Type::is_resource() const noexcept {
     return is_buffer() || is_texture() || is_bindless_array() || is_accel();
 }
 
-bool Type::is_resource() const noexcept {
-    return is_buffer() || is_texture() || is_bindless_array() || is_accel();
-}
-
 }// namespace luisa::compute

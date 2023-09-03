@@ -257,6 +257,19 @@ impl KernelSerializer {
                 let s = s.as_ref().to_vec();
                 SerializedInstruction::Comment(s)
             }
+            Instruction::CoroSplitMark { token } => {
+                SerializedInstruction::CoroSplitMark { token: *token }
+            }
+            Instruction::CoroSuspend { token } => {
+                SerializedInstruction::CoroSuspend { token: *token }
+            }
+            | Instruction::CoroResume { token } => {
+                SerializedInstruction::CoroResume { token: *token }
+            }
+            | Instruction::CoroFrame { token, body } => {
+                let body = self.serialize_block(body);
+                SerializedInstruction::CoroFrame { token: *token, body }
+            }
         }
     }
     fn serialize_func(&mut self, func: &Func) -> SerializedFunc {

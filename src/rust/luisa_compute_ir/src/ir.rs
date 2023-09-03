@@ -1862,6 +1862,12 @@ impl ModuleDuplicator {
                 builder.ad_detach(dup_body)
             }
             Instruction::Comment(msg) => builder.comment(msg.clone()),
+            Instruction::CoroSplitMark {token} => builder.coro_split_mark(*token),
+            Instruction::CoroSuspend{..}
+            | Instruction::CoroResume{..}
+            | Instruction::CoroFrame{..} => {
+                unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
+            }
         };
         // insert the duplicated node into the map
         self.current.as_mut().unwrap().nodes.insert(node_ref, dup_node);
@@ -2217,6 +2223,14 @@ impl IrBuilder {
         let node = new_node(&self.pools, node);
         self.append(node);
         node
+    }
+    pub fn coro_split_mark(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroSplitMark { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
     }
     pub fn coro_suspend(&mut self, token: u32) -> NodeRef {
         let new_node = new_node(

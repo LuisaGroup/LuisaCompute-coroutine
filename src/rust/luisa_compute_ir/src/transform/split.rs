@@ -1,17 +1,20 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use lazy_static::lazy_static;
 
 use crate::{CArc, CBoxedSlice, Pooled};
-use crate::ir::{SwitchCase, Module, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, CallableModuleRef, PhiIncoming};
+use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module};
 
 struct FrameTokenManager {
     frame_token_counter: u32,
     frame_token_occupied: HashSet<u32>,
 }
+
 static INVALID_FRAME_TOKEN: u32 = u32::MAX;
 
 impl FrameTokenManager {
     fn register_frame_token(&mut self, token: u32) {
+        assert_ne!(token, INVALID_FRAME_TOKEN, "Invalid frame token");
         self.frame_token_occupied.insert(token);
     }
     fn get_new_token(&mut self) -> u32 {
@@ -21,19 +24,19 @@ impl FrameTokenManager {
         self.frame_token_occupied.insert(self.frame_token_counter);
         self.frame_token_counter
     }
-    fn process_frame_token(&mut self, token: u32) {
-        self.frame_token_under_process.insert(token);
-    }
-    fn test_process_frame_token(&self, token: u32) -> bool {
-        self.frame_token_under_process.contains(&token)
-    }
 
     fn get_instance() -> &'static mut Self {
-        static mut INSTANCE: FrameTokenManager = FrameTokenManager {
-            frame_token_counter: u32::MAX - 1,
-            frame_token_occupied: HashSet::new(),
-        };
-        unsafe { &mut INSTANCE }
+        lazy_static!(
+            static ref INSTANCE: FrameTokenManager = FrameTokenManager {
+                frame_token_counter: u32::MAX - 1,
+                frame_token_occupied: HashSet::new(),
+            };
+        );
+        let p: *const FrameTokenManager = INSTANCE.deref();
+        unsafe {
+            let p: *mut FrameTokenManager = std::mem::transmute(p);
+            p.as_mut().unwrap()
+        }
     }
 }
 
@@ -41,6 +44,16 @@ struct Continuation {
     token: u32,
     prev: HashSet<u32>,
     next: HashSet<u32>,
+}
+
+impl Continuation {
+    fn new(token: u32) -> Self {
+        Self {
+            token,
+            prev: HashSet::new(),
+            next: HashSet::new(),
+        }
+    }
 }
 
 struct FrameBuilder {
@@ -57,6 +70,15 @@ struct ModuleDuplicatorCtx {
 struct ModuleDuplicator {
     callables: HashMap<*const CallableModule, CArc<CallableModule>>,
     current: Option<ModuleDuplicatorCtx>,
+}
+
+impl ModuleDuplicator {
+    fn new() -> Self {
+        Self {
+            callables: HashMap::new(),
+            current: None,
+        }
+    }
 }
 
 struct SplitManager {
@@ -80,13 +102,22 @@ impl SplitManager {
     }
 
     fn with_context<T, F: FnOnce(&mut Self) -> T>(&mut self, frame_token: u32, f: F) -> T {
-        let mut ctx = ModuleDuplicatorCtx {
+        let ctx = ModuleDuplicatorCtx {
             nodes: HashMap::new(),
             blocks: HashMap::new(),
         };
         let ret = f(self);
-        self.module_duplicators.get_mut(&frame_token).unwrap_or_default().current = Some(ctx);
+        self.module_duplicators.get_mut(&frame_token).unwrap().current = Some(ctx);
         ret
+    }
+    fn get_frame_builder_temp(&mut self, pools: &CArc<ModulePools>) -> FrameBuilder {
+        self.module_duplicators.remove(&INVALID_FRAME_TOKEN);
+        self.continuations.remove(&INVALID_FRAME_TOKEN);
+        let fb_temp = FrameBuilder {
+            token: INVALID_FRAME_TOKEN,
+            builder: IrBuilder::new(pools.clone()),
+        };
+        fb_temp
     }
 
     // pub unsafe fn a() -> &'static mut i32 {
@@ -130,6 +161,37 @@ impl SplitManager {
         BLOCK C;
     } else {
         BLOCK D;
+    }
+    BLOCK E;
+
+    ----------------------
+    |      BLOCK A;      |
+    | if (cond_1) {      |
+    |      BLOCK B;      |
+    |     suspend(1);    |----
+    | } else {           |   |
+    |      BLOCK D;      |   |
+    | }                  |   |
+    |      BLOCK E;      |   |
+    ----------------------   |
+                             |
+               --------------|
+               |
+               V
+    ----------------------
+    |     resume(1);     |
+    |      BLOCK C;      |
+    |      BLOCK E;      |
+    ______________________
+
+
+    BLOCK A;
+    if (cond_1) {
+        BLOCK B;
+        split(1);
+        BLOCK C;
+    } else {
+        BLOCK D;
         split(2);
         BLOCK E;
     }
@@ -160,6 +222,7 @@ impl SplitManager {
                |                        |
                V                        V
     ----------------------    ----------------------
+    |     resume(1);     |    |     resume(2);     |
     |      BLOCK C;      |    |      BLOCK E;      |
     |      BLOCK F;      |    |      BLOCK F;      |
     | if (cond_2) {      |    | if (cond_2) {      |
@@ -176,6 +239,7 @@ impl SplitManager {
                |                        |
                V                        V
     ----------------------    ----------------------
+    |     resume(3);     |    |     resume(4);     |
     |      BLOCK H;      |    |      BLOCK J;      |
     |      BLOCK K;      |    |      BLOCK K;      |
     ______________________    ______________________
@@ -186,11 +250,12 @@ impl SplitManager {
     fn coro_split_mark_in_bb(&mut self, bb: &Pooled<BasicBlock>) -> bool {
         let mut frame_token_manager = FrameTokenManager::get_instance();
         let mut split_in_bb_v = false;
-        let record_bb = |bb: &Pooled<BasicBlock>, split_in_bb: bool| {
+        let mut record_bb = |this: &mut Self, bb: &Pooled<BasicBlock>, split_in_bb: bool| -> bool {
             if split_in_bb {
-                self.split_in_bb.insert(bb.as_ptr());
-                split_in_bb_v = true;
+                this.split_in_bb.insert(bb.as_ptr());
+                return true;
             }
+            false
         };
         bb.iter().for_each(|node_ref_present| {
             let node = node_ref_present.get();
@@ -202,23 +267,24 @@ impl SplitManager {
                 // 3 Instructions that might contain coro split mark
                 Instruction::Loop { body, cond } => {
                     let split_in_body = self.coro_split_mark_in_bb(body);
-                    record_bb(body, split_in_body);
+                    split_in_bb_v |= record_bb(self, body, split_in_body);
                 }
                 Instruction::If { cond, true_branch, false_branch } => {
                     let split_in_true_branch = self.coro_split_mark_in_bb(true_branch);
                     let split_in_false_branch = self.coro_split_mark_in_bb(false_branch);
-                    record_bb(true_branch, split_in_true_branch);
-                    record_bb(false_branch, split_in_false_branch);
+                    split_in_bb_v |= record_bb(self, true_branch, split_in_true_branch);
+                    split_in_bb_v |= record_bb(self, false_branch, split_in_false_branch);
                 }
                 Instruction::Switch {
                     value: _,
                     default,
-                    cases } => {
+                    cases
+                } => {
                     let split_in_default = self.coro_split_mark_in_bb(default);
-                    record_bb(default, split_in_default);
+                    split_in_bb_v |= record_bb(self, default, split_in_default);
                     for SwitchCase { value: _, block } in cases.as_ref().iter() {
                         let split_in_case = self.coro_split_mark_in_bb(block);
-                        record_bb(block, split_in_case);
+                        split_in_bb_v |= record_bb(self, block, split_in_case);
                     }
                 }
                 _ => {}
@@ -235,28 +301,58 @@ impl SplitManager {
             match node.instruction.as_ref() {
                 Instruction::CoroSplitMark { token } => {
                     unsafe { frame_token_manager.register_frame_token(*token); }
+                    self.continuations.insert(*token, Continuation::new(*token));
+                    self.module_duplicators.insert(*token, ModuleDuplicator::new());
                 }
                 _ => {}
             }
         });
+
+        let entry_token = frame_token_manager.get_new_token();
+        unsafe { frame_token_manager.register_frame_token(entry_token); }
+        self.continuations.insert(entry_token, Continuation::new(entry_token));
+        self.module_duplicators.insert(entry_token, ModuleDuplicator::new());
         FrameBuilder {
-            token: frame_token_manager.get_new_token(),
+            token: entry_token,
             builder: IrBuilder::new(kernel.pools.clone()),
         }
     }
 
+    fn build_frame(&mut self, pools: &CArc<ModulePools>, frame_builder: FrameBuilder) {
+        let frame_token = frame_builder.token;
+
+        // build frame
+        let frame_bb = frame_builder.builder.finish();
+        let frame = Instruction::CoroFrame {
+            token: frame_token,
+            body: frame_bb,
+        };
+        let frame_node = Node::new(CArc::new(frame), CArc::new(Type::Void));
+        let frame_node_ref = new_node(pools, frame_node);
+        self.coro_frames.push(frame_node_ref);
+    }
+
     fn record_continuation(&mut self, prev: u32, next: u32) {
-        let mut continuation = self.continuations.get_mut(&prev).unwrap_or_default();
+        let mut continuation = self.continuations.get_mut(&prev).unwrap();
         continuation.token = prev;
         continuation.next.insert(next);
-        let mut continuation = self.continuations.get_mut(&next).unwrap_or_default();
+        let mut continuation = self.continuations.get_mut(&next).unwrap();
         continuation.token = next;
         continuation.prev.insert(prev);
     }
 
-    fn visit_bb(&mut self, bb: &Pooled<BasicBlock>, mut frame_builder: FrameBuilder,
-                node_ref_start: Option<NodeRef>)-> Vec<FrameBuilder> {
-        let pools = &frame_builder.builder.pools;
+    fn visit_bb(&mut self, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>, 
+                mut frame_builder: FrameBuilder, node_ref_start: Option<NodeRef>) -> Vec<FrameBuilder> {
+        let mut split_in_branch =
+            |this: &mut Self, branch: &Pooled<BasicBlock>, fb_next_vec: &mut Vec<FrameBuilder>| -> Pooled<BasicBlock> {
+                let fb_temp = this.get_frame_builder_temp(&pools);
+                let mut fb_vec = this.visit_bb(pools, branch, fb_temp, None);
+                assert!(fb_vec.len() >= 1);
+                let mut fb_branch = fb_vec.pop().unwrap();
+                fb_next_vec.extend(fb_vec);
+                let frame_branch = fb_branch.builder.finish();
+                frame_branch
+            };
 
         let mut node_ref_present = match node_ref_start {
             Some(node_ref_start) => node_ref_start,
@@ -267,11 +363,16 @@ impl SplitManager {
             match node.instruction.as_ref() {
                 // coroutine related instructions
                 Instruction::CoroSplitMark { token } => unsafe {
-                    frame_builder = self.visit_coro_split_mark(*token, frame_builder, &node_ref_present);
+                    // TODO: different behaviors for loop/if
+                    let fb_next = self.visit_coro_split_mark(*token, &mut frame_builder, &node_ref_present);
+                    let mut fb_vec = self.visit_bb(pools, bb, fb_next, Some(node_ref_present.get().next));
+                    // index 0 for the frame block before coro split mark
+                    fb_vec.insert(0, frame_builder);
+                    return fb_vec;
                 }
                 Instruction::CoroSuspend { token } => {
-                    frame_builder = self.visit_coro_suspend(*token, frame_builder);
-                    return vec![frame_builder]
+                    self.visit_coro_suspend(*token, &frame_builder);
+                    return vec![frame_builder];
                 }
                 Instruction::CoroResume { token } => {
                     unreachable!("Split: CoroResume");
@@ -281,32 +382,31 @@ impl SplitManager {
                 Instruction::Loop { body, cond } => {
                     if self.split_in_bb.contains(&body.as_ptr()) {
                         /// split in body
-                        let mut fb_vec = self.visit_bb(body, frame_builder, None);
+                        let mut fb_vec = self.visit_bb(pools, body, frame_builder, None);
+                        let fb_body_before_split = fb_vec.pop().unwrap();
+                        self.build_frame(pools, fb_body_before_split);
+                        assert!(!fb_vec.is_empty());
 
                         // use a new IrBuilder to get the start part of the body bb (util CoroSuspend)
-                        let mut ir_builder = IrBuilder::new(pools.clone());
-                        let frame_builder = FrameBuilder {
-                            token: INVALID_FRAME_TOKEN,
-                            builder: ir_builder,
-                        };
-                        let mut fb_body_vec = self.visit_bb(body, frame_builder, None);
+                        let fb_temp = self.get_frame_builder_temp(&pools);
+                        let mut fb_body_vec = self.visit_bb(pools, body, fb_temp, None);
                         assert_eq!(fb_body_vec.len(), 1);
                         let mut fb_body = fb_body_vec.pop().unwrap();
                         let frame_body = &fb_body.builder.finish();
 
-                        let mut frame_builder_vec = vec![];
+                        let mut fb_ans_vec = vec![];
                         // replace loop with if
                         for mut fb in fb_vec {
-                            // TODO: local/frame may fail in function find_duplicated_node. example: phi cond in loop
-                            let dup_cond = self.find_duplicated_node(fb.token, *cond);
                             let true_branch = self.duplicate_block(fb.token, &fb.builder.pools, frame_body);
                             // empty false branch
                             let false_branch = fb.builder.pools.bb_pool.alloc(BasicBlock::new(&pools));
-                            fb.builder.if_(dup_cond.clone(), true_branch, false_branch);
-                            let fb_next_vec = self.visit_bb(bb, fb, Some(node_ref_present.get().next));
-                            frame_builder_vec.extend(fb_next_vec);
+                            // TODO: local/frame may fail in function find_duplicated_node. example: phi cond in loop
+                            let dup_cond = self.find_duplicated_node(fb.token, *cond);
+                            fb.builder.if_(dup_cond, true_branch, false_branch);
+                            let fb_next_vec = self.visit_bb(pools, bb, fb, Some(node_ref_present.get().next));
+                            fb_ans_vec.extend(fb_next_vec);
                         }
-                        return frame_builder_vec
+                        return fb_ans_vec;
                     } else {
                         self.duplicate_node(frame_builder.token, &mut frame_builder.builder, node_ref_present);
                     }
@@ -315,20 +415,98 @@ impl SplitManager {
                     let split_in_true_branch = self.split_in_bb.contains(&true_branch.as_ptr());
                     let split_in_false_branch = self.split_in_bb.contains(&false_branch.as_ptr());
                     if !split_in_true_branch && !split_in_false_branch {
+                        /// no split, duplicate the node
                         self.duplicate_node(frame_builder.token, &mut frame_builder.builder, node_ref_present);
-                    }
-                    /// split in true/false_branch
-                    // TODO
-                    if split_in_true_branch {
-                        // let mut fb_vec = self.visit_bb(true_branch, frame_builder, None);
+                    } else {
+                        /// split in true/false_branch
+                        let mut fb_next_vec = vec![];
 
-                    }
-                    if split_in_false_branch {
+                        // process true/false branch
+                        let dup_true_branch = if split_in_true_branch {
+                            split_in_branch(self, true_branch, &mut fb_next_vec)
+                        } else {
+                            self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, true_branch)
+                        };
+                        let dup_false_branch = if split_in_false_branch {
+                            split_in_branch(self, false_branch, &mut fb_next_vec)
+                        } else {
+                            self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, false_branch)
+                        };
+                        let dup_cond = self.find_duplicated_node(frame_builder.token, *cond);
+                        frame_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch);
 
+                        // process next bb
+                        if split_in_true_branch && split_in_false_branch {
+                            self.build_frame(pools, frame_builder);
+                        } else {
+                            fb_next_vec.push(frame_builder);
+                        }
+
+                        let mut fb_ans_vec = vec![];
+                        for fb_next in fb_next_vec {
+                            fb_ans_vec.extend(self.visit_bb(pools, bb, fb_next, Some(node_ref_present.get().next)));
+                        }
+                        return fb_ans_vec;
                     }
                 }
                 Instruction::Switch { value, cases, default } => {
-                    // TODO: split in cases/default
+                    /// split in cases/default
+                    let cases_ref = cases.as_ref();
+                    let mut split_in_cases = Vec::with_capacity(cases_ref.len());
+                    let mut split_in_any_case = false;
+                    let mut split_in_all_cases = true;
+                    let split_in_default = self.split_in_bb.contains(&default.as_ptr());
+                    for (i, case) in cases_ref.iter().enumerate() {
+                        if self.split_in_bb.contains(&case.block.as_ptr()) {
+                            split_in_cases.push(true);
+                            split_in_any_case = true;
+                        } else {
+                            split_in_cases.push(false);
+                            split_in_all_cases = false;
+                        }
+                    }
+
+                    if !split_in_any_case && !split_in_default {
+                        /// no split, duplicate the node
+                        self.duplicate_node(frame_builder.token, &mut frame_builder.builder, node_ref_present);
+                    } else {
+                        /// split in cases/default
+                        let mut fb_next_vec = vec![];
+
+                        // process cases
+                        let dup_cases: Vec<_> = cases_ref.iter().enumerate().map(|(i, case)| {
+                            let dup_block = if split_in_cases[i] {
+                                split_in_branch(self, &case.block, &mut fb_next_vec)
+                            } else {
+                                self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, &case.block)
+                            };
+                            SwitchCase {
+                                value: case.value,
+                                block: dup_block,
+                            }
+                        }).collect();
+                        // process default
+                        let dup_default = if split_in_default {
+                            split_in_branch(self, default, &mut fb_next_vec)
+                        } else {
+                            self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, default)
+                        };
+                        let dup_value = self.find_duplicated_node(frame_builder.token, *value);
+                        frame_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default);
+
+                        // process next bb
+                        if split_in_all_cases && split_in_default {
+                            self.build_frame(pools, frame_builder);
+                        } else {
+                            fb_next_vec.push(frame_builder);
+                        }
+
+                        let mut fb_ans_vec = vec![];
+                        for fb_next in fb_next_vec {
+                            fb_ans_vec.extend(self.visit_bb(pools, bb, fb_next, Some(node_ref_present.get().next)));
+                        }
+                        return fb_ans_vec;
+                    }
                 }
 
                 // other instructions, just deep clone and change the node_ref to new ones
@@ -340,12 +518,15 @@ impl SplitManager {
         }
         vec![frame_builder]
     }
-    fn visit_coro_split_mark(&mut self, token_next: u32, mut frame_builder: FrameBuilder, node_ref: &NodeRef) -> FrameBuilder {
+    fn visit_coro_split_mark(&mut self, token_next: u32, frame_builder: &mut FrameBuilder, node_ref: &NodeRef) -> FrameBuilder {
         /// frame_next has not been processed
 
         let frame_token = frame_builder.token;
         let mut builder = &mut frame_builder.builder;
-        let pools = &builder.pools;
+
+        // create a new frame builder for the next frame
+        // the next frame must have a CoroResume
+        let mut builder_next = IrBuilder::new(builder.pools.clone());
 
         // record continuation
         self.record_continuation(frame_token, token_next);
@@ -354,26 +535,14 @@ impl SplitManager {
         let coro_suspend = builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
-        // build frame
-        let frame_bb = builder.finish();
-        let frame = Instruction::CoroFrame {
-            token: frame_token,
-            body: frame_bb,
-        };
-        let frame_node = Node::new(CArc::new(frame), CArc::new(Type::Void));
-        let frame_node_ref = new_node(&pools, frame_node);
-        self.coro_frames.push(frame_node_ref);
-
-        // create a new frame builder for the next frame
-        // the next frame must have a CoroResume
-        let mut builder = IrBuilder::new(pools.clone());
-        builder.coro_resume(token_next);
+        // return
+        builder_next.coro_resume(token_next);
         FrameBuilder {
             token: token_next,
-            builder,
+            builder: builder_next,
         }
     }
-    fn visit_coro_suspend(&mut self, token_next: u32, mut frame_builder: FrameBuilder) -> FrameBuilder {
+    fn visit_coro_suspend(&mut self, token_next: u32, frame_builder: &FrameBuilder) {
         /// frame_next is already processed
 
         let frame_token = frame_builder.token;
@@ -383,38 +552,31 @@ impl SplitManager {
 
         // the next frame must have been processed
         // there is no need to create a new frame builder
-        frame_builder
     }
 
     fn split(&mut self, kernel: &KernelModule) {
         // prepare
         let pools = &kernel.pools;
-        let mut frame_builder = self.preprocess(kernel);
+        let frame_builder = self.preprocess(kernel);
         let bb = &kernel.module.entry;
 
         // visit
-        frame_builder = self.visit_bb(bb, frame_builder, None).unwrap();
-        let mut builder = &mut frame_builder.builder;
-        let frame_token = frame_builder.token;
-        let frame_bb = builder.finish();
-        let frame = Instruction::CoroFrame {
-            token: frame_token,
-            body: frame_bb,
-        };
-        let frame_node = Node::new(CArc::new(frame), CArc::new(Type::Void));
-        let frame_node_ref = new_node(&pools, frame_node);
-        self.coro_frames.push(frame_node_ref);
+        let mut fb_vec = self.visit_bb(pools, bb, frame_builder, None);
+        while !fb_vec.is_empty() {
+            let frame_builder = fb_vec.pop().unwrap();
+            self.build_frame(pools, frame_builder);
+        }
     }
 
 
     // duplicate functions
     fn find_duplicated_block(&self, frame_token: u32, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
-        let ctx = self.module_duplicators.get(&frame_token).unwrap_or_default().current.as_ref().unwrap();
+        let ctx = self.module_duplicators.get(&frame_token).unwrap().current.as_ref().unwrap();
         ctx.blocks.get(&bb.as_ptr()).unwrap().clone()
     }
     fn find_duplicated_node(&self, frame_token: u32, node: NodeRef) -> NodeRef {
         if !node.valid() { return INVALID_REF; }
-        let ctx = self.module_duplicators.get(&frame_token).unwrap_or_default().current.as_ref().unwrap();
+        let ctx = self.module_duplicators.get(&frame_token).unwrap().current.as_ref().unwrap();
         ctx.nodes.get(&node).unwrap().clone()
     }
     fn duplicate_arg(&mut self, frame_token: u32, pools: &CArc<ModulePools>, node_ref: NodeRef) -> NodeRef {
@@ -435,7 +597,7 @@ impl SplitManager {
         let dup_node_ref = new_node(pools, dup_node);
         // add to node map
         self.old2new.entry(node_ref).or_default().insert((frame_token, dup_node_ref));
-        self.module_duplicators.get_mut(&frame_token).unwrap_or_default()
+        self.module_duplicators.get_mut(&frame_token).unwrap()
             .current.as_mut().unwrap().nodes.insert(node_ref, dup_node_ref);
         dup_node_ref
     }
@@ -465,14 +627,14 @@ impl SplitManager {
     }
 
     fn duplicate_callable(&mut self, frame_token: u32, callable: &CArc<CallableModule>) -> CArc<CallableModule> {
-        if let Some(copy) = self.module_duplicators.get(&frame_token).unwrap_or_default()
+        if let Some(copy) = self.module_duplicators.get(&frame_token).unwrap()
             .callables.get(&callable.as_ptr()) {
             return copy.clone();
         }
         let dup_callable = self.with_context(frame_token, |this| {
             let dup_args = this.duplicate_args(frame_token, &callable.pools, &callable.args);
             let dup_captures = this.duplicate_captures(frame_token, &callable.pools, &callable.captures);
-            let dup_module = this.duplicate_module(&callable.module);
+            let dup_module = this.duplicate_module(frame_token, &callable.module);
             CallableModule {
                 module: dup_module,
                 ret_type: callable.ret_type.clone(),
@@ -483,11 +645,11 @@ impl SplitManager {
             }
         });
         let dup_callable = CArc::new(dup_callable);
-        self.module_duplicators.get_mut(&frame_token).unwrap_or_default().callables.insert(callable.as_ptr(), dup_callable.clone());
+        self.module_duplicators.get_mut(&frame_token).unwrap().callables.insert(callable.as_ptr(), dup_callable.clone());
         dup_callable
     }
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
-        assert!(!self.current.as_ref().unwrap().blocks.contains_key(&bb.as_ptr()),
+        assert!(!self.module_duplicators.get_mut(&frame_token).unwrap().current.as_ref().unwrap().blocks.contains_key(&bb.as_ptr()),
                 "Basic block {:?} has already been duplicated", bb);
         let mut builder = IrBuilder::new(pools.clone());
         bb.iter().for_each(|node| {
@@ -495,15 +657,23 @@ impl SplitManager {
         });
         let dup_bb = builder.finish();
         // insert the duplicated block into the map
-        self.module_duplicators.get_mut(&frame_token).unwrap_or_default()
+        self.module_duplicators.get_mut(&frame_token).unwrap()
             .current.as_mut().unwrap().blocks.insert(bb.as_ptr(), dup_bb.clone());
         dup_bb
+    }
+    fn duplicate_module(&mut self, frame_token: u32, module: &Module) -> Module {
+        let dup_entry = self.duplicate_block(frame_token, &module.pools, &module.entry);
+        Module {
+            kind: module.kind,
+            entry: dup_entry,
+            pools: module.pools.clone(),
+        }
     }
 
     fn duplicate_node(&mut self, frame_token: u32, builder: &mut IrBuilder, node_ref: NodeRef) -> NodeRef {
         if !node_ref.valid() { return INVALID_REF; }
         let node = node_ref.get();
-        assert!(!self.current.as_ref().unwrap().nodes.contains_key(&node_ref),
+        assert!(!self.module_duplicators.get_mut(&frame_token).unwrap().current.as_ref().unwrap().nodes.contains_key(&node_ref),
                 "Node {:?} has already been duplicated", node);
         let dup_node = match node.instruction.as_ref() {
             Instruction::Buffer => unreachable!("Buffer should be handled by duplicate_args"),
@@ -515,7 +685,6 @@ impl SplitManager {
             Instruction::Uniform => unreachable!("Uniform should be handled by duplicate_args"),
             Instruction::Argument { .. } => unreachable!("Argument should be handled by duplicate_args"),
             Instruction::Local { init } => {
-                // TODO
                 // let dup_init = self.find_duplicated_node(frame, *init);
                 // builder.local(dup_init)
                 unimplemented!("Split: duplicate local")
@@ -524,7 +693,7 @@ impl SplitManager {
             Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
             Instruction::Const(const_) => builder.const_(const_.clone()),
             Instruction::Update { var, value } => {
-                // TODO: unreachable if SSA
+                /// unreachable if SSA
                 // let dup_var = self.find_duplicated_node(*var);
                 // let dup_value = self.find_duplicated_node(*value);
                 // builder.update(dup_var, dup_value)
@@ -533,7 +702,6 @@ impl SplitManager {
             Instruction::Call(func, args) => {
                 let dup_func = match func {
                     Func::Callable(callable) => {
-                        // TODO
                         // let dup_callable = self.duplicate_callable(&callable.0);
                         // Func::Callable(CallableModuleRef(dup_callable))
                         unimplemented!("Split: duplicate callable");
@@ -608,10 +776,16 @@ impl SplitManager {
                 builder.ad_detach(dup_body)
             }
             Instruction::Comment(msg) => builder.comment(msg.clone()),
+            Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
+            Instruction::CoroSuspend { .. }
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroFrame { .. } => {
+                unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
+            }
         };
         // insert the duplicated node into the map
         self.old2new.entry(node_ref).or_default().insert((frame_token, dup_node));
-        self.module_duplicators.get_mut(&frame_token).unwrap_or_default()
+        self.module_duplicators.get_mut(&frame_token).unwrap()
             .current.as_mut().unwrap().nodes.insert(node_ref, dup_node);
         dup_node
     }

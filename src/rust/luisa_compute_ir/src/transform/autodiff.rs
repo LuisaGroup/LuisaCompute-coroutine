@@ -21,6 +21,7 @@ use crate::{
 use crate::{CArc, Pooled};
 
 use super::Transform;
+
 // Simple backward autodiff
 // Loop is not supported since users would use path replay[https://rgl.epfl.ch/publications/Vicini2021PathReplay] anyway
 struct GradTypeRecord {
@@ -1733,6 +1734,10 @@ impl Backward {
             crate::ir::Instruction::Return(_) => {
                 panic!("should not have return in autodiff section")
             }
+            Instruction::CoroSplitMark { .. }
+            | Instruction::CoroSuspend { .. }
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroFrame { .. } => {}
         }
     }
     fn backward_block(&mut self, block: &BasicBlock, mut builder: IrBuilder) -> Pooled<BasicBlock> {
@@ -1769,6 +1774,7 @@ impl Backward {
 }
 
 pub struct Autodiff;
+
 fn ad_transform_block(module: crate::ir::Module) -> crate::ir::Module {
     assert!(
         module.kind == crate::ir::ModuleKind::Block,
@@ -1811,6 +1817,7 @@ fn ad_transform_block(module: crate::ir::Module) -> crate::ir::Module {
         pools: module.pools,
     }
 }
+
 fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) {
     for node in block.iter() {
         match node.get().instruction.as_ref() {
@@ -1880,6 +1887,7 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
         }
     }
 }
+
 impl Transform for Autodiff {
     fn transform(&self, module: crate::ir::Module) -> crate::ir::Module {
         ad_transform_recursive(module.entry, &module.pools);

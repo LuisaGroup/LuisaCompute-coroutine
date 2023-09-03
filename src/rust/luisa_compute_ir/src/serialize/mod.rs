@@ -150,6 +150,19 @@ pub enum SerializedInstruction {
     },
     Comment(Vec<u8>),
     Assert(SerializedNodeRef, Vec<u8>),
+    CoroSplitMark{
+        token: u32,
+    },
+    CoroSuspend {
+        token: u32,
+    },
+    CoroResume {
+        token: u32,
+    },
+    CoroFrame {
+        token: u32,
+        body: SerializedBlockRef,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -224,6 +224,19 @@ impl DisplayIR {
             }
             Instruction::Comment(_) => {}
             Instruction::Return(_) => todo!(),
+            Instruction::CoroSplitMark { token } => {
+                self.output += format!("CoroSplitMark({})", token).as_str();
+            }
+            Instruction::CoroSuspend { token } => {
+                self.output += format!("CoroSuspend({})", token).as_str();
+            }
+            | Instruction::CoroResume { token } => {
+                self.output += format!("CoroResume({})", token).as_str();
+            }
+            | Instruction::CoroFrame { token, .. } => {
+                self.output += format!("CoroFrame({})", token).as_str();
+                // TODO
+            }
         }
         if !no_new_line {
             self.output += "\n";

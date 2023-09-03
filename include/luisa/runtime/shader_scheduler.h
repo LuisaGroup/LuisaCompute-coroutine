@@ -106,7 +106,7 @@ class LC_RUNTIME_API ShaderFrameManager {
 
 public:
     luisa::vector<ShaderFrame> frames;
-    luisa::unordered_map<uint, luisa::set<uint>> shader_frame_map;
+    luisa::unordered_map<uint, luisa::unordered_set<uint>> shader_frame_map;
 };
 
 #define INVALID_KERNEL 0u

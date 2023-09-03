@@ -529,6 +529,12 @@ impl Validator {
                 assert!(is_type_equal(&type_, &Type::void()));
             }
             crate::ir::Instruction::AssertWithBacktrace { .. } => {}
+            Instruction::CoroSplitMark { token, .. }
+            | Instruction::CoroSuspend { token, .. }
+            | Instruction::CoroResume { token, .. }
+            | Instruction::CoroFrame { token, .. } => {
+                assert!(token < &u32::MAX, "Invalid frame token");
+            }
         }
     }
     fn validate(&mut self, module: &Module) {

@@ -47,6 +47,7 @@ add_subdirectory(tensor)
 add_subdirectory(osl)
 add_subdirectory(gui)
 add_subdirectory(backends)
+add_subdirectory(coro)
 
 add_library(compute INTERFACE)
 
@@ -60,7 +61,8 @@ target_link_libraries(compute INTERFACE
         luisa-compute-gui
         luisa-compute-api
         luisa-compute-backends
-        luisa-compute-ir)
+        luisa-compute-ir
+        luisa-compute-coro)
 
 if (LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
     target_link_libraries(compute INTERFACE luisa-compute-cuda-ext-lcub)

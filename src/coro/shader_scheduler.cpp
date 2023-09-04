@@ -2,7 +2,7 @@
 // Created by ChenXin on 2023/6/29.
 //
 
-#include <luisa/runtime/shader_scheduler.h>
+#include "luisa/coro/shader_scheduler.h"
 
 namespace luisa::compute {
 

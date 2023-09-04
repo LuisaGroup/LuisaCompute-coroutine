@@ -31,7 +31,6 @@ set(LUISA_COMPUTE_RUNTIME_SOURCES
         stream.cpp
         swapchain.cpp
         volume.cpp
-        shader_scheduler.cpp
         command_buffer.cpp
         ${LUISA_COMPUTE_RUNTIME_RTX_SOURCES}
         ${LUISA_COMPUTE_RUNTIME_RASTER_SOURCES}

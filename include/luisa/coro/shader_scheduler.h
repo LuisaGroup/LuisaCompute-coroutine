@@ -4,18 +4,18 @@
 
 #pragma once
 
-#include <luisa/runtime/shader.h>
+#include "luisa/runtime/shader.h"
 
-#include <luisa/dsl/syntax.h>
-#include <luisa/dsl/sugar.h>
-#include <luisa/dsl/builtin.h>
-#include <luisa/runtime/command_buffer.h>
-#include <luisa/core/logging.h>
-#include <luisa/runtime/rhi/argument.h>
+#include "luisa/dsl/syntax.h"
+#include "luisa/dsl/sugar.h"
+#include "luisa/dsl/builtin.h"
+#include "luisa/runtime/command_buffer.h"
+#include "luisa/core/logging.h"
+#include "luisa/runtime/rhi/argument.h"
 
 namespace luisa::compute {
 
-class LC_RUNTIME_API RayQueue {
+class LC_CORO_API RayQueue {
 
 public:
     static constexpr auto counter_buffer_size = 16u * 1024u;
@@ -32,7 +32,7 @@ public:
     [[nodiscard]] BufferView<uint> prepare_index_buffer(CommandBuffer &command_buffer) noexcept;
 };
 
-class LC_RUNTIME_API AggregatedRayQueue {
+class LC_CORO_API AggregatedRayQueue {
 private:
     Buffer<uint> _index_buffer;
     Buffer<uint> _counter_buffer;
@@ -52,7 +52,7 @@ public:
     void catch_counter(CommandBuffer &command_buffer) noexcept;
 };
 
-struct LC_RUNTIME_API ArgumentInfo {
+struct LC_CORO_API ArgumentInfo {
 
     struct Uniform {
         const void *data;
@@ -75,7 +75,7 @@ struct LC_RUNTIME_API ArgumentInfo {
     };
 };
 
-class LC_RUNTIME_API KernelInfo {
+class LC_CORO_API KernelInfo {
 
 private:
     uint _shader_handle;
@@ -95,14 +95,14 @@ public:
     void encode_accel(uint64_t handle) noexcept;
 };
 
-class LC_RUNTIME_API ShaderFrame {
+class LC_CORO_API ShaderFrame {
 
 public:
     uint frame_handle;
 
 };
 
-class LC_RUNTIME_API ShaderFrameManager {
+class LC_CORO_API ShaderFrameManager {
 
 public:
     luisa::vector<ShaderFrame> frames;
@@ -111,7 +111,7 @@ public:
 
 #define INVALID_KERNEL 0u
 
-class LC_RUNTIME_API ShaderScheduler {
+class LC_CORO_API ShaderScheduler {
 
 private:
     AggregatedRayQueue _aggregated_kernel_queue;

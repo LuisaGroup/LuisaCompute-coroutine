@@ -11,7 +11,7 @@ Remove all Instruction::Update nodes
 
 */
 pub struct Coroutine;
-struct ToSSAImpl {
+struct CoroutineImpl {
     map_blocks: HashMap<*mut BasicBlock, *mut BasicBlock>,
     local_defs: HashSet<NodeRef>,
     map_immutables: HashMap<NodeRef, NodeRef>,
@@ -40,7 +40,7 @@ impl SSABlockRecord {
     }
 }
 
-impl ToSSAImpl {
+impl CoroutineImpl {
     fn new(model: &Module) -> Self {
         Self {
             map_blocks: HashMap::new(),
@@ -355,10 +355,11 @@ impl ToSSAImpl {
 }
 
 impl Transform for Coroutine {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         //let result=DisplayIR::new().display_ir(&module);
         //println!("{}",result);
-        let mut imp = ToSSAImpl::new(&module);
+        let module=callable.module;
+        let mut imp = CoroutineImpl::new(&module);
         let new_bb = imp.promote_bb(
             module.entry,
             IrBuilder::new(module.pools.clone()),
@@ -374,6 +375,9 @@ impl Transform for Coroutine {
         //println!("\n\n----------after------\n\n");
         //let result=DisplayIR::new().display_ir(&ret);
         //println!("{}",result);
-        ret
+        CallableModule {
+            module:ret,
+            ..callable
+        }
     }
 }

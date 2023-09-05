@@ -341,7 +341,7 @@ impl ToSSAImpl {
 }
 
 impl Transform for ToSSA {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut imp = ToSSAImpl::new(&module);
         let new_bb = imp.promote_bb(
             module.entry,

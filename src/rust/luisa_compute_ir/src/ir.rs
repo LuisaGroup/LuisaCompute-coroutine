@@ -1401,6 +1401,8 @@ pub struct CallableModule {
     pub args: CBoxedSlice<NodeRef>,
     pub captures: CBoxedSlice<Capture>,
     pub callables: CBoxedSlice<CallableModuleRef>,
+    pub subroutines: CBoxedSlice<CallableModuleRef>,
+    pub subroutine_ids: CBoxedSlice<u32>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,

@@ -202,13 +202,13 @@ public:
     [[nodiscard]] SparseTextureHeap allocate_sparse_texture_heap(size_t byte_size);
 
     template<typename T>
-        requires(!is_custom_struct_v<T>)//backend-specific type not allowed
+        requires(!is_internal_custom_struct_v<T>)//backend-specific type not allowed
     [[nodiscard]] auto create_buffer(size_t size) noexcept {
         return _create<Buffer<T>>(size);
     }
 
     template<typename T>
-        requires(!is_custom_struct_v<T>)//backend-specific type not allowed
+        requires(!is_internal_custom_struct_v<T>)//backend-specific type not allowed
     [[nodiscard]] auto create_sparse_buffer(size_t size) noexcept {
         return _create<SparseBuffer<T>>(size);
     }

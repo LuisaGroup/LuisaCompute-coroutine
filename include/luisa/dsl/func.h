@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "luisa/core/logging.h"
 #include <type_traits>
 #include <luisa/core/stl/memory.h>
 #include <luisa/ast/external_function.h>
@@ -13,6 +14,8 @@
 #include <luisa/dsl/arg.h>
 #include <luisa/dsl/var.h>
 #include <luisa/dsl/resource.h>
+#include <luisa/core/stl/unordered_map.h>
+
 
 namespace luisa::compute {
 
@@ -147,6 +150,9 @@ class FunctionBuilder;
 [[nodiscard]] LC_DSL_API luisa::shared_ptr<const FunctionBuilder>
 transform_function(Function callable) noexcept;
 
+[[nodiscard]] LC_DSL_API luisa::shared_ptr<const FunctionBuilder>
+transform_coroutine(Type* corotype, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function callable) noexcept;
+
 }// namespace detail
 
 template<typename T>
@@ -210,6 +216,7 @@ class Kernel {
 private:
     using SharedFunctionBuilder = luisa::shared_ptr<const detail::FunctionBuilder>;
     SharedFunctionBuilder _builder{nullptr};
+
     explicit Kernel(SharedFunctionBuilder builder) noexcept
         : _builder{detail::transform_function(builder->function())} {}
 
@@ -378,7 +385,8 @@ public:
         });
         _builder = detail::transform_function(ast->function());
     }
-
+    Callable(luisa::shared_ptr<const detail::FunctionBuilder> builder) noexcept
+        : _builder{builder} {}
     /// Get the underlying AST
     [[nodiscard]] auto function() const noexcept { return Function{_builder.get()}; }
     [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
@@ -455,6 +463,81 @@ public:
                     Type::of<Ret>(), _func, invoke.args()));
         }
     }
+};
+
+
+/// Coroutine class. Coroutine<T> is not allowed, unless T is a function type.
+template<typename T>
+class Coroutine {
+    static_assert(always_false_v<T>);
+};
+
+template<typename T>
+struct is_callable<Coroutine<T>> : std::true_type {};
+template<typename Ret, typename... Args>
+class Coroutine<Ret(Args...)> {
+    static_assert(
+        std::negation_v<std::disjunction<
+            is_buffer_or_view<Ret>,
+            is_image_or_view<Ret>,
+            is_volume_or_view<Ret>>>,
+        "Coroutines may not return buffers, "
+        "images or volumes (or their views).");
+    static_assert(std::negation_v<std::disjunction<std::is_pointer<Args>...>>);
+
+private:
+    using CoroID=uint;
+    using FrameType = std::tuple_element_t<0, std::tuple<Args...>>;
+    static_assert(std::is_lvalue_reference_v<FrameType>);
+    luisa::shared_ptr<const detail::FunctionBuilder> _builder;
+    luisa::unordered_map<CoroID, luisa::shared_ptr<const detail::FunctionBuilder>> _sub_builders;
+
+    
+public:
+    template<typename Def>
+        requires std::negation_v<is_callable<std::remove_cvref_t<Def>>> &&
+                 std::negation_v<is_kernel<std::remove_cvref_t<Def>>>
+    Coroutine(Def &&f) noexcept {
+        auto ast = detail::FunctionBuilder::define_coroutine([&f] {
+            static_assert(std::is_invocable_v<Def, detail::prototype_to_creation_t<Args>...>);
+            auto create = []<size_t... i>(auto &&def, std::index_sequence<i...>) noexcept {
+                using arg_tuple = std::tuple<Args...>;
+                using var_tuple = std::tuple<Var<std::remove_cvref_t<Args>>...>;
+                using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<Args>...>;
+                auto args = detail::create_argument_definitions<var_tuple, tag_tuple>(std::tuple<>{});
+                static_assert(std::tuple_size_v<decltype(args)> == sizeof...(Args));
+                return luisa::invoke(std::forward<decltype(def)>(def),
+                                     static_cast<detail::prototype_to_creation_t<
+                                         std::tuple_element_t<i, arg_tuple>> &&>(std::get<i>(args))...);
+            };
+            static_assert(std::is_same_v<Ret, void>,"coroutine should return void");
+            create(std::forward<Def>(f), std::index_sequence_for<Args...>{});
+            detail::FunctionBuilder::current()->return_(nullptr);// to check if any previous $return called with non-void types
+        });
+        Type *frame = const_cast<Type*>(Type::of<expr_value_t<FrameType>>());
+        _builder=detail::transform_coroutine(frame,_sub_builders,ast->function());
+    }
+
+    /// Get the underlying AST
+    [[nodiscard]] auto function() const noexcept { return Function{_builder.get()}; }
+    [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
+    [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
+
+    //Call from start of coroutine
+    auto operator()(detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+
+        detail::CallableInvoke invoke;
+        static_cast<void>((invoke << ... << args));
+        detail::FunctionBuilder::current()->call(
+                _builder->function(), invoke.args());
+    }
+
+    //Get Callable from certain suspend point
+    auto operator[](CoroID index) const noexcept {
+        auto builder = _sub_builders.find(index);
+        LUISA_ASSERT(builder!=_sub_builders.end(),"coroutine index out of range");
+        return Callable<Ret(FrameType)>{builder->second};
+    };
 };
 
 namespace detail {
@@ -551,6 +634,11 @@ struct dsl_function<Callable<T>> {
 };
 
 template<typename T>
+struct dsl_function<Coroutine<T>> {
+    using type = T;
+};
+
+template<typename T>
 using dsl_function_t = typename dsl_function<T>::type;
 
 }// namespace detail
@@ -566,5 +654,8 @@ Kernel3D(T &&) -> Kernel3D<detail::dsl_function_t<std::remove_cvref_t<T>>>;
 
 template<typename T>
 Callable(T &&) -> Callable<detail::dsl_function_t<std::remove_cvref_t<T>>>;
+
+template<typename T>
+Coroutine(T &&) -> Coroutine<detail::dsl_function_t<std::remove_cvref_t<T>>>;
 
 }// namespace luisa::compute

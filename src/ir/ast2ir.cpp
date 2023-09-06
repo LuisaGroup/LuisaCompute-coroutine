@@ -155,8 +155,8 @@ luisa::shared_ptr<ir::CArc<ir::KernelModule>> AST2IR::_convert_kernel(Function f
 }
 
 luisa::shared_ptr<ir::CArc<ir::CallableModule>> AST2IR::_convert_callable(Function function) noexcept {
-    LUISA_ASSERT(function.tag() == Function::Tag::CALLABLE,
-                 "Invalid function tag.");
+    //LUISA_ASSERT(function.tag() == Function::Tag::CALLABLE,
+    //             "Invalid function tag.");
     if (auto iter = _converted_callables.find(function);
         iter != _converted_callables.end()) {
         return iter->second;
@@ -1055,7 +1055,8 @@ ir::NodeRef AST2IR::_convert(const SwitchDefaultStmt *stmt) noexcept {
 }
 
 ir::NodeRef AST2IR::_convert(const AssignStmt *stmt) noexcept {
-    auto lhs = _convert_expr(stmt->lhs(), true);
+    auto prev_lhs = stmt->lhs();
+    auto lhs = _convert_expr(prev_lhs, true);
     auto rhs = _cast(stmt->lhs()->type(), stmt->rhs()->type(),
                      _convert_expr(stmt->rhs(), false));
     auto instr = ir::luisa_compute_ir_new_instruction(
@@ -1382,6 +1383,9 @@ ir::NodeRef AST2IR::_literal(const Type *type, LiteralExpr::Value value) noexcep
 }
 
 [[nodiscard]] luisa::shared_ptr<ir::CArc<ir::CallableModule>> AST2IR::build_callable(Function function) noexcept {
+    return AST2IR{}._convert_callable(function);
+}
+[[nodiscard]] luisa::shared_ptr<ir::CArc<ir::CallableModule>> AST2IR::build_coroutine(Function function) noexcept {
     return AST2IR{}._convert_callable(function);
 }
 

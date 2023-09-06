@@ -72,7 +72,13 @@ template<typename T>
 struct is_custom_struct : std::false_type {};
 
 template<typename T>
+struct is_internal_custom_struct : std::false_type {};
+
+template<typename T>
 constexpr auto is_custom_struct_v = is_custom_struct<T>::value;
+
+template<typename T>
+constexpr auto is_internal_custom_struct_v = is_internal_custom_struct<T>::value;
 
 namespace detail {
 
@@ -375,6 +381,9 @@ public:
     [[nodiscard]] uint dimension() const noexcept;
     [[nodiscard]] luisa::span<const Type *const> members() const noexcept;
     [[nodiscard]] const Type *element() const noexcept;
+    
+    ///change the corresponding Type to another Type in registery
+    void update_from(const Type *type);
 
     /// Scalar = bool || float || int || uint
     [[nodiscard]] bool is_scalar() const noexcept;

@@ -200,7 +200,7 @@ inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag 
     Variable v{type, tag, _next_variable_uid()};
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
-    if (_tag == Function::Tag::CALLABLE) [[unlikely]] {
+    if (_tag == Function::Tag::CALLABLE||_tag == Function::Tag::COROUTINE) [[unlikely]] {
         _arguments.emplace_back(v);
         _bound_arguments.emplace_back();
     }
@@ -657,6 +657,11 @@ bool FunctionBuilder::requires_atomic_float() const noexcept {
 
 bool FunctionBuilder::requires_autodiff() const noexcept {
     return _propagated_builtin_callables.uses_autodiff();
+}
+
+void FunctionBuilder::coroframe_replace(const Type* type) noexcept{
+    LUISA_ASSERT(_arguments.size() > 0, "Lack of parameter for coroutine generated callables!");
+    _arguments[0]._type = type;
 }
 
 void FunctionBuilder::sort_bindings() noexcept {

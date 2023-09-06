@@ -227,7 +227,7 @@ impl DisplayIR {
                 self.output += "}";
             }
             Instruction::Comment(_) => {}
-            Instruction::Return(_) => todo!(),
+            Instruction::Return(_) => {self.output += "return\n";}
         }
         if !no_new_line {
             self.output += "\n";

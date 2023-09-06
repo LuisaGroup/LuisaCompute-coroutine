@@ -346,13 +346,29 @@ constexpr auto is_valid_reflection_v = is_valid_reflection<S, M, O>::value;
 #define LUISA_STRUCT_REFLECT(S, ...) \
     LUISA_MAKE_STRUCTURE_TYPE_DESC_SPECIALIZATION(S, __VA_ARGS__)
 
-#define LUISA_CUSTOM_STRUCT_REFLECT(S, name)                         \
-    template<>                                                       \
-    struct luisa::compute::is_custom_struct<S> : std::true_type {};  \
-    template<>                                                       \
-    struct luisa::compute::detail::TypeDesc<S> {                     \
-        static constexpr luisa::string_view description() noexcept { \
-            return name;                                             \
-        }                                                            \
-    };
+#define LUISA_CUSTOM_STRUCT_REFLECT(S, name)                               \
+  template<>                                                               \
+  struct luisa::compute::is_custom_struct<S> : std::true_type {};          \
+  template<>                                                               \
+  struct luisa::compute::is_internal_custom_struct<S> : std::true_type {}; \
+  template<>                                                               \
+  struct luisa::compute::detail::TypeDesc<S> {                             \
+    static constexpr luisa::string_view description() noexcept {           \
+      return name;                                                         \
+    }                                                                      \
+  };
+
+#define LUISA_COROFRAME_STRUCT_REFLECT(S, name)                   \
+  template<>                                                      \
+  struct canonical_layout<S> {                                    \
+    using type = std::tuple<S>;                                   \
+  };                                                              \
+  template<>                                                      \
+  struct luisa::compute::is_custom_struct<S> : std::true_type {}; \
+  template<>                                                      \
+  struct luisa::compute::detail::TypeDesc<S> {                    \
+    static constexpr luisa::string_view description() noexcept {  \
+      return name;                                                \
+    }                                                             \
+  };
 

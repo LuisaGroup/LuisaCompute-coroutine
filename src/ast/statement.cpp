@@ -26,6 +26,10 @@ uint64_t ReturnStmt::_compute_hash() const noexcept {
     return _expr == nullptr ? hash64_default_seed : _expr->hash();
 }
 
+uint64_t SuspendStmt::_compute_hash() const noexcept {
+    return _expr == nullptr ? hash64_default_seed : _expr->hash();
+}
+
 uint64_t ScopeStmt::_compute_hash() const noexcept {
     auto h = hash64_default_seed;
     for (auto &&s : _statements) {
@@ -99,6 +103,8 @@ void StmtVisitor::visit(const AutoDiffStmt *stmt) {
     // handled by the IR when reaching the backend
     LUISA_ERROR_WITH_LOCATION("AutoDiffStmt is not supported.");
 }
-
+void StmtVisitor::visit(const SuspendStmt* stmt) {
+	LUISA_ERROR_WITH_LOCATION("SuspendStmt is not supported.");
+}
 }// namespace luisa::compute
 

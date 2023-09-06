@@ -1,24 +1,40 @@
 pub mod autodiff;
 pub mod canonicalize_control_flow;
+pub mod coroutine;
 pub mod ssa;
 // pub mod validate;
 pub mod vectorize;
 pub mod eval;
-pub mod ref2ret;
 
+pub mod ref2ret;
 pub mod reg2mem;
 
 pub mod split;
 
-use crate::ir;
+use crate::ir::{self, CallableModule, Module, KernelModule};
 
 pub trait Transform {
-    fn transform(&self, module: ir::Module) -> ir::Module;
+    fn transform_module(&self, module: Module) -> Module {
+        panic!("transform module not implemented")
+    }
+    fn transform_callable(&self, module: CallableModule) -> CallableModule {
+        CallableModule {
+            module: self.transform_module(module.module),
+            ..module
+        }
+    }
+    fn transform_kernel(&self, kernel: KernelModule) -> KernelModule {
+        KernelModule {
+            module: self.transform_module(kernel.module),
+            ..kernel
+        }
+    }
 }
 
 pub struct TransformPipeline {
     transforms: Vec<Box<dyn Transform>>,
 }
+
 impl TransformPipeline {
     pub fn new() -> Self {
         Self {
@@ -29,11 +45,26 @@ impl TransformPipeline {
         self.transforms.push(transform);
     }
 }
+
 impl Transform for TransformPipeline {
-    fn transform(&self, module: ir::Module) -> ir::Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut module = module;
         for transform in &self.transforms {
-            module = transform.transform(module);
+            module = transform.transform_module(module);
+        }
+        module
+    }
+    fn transform_callable(&self, module: CallableModule) -> CallableModule {
+        let mut module = module;
+        for transform in &self.transforms {
+            module = transform.transform_callable(module);
+        }
+        module
+    }
+    fn transform_kernel(&self, module: KernelModule) -> KernelModule {
+        let mut module = module;
+        for transform in &self.transforms {
+            module = transform.transform_kernel(module);
         }
         module
     }
@@ -58,7 +89,7 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = ssa::ToSSA;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
-        "canonicalize_control_flow"=>{
+        "canonicalize_control_flow" => {
             let transform = canonicalize_control_flow::CanonicalizeControlFlow;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
@@ -78,17 +109,38 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = reg2mem::Reg2Mem;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
+        "coroutine" => {
+            let transform = coroutine::Coroutine;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
         _ => panic!("unknown transform {}", name),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn luisa_compute_ir_transform_pipeline_transform(
+pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_module(
     pipeline: *mut TransformPipeline,
-    module: ir::Module,
-) -> ir::Module {
-    unsafe { (*pipeline).transform(module) }
+    module: Module,
+) -> Module {
+    unsafe { (*pipeline).transform_module(module) }
 }
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_callable(
+    pipeline: *mut TransformPipeline,
+    module: CallableModule,
+) -> CallableModule {
+    unsafe { (*pipeline).transform_callable(module) }
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_kernel(
+    pipeline: *mut TransformPipeline,
+    module: KernelModule,
+) -> KernelModule {
+    unsafe { (*pipeline).transform_kernel(module) }
+}
+
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_transform_pipeline_destroy(pipeline: *mut TransformPipeline) {
     unsafe {

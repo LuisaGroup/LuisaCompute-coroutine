@@ -235,6 +235,10 @@ impl DisplayIR {
             Instruction::CoroSuspend { token } => {
                 self.output += format!("CoroSuspend({})", token).as_str();
             }
+            Instruction::Suspend (suspend_id ) => {
+                let temp = format!("suspend ${}\n", self.get(suspend_id));
+                self.output += temp.as_str();
+            }
             | Instruction::CoroResume { token } => {
                 self.output += format!("CoroResume({})", token).as_str();
             }

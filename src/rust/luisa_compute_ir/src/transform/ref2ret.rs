@@ -215,6 +215,7 @@ impl Ref2RetImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
+                | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
                 | Instruction::CoroFrame { .. } => {}
             }
@@ -312,7 +313,7 @@ impl Ref2RetImpl {
 }
 
 impl Transform for Ref2Ret {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut transform = Ref2RetImpl::new();
         transform.transform_block(&module.entry);
         module

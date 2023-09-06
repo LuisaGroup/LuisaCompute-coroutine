@@ -226,7 +226,7 @@ impl Primitive {
 
 impl VectorType {
     pub fn size(&self) -> usize {
-        let el_sz = self.element.size();
+        let el_sz: usize = self.element.size();
         let aligned_len = {
             let four = self.length / 4;
             let rem = self.length % 4;
@@ -1056,9 +1056,12 @@ pub enum Instruction {
     CoroSplitMark {
         token: u32,
     },
+    // TODO: merge the 2 instructions below
     CoroSuspend {
         token: u32,
     },
+    Suspend(NodeRef),
+    // ------------------
     CoroResume {
         token: u32,
     },
@@ -1481,6 +1484,8 @@ pub struct CallableModule {
     pub ret_type: CArc<Type>,
     pub args: CBoxedSlice<NodeRef>,
     pub captures: CBoxedSlice<Capture>,
+    pub subroutines: CBoxedSlice<CallableModuleRef>,
+    pub subroutine_ids: CBoxedSlice<u32>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
@@ -1709,6 +1714,8 @@ impl ModuleDuplicator {
                 ret_type: callable.ret_type.clone(),
                 args: dup_args,
                 captures: dup_captures,
+                subroutines: callable.subroutines.clone(),
+                subroutine_ids: callable.subroutine_ids.clone(),
                 cpu_custom_ops: callable.cpu_custom_ops.clone(),
                 pools: callable.pools.clone(),
             }
@@ -1862,10 +1869,11 @@ impl ModuleDuplicator {
                 builder.ad_detach(dup_body)
             }
             Instruction::Comment(msg) => builder.comment(msg.clone()),
-            Instruction::CoroSplitMark {token} => builder.coro_split_mark(*token),
-            Instruction::CoroSuspend{..}
-            | Instruction::CoroResume{..}
-            | Instruction::CoroFrame{..} => {
+            Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
+            Instruction::CoroSuspend { .. }
+            | Instruction::Suspend(..)
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroFrame { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
             }
         };
@@ -2175,6 +2183,12 @@ impl IrBuilder {
     }
     pub fn ad_scope(&mut self, body: Pooled<BasicBlock>) -> NodeRef {
         let node = Node::new(CArc::new(Instruction::AdScope { body }), Type::void());
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
+    }
+    pub fn suspend(&mut self, id: NodeRef) -> NodeRef {
+        let node = Node::new(CArc::new(Instruction::Suspend(id)), Type::void());
         let node = new_node(&self.pools, node);
         self.append(node);
         node

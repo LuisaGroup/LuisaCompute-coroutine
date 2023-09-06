@@ -21,8 +21,17 @@ template<typename M>
 void perform_autodiff_transform(M *m) noexcept {
     auto autodiff_pipeline = ir::luisa_compute_ir_transform_pipeline_new();
     ir::luisa_compute_ir_transform_pipeline_add_transform(autodiff_pipeline, "autodiff");
-    auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform(autodiff_pipeline, m->module);
+    auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform_module(autodiff_pipeline, m->module);
     ir::luisa_compute_ir_transform_pipeline_destroy(autodiff_pipeline);
+    m->module = converted_module;
+}
+
+template<typename M>
+void perform_coroutine_transform(M *m) noexcept {
+    auto coroutine_pipeline = ir::luisa_compute_ir_transform_pipeline_new();
+    ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "coroutine");
+    auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform_module(coroutine_pipeline, m->module);
+    ir::luisa_compute_ir_transform_pipeline_destroy(coroutine_pipeline);
     m->module = converted_module;
 }
 #endif
@@ -58,6 +67,36 @@ transform_function(Function function) noexcept {
         LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
                                     "kernel with hash {:016x}. "
                                     "AutoDiff transform is done.",
+                                    function.hash());
+        return converted;
+#endif
+    }
+    if (function.direct_builtin_callables().uses_coroutine()) {
+#ifndef LUISA_ENABLE_IR
+        LUISA_ERROR_WITH_LOCATION(
+            "Coroutine requires IR support but "
+            "LuisaCompute is built without the IR module. "
+            "This might be caused by missing Rust. "
+            "Please install the Rust toolchain and "
+            "recompile LuisaCompute to get the IR module.");
+#else
+        LUISA_VERBOSE_WITH_LOCATION("Performing Coroutine transform "
+                                    "on function with hash {:016x}.",
+                                    function.hash());
+
+        luisa::shared_ptr<const FunctionBuilder> converted;
+        if (function.tag() == Function::Tag::KERNEL) {
+            auto m = AST2IR::build_kernel(function);
+            perform_coroutine_transform(m->get());
+            converted = IR2AST::build(m->get());
+        } else {
+            auto m = AST2IR::build_callable(function);
+            perform_coroutine_transform(m->get());
+            converted = IR2AST::build(m->get());
+        }
+        LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
+                                    "kernel with hash {:016x}. "
+                                    "Coroutine transform is done.",
                                     function.hash());
         return converted;
 #endif

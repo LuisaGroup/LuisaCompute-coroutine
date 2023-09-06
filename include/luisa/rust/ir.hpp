@@ -7,7 +7,9 @@
 #include <ostream>
 #include <new>
 #include "ir_common.h"
-
+namespace luisa::compute::ir {
+struct CallableModuleRef;
+}
 
 namespace luisa::compute::ir {
 
@@ -225,6 +227,8 @@ struct CallableModule {
     CArc<Type> ret_type;
     CBoxedSlice<NodeRef> args;
     CBoxedSlice<Capture> captures;
+    CBoxedSlice<CallableModuleRef> subroutines;
+    CBoxedSlice<uint32_t> subroutine_ids;
     CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
     CArc<ModulePools> pools;
 };
@@ -618,6 +622,7 @@ struct Instruction {
         Comment,
         CoroSplitMark,
         CoroSuspend,
+        Suspend,
         CoroResume,
         CoroFrame,
     };
@@ -706,6 +711,10 @@ struct Instruction {
         uint32_t token;
     };
 
+    struct Suspend_Body {
+        NodeRef _0;
+    };
+
     struct CoroResume_Body {
         uint32_t token;
     };
@@ -735,6 +744,7 @@ struct Instruction {
         Comment_Body comment;
         CoroSplitMark_Body coro_split_mark;
         CoroSuspend_Body coro_suspend;
+        Suspend_Body suspend;
         CoroResume_Body coro_resume;
         CoroFrame_Body coro_frame;
     };
@@ -850,7 +860,14 @@ void luisa_compute_ir_transform_pipeline_destroy(TransformPipeline *pipeline);
 
 TransformPipeline *luisa_compute_ir_transform_pipeline_new();
 
-Module luisa_compute_ir_transform_pipeline_transform(TransformPipeline *pipeline, Module module);
+CallableModule luisa_compute_ir_transform_pipeline_transform_callable(TransformPipeline *pipeline,
+                                                                      CallableModule module);
+
+KernelModule luisa_compute_ir_transform_pipeline_transform_kernel(TransformPipeline *pipeline,
+                                                                  KernelModule module);
+
+Module luisa_compute_ir_transform_pipeline_transform_module(TransformPipeline *pipeline,
+                                                            Module module);
 
 size_t luisa_compute_ir_type_alignment(const CArc<Type> *ty);
 

@@ -691,6 +691,8 @@ impl SplitManager {
                 ret_type: callable.ret_type.clone(),
                 args: dup_args,
                 captures: dup_captures,
+                subroutines: callable.subroutines.clone(),
+                subroutine_ids: callable.subroutine_ids.clone(),
                 cpu_custom_ops: callable.cpu_custom_ops.clone(),
                 pools: callable.pools.clone(),
             }
@@ -833,6 +835,7 @@ impl SplitManager {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { .. }
+            | Instruction::Suspend(..)
             | Instruction::CoroResume { .. }
             | Instruction::CoroFrame { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");

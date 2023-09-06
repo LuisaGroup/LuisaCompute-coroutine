@@ -93,6 +93,7 @@ impl Reg2MemImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
+                | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
                 | Instruction::CoroFrame { .. } => {}
             }
@@ -155,6 +156,7 @@ impl Reg2MemImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
+                | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
                 | Instruction::CoroFrame { .. } => {}
             }
@@ -253,7 +255,7 @@ impl Reg2MemImpl {
 pub struct Reg2Mem;
 
 impl Transform for Reg2Mem {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut reg2mem = Reg2MemImpl::new();
         reg2mem.transform_module(&module);
         module

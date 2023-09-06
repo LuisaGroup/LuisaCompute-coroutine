@@ -415,6 +415,14 @@ inline void return_(T &&t) noexcept {
         detail::extract_expression(std::forward<T>(t)));
 }
 
+template<typename T>
+inline void suspend(T &&t) noexcept {
+    using E = expr_value_t<T>;
+    static_assert(std::is_same_v<E, uint>);
+    detail::FunctionBuilder::current()->suspend_(
+        detail::extract_expression(std::forward<T>(t)));
+}
+
 inline void return_() noexcept {
     detail::FunctionBuilder::current()->return_();
 }

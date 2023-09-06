@@ -1130,6 +1130,7 @@ impl Backward {
             }
             crate::ir::Instruction::AdDetach(_) => {}
             Instruction::RayQuery { .. } => panic!("RayQuery is not supported yet"),
+            Instruction::Suspend { .. } => panic!("Coroutine is not supported yet"),
             crate::ir::Instruction::Call(func, args) => {
                 if grad_type.is_none() {
                     return;
@@ -1827,7 +1828,7 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
                     entry: body.clone(),
                     pools: pools.clone(),
                 };
-                let ad_block = ToSSA.transform(ad_block);
+                let ad_block = ToSSA.transform_module(ad_block);
                 let mut backward = None;
                 for node in body.iter() {
                     match node.get().instruction.as_ref() {
@@ -1889,7 +1890,7 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
 }
 
 impl Transform for Autodiff {
-    fn transform(&self, module: crate::ir::Module) -> crate::ir::Module {
+    fn transform_module(&self, module: crate::ir::Module) -> crate::ir::Module {
         ad_transform_recursive(module.entry, &module.pools);
         module
     }

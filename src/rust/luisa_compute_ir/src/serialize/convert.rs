@@ -253,6 +253,10 @@ impl KernelSerializer {
                     on_procedural_hit,
                 }
             }
+            Instruction::Suspend (id) => {
+                let id = self.serialize_noderef(*id);
+                SerializedInstruction::Suspend(id)
+            }
             Instruction::Comment(s) => {
                 let s = s.as_ref().to_vec();
                 SerializedInstruction::Comment(s)

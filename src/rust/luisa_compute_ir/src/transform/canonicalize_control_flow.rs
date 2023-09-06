@@ -10,7 +10,7 @@ use crate::transform::Transform;
 pub struct CanonicalizeControlFlow;
 
 impl Transform for CanonicalizeControlFlow {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_module(&self, module: Module) -> Module {
         todo!()
     }
 }

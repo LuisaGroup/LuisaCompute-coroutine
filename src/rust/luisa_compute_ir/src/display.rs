@@ -1,9 +1,7 @@
-use crate::{
-    context::is_type_equal,
-    ir::{Instruction, Module, NodeRef, SwitchCase, Type},
-};
+use crate::{context::is_type_equal, ir::{Instruction, Module, NodeRef, SwitchCase, Type}, Pooled};
 use std::collections::HashMap;
 use std::ffi::CString;
+use crate::ir::BasicBlock;
 
 pub struct DisplayIR {
     output: String,
@@ -20,12 +18,19 @@ impl DisplayIR {
         }
     }
 
-    pub fn display_ir(&mut self, module: &Module) -> String {
+    pub fn clear(&mut self) {
         self.map.clear();
         self.cnt = 0;
+    }
 
-        for node in module.entry.nodes().iter() {
-            self.display(*node, 0, false);
+    pub fn display_ir(&mut self, module: &Module) -> String {
+        self.clear();
+        self.display_ir_bb(&module.entry, 0, false)
+    }
+
+    pub fn display_ir_bb(&mut self, bb: &Pooled<BasicBlock>, ident: usize, no_new_line: bool) -> String {
+        for node in bb.nodes().iter() {
+            self.display(*node, ident, no_new_line);
         }
         self.output.clone()
     }
@@ -233,9 +238,11 @@ impl DisplayIR {
             | Instruction::CoroResume { token } => {
                 self.output += format!("CoroResume({})", token).as_str();
             }
-            | Instruction::CoroFrame { token, .. } => {
-                self.output += format!("CoroFrame({})", token).as_str();
-                // TODO
+            | Instruction::CoroFrame { token, body } => {
+                self.output += format!("CoroFrame({}): {{\n", token).as_str();
+                self.display_ir_bb(body, ident + 1, no_new_line);
+                self.add_ident(ident);
+                self.output += "}";
             }
         }
         if !no_new_line {

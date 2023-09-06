@@ -380,8 +380,9 @@ impl Transform for Coroutine {
         let mut imp = CoroutineImpl::new(&module,callable.args[0]);
         let mut builder=IrBuilder::new(module.pools.clone());
         let const0=builder.const_(Const::Uint32(0));
+        let const1=builder.const_(Const::Uint32(1));
         let left_id=builder.call(Func::GetElementPtr,&[imp.corostate,const0],crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-        builder.update(left_id,const0);
+        builder.update(left_id,const1);
         let new_bb = imp.promote_bb(
             module.entry,
             builder,
@@ -394,13 +395,15 @@ impl Transform for Coroutine {
             entry,
             pools: module.pools,
         };
-        println!("\n\n----------after------\n\n");
-        let result=DisplayIR::new().display_ir(&ret);
-        println!("{}",result);
+        //println!("\n\n----------after------\n\n");
+        //let result=DisplayIR::new().display_ir(&ret);
+        //println!("{}",result);
         callable.args[0].get_mut().type_=imp.corostate_type;
         CallableModule {
             module:ret,
             args:callable.args,
+            subroutine_ids:CBoxedSlice::new(vec![]),
+            subroutines:CBoxedSlice::new(vec![]),
             ..callable
         }
     }

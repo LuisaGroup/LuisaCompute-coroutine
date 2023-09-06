@@ -1528,6 +1528,8 @@ void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
                 _scratch << "LCRayQueryAny";
             } else if (type == _indirect_buffer_type) {
                 _scratch << "LCIndirectBuffer";
+            } else if (!type->members().empty()) {
+                _scratch << type->description();
             } else {
                 LUISA_ERROR_WITH_LOCATION(
                     "Unsupported custom type: {}.",

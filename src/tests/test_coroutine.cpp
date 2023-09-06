@@ -148,9 +148,9 @@ int main(int argc, char *argv[]) {
            << synchronize();
 
     static constexpr auto f = [](auto x, auto y) noexcept { return x * sin(y); };
-    Coroutine test_coro = [](Var<CoroFrame> &frame, BufferFloat x_buffer
+    Coroutine test_coro = [](Var<CoroFrame> &frame, BufferFloat x_buffer, UInt id
                          ) noexcept {
-        auto i = dispatch_x();
+        auto i = id;
         auto x = x_buffer.read(i);
         $suspend(1u);
         x += 10;
@@ -165,10 +165,16 @@ int main(int argc, char *argv[]) {
     };
     auto frame_buffer=device.create_buffer<CoroFrame>(n);
     Kernel1D gen = [&](BufferFloat x_buffer) noexcept {
-        test_coro(frame_buffer->read(dispatch_x()), x_buffer);
+        auto id = dispatch_x();
+        auto frame = frame_buffer->read(dispatch_x());
+        test_coro(frame, x_buffer,id);
+        frame_buffer->write(dispatch_x(), frame);
     };
     Kernel1D next = [&](BufferFloat x_buffer) noexcept {
-        test_coro[1](frame_buffer->read(dispatch_x()));
+        auto id = dispatch_x();
+        auto frame = frame_buffer->read(dispatch_x());
+        test_coro(frame_buffer->read(dispatch_x()),x_buffer,id);
+        frame_buffer->write(dispatch_x(), frame);
     };
     auto gen_shader = device.compile(gen);
     auto next_shader = device.compile(next);

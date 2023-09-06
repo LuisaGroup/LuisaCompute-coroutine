@@ -537,6 +537,7 @@ public:
         auto builder = _sub_builders.find(index);
         LUISA_ASSERT(builder!=_sub_builders.end(),"coroutine index out of range");
         return Callable<Ret(FrameType)>{builder->second};
+        //return Callable<Ret(Args...)>{builder->second};
     };
 };
 

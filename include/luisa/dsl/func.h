@@ -344,6 +344,7 @@ struct is_callable<Callable<T>> : std::true_type {};
 template<typename Ret, typename... Args>
 class Callable<Ret(Args...)> {
     friend class CallableLibrary;
+    template<class T> friend class Coroutine;
     static_assert(
         std::negation_v<std::disjunction<
             is_buffer_or_view<Ret>,
@@ -390,8 +391,6 @@ public:
         });
         _builder = detail::transform_function(ast->function());
     }
-    Callable(luisa::shared_ptr<const detail::FunctionBuilder> builder) noexcept
-        : _builder{builder} {}
     /// Get the underlying AST
     [[nodiscard]] auto function() const noexcept { return Function{_builder.get()}; }
     [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
@@ -495,7 +494,7 @@ private:
     using FrameType = std::tuple_element_t<0, std::tuple<Args...>>;
     static_assert(std::is_lvalue_reference_v<FrameType>);
     luisa::shared_ptr<const detail::FunctionBuilder> _builder;
-    luisa::unordered_map<CoroID, luisa::shared_ptr<const detail::FunctionBuilder>> _sub_builders;
+    luisa::unordered_map<CoroID, Callable<Ret(FrameType)>> _sub_callables;
 
     
 public:
@@ -520,7 +519,12 @@ public:
             detail::FunctionBuilder::current()->return_(nullptr);// to check if any previous $return called with non-void types
         });
         Type *frame = const_cast<Type*>(Type::of<expr_value_t<FrameType>>());
-        _builder=detail::transform_coroutine(frame,_sub_builders,ast->function());
+        auto sub_builder = luisa::unordered_map<uint, luisa::shared_ptr<const detail::FunctionBuilder>>{};
+        _builder=detail::transform_coroutine(frame,sub_builder,ast->function());
+        _sub_callables.clear();
+        for (auto v : sub_builder) {
+            _sub_callables.insert(std::make_pair(v.first, Callable<Ret(FrameType)>(v.second)));
+        }
     }
 
     /// Get the underlying AST
@@ -539,9 +543,9 @@ public:
 
     //Get Callable from certain suspend point
     auto operator[](CoroID index) const noexcept {
-        auto builder = _sub_builders.find(index);
-        LUISA_ASSERT(builder!=_sub_builders.end(),"coroutine index out of range");
-        return Callable<Ret(FrameType)>{builder->second};
+        auto builder = _sub_callables.find(index);
+        LUISA_ASSERT(builder!=_sub_callables.end(),"coroutine index out of range");
+        return builder->second;
         //return Callable<Ret(Args...)>{builder->second};
     };
 };

@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ffi::CString,
+    ffi::CString, default,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -1697,6 +1697,7 @@ impl<'a> FunctionEmitter<'a> {
             Instruction::Suspend(_) => {
                 panic!("Suspend should be lowered before codegen")
             }
+            default => panic!("unimplemented: {:?}", default),
         }
     }
     fn gen_block_(&mut self, block: Pooled<ir::BasicBlock>) {

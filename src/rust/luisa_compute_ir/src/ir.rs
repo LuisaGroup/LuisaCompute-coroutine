@@ -1065,7 +1065,7 @@ pub enum Instruction {
     CoroResume {
         token: u32,
     },
-    CoroFrame {
+    CoroScope {
         token: u32,
         body: Pooled<BasicBlock>,
     },
@@ -1873,7 +1873,7 @@ impl ModuleDuplicator {
             Instruction::CoroSuspend { .. }
             | Instruction::Suspend(..)
             | Instruction::CoroResume { .. }
-            | Instruction::CoroFrame { .. } => {
+            | Instruction::CoroScope { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
             }
         };

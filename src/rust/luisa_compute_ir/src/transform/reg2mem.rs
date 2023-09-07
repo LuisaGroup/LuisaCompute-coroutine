@@ -95,7 +95,7 @@ impl Reg2MemImpl {
                 | Instruction::CoroSuspend { .. }
                 | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
-                | Instruction::CoroFrame { .. } => {}
+                | Instruction::CoroScope { .. } => {}
             }
         }
     }
@@ -158,7 +158,7 @@ impl Reg2MemImpl {
                 | Instruction::CoroSuspend { .. }
                 | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
-                | Instruction::CoroFrame { .. } => {}
+                | Instruction::CoroScope { .. } => {}
             }
         }
     }

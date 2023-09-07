@@ -270,7 +270,7 @@ impl KernelSerializer {
             | Instruction::CoroResume { token } => {
                 SerializedInstruction::CoroResume { token: *token }
             }
-            | Instruction::CoroFrame { token, body } => {
+            | Instruction::CoroScope { token, body } => {
                 let body = self.serialize_block(body);
                 SerializedInstruction::CoroFrame { token: *token, body }
             }

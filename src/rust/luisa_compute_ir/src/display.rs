@@ -242,7 +242,7 @@ impl DisplayIR {
             | Instruction::CoroResume { token } => {
                 self.output += format!("CoroResume({})", token).as_str();
             }
-            | Instruction::CoroFrame { token, body } => {
+            | Instruction::CoroScope { token, body } => {
                 self.output += format!("CoroFrame({}): {{\n", token).as_str();
                 self.display_ir_bb(body, ident + 1, no_new_line);
                 self.add_ident(ident);

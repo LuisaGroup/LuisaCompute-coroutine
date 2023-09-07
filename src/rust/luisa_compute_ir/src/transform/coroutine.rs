@@ -340,7 +340,7 @@ impl CoroutineImpl {
             Instruction::CoroSplitMark { .. }
             | Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. }
-            | Instruction::CoroFrame { .. } => {
+            | Instruction::CoroScope { .. } => {
                 todo!()
             }
         }

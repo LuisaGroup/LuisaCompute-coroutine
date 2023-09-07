@@ -326,7 +326,7 @@ impl ToSSAImpl {
             Instruction::CoroSplitMark { .. }
             | Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. }
-            | Instruction::CoroFrame { .. } => return node,
+            | Instruction::CoroScope { .. } => return node,
         }
     }
     fn promote_bb(

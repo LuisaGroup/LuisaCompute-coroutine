@@ -624,7 +624,7 @@ struct Instruction {
         CoroSuspend,
         Suspend,
         CoroResume,
-        CoroFrame,
+        CoroScope,
     };
 
     struct Local_Body {
@@ -719,7 +719,7 @@ struct Instruction {
         uint32_t token;
     };
 
-    struct CoroFrame_Body {
+    struct CoroScope_Body {
         uint32_t token;
         Pooled<BasicBlock> body;
     };
@@ -746,7 +746,7 @@ struct Instruction {
         CoroSuspend_Body coro_suspend;
         Suspend_Body suspend;
         CoroResume_Body coro_resume;
-        CoroFrame_Body coro_frame;
+        CoroScope_Body coro_scope;
     };
 };
 

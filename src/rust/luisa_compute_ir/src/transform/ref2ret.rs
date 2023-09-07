@@ -217,7 +217,7 @@ impl Ref2RetImpl {
                 | Instruction::CoroSuspend { .. }
                 | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
-                | Instruction::CoroFrame { .. } => {}
+                | Instruction::CoroScope { .. } => {}
             }
         }
     }

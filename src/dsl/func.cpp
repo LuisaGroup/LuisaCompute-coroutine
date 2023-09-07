@@ -39,69 +39,85 @@ void perform_coroutine_transform(M *m) noexcept {
 luisa::shared_ptr<const FunctionBuilder>
 transform_function(Function function) noexcept {
 
+#ifndef LUISA_IR_SUPPORT_ERROR_WITH_LOCATION
+#define LUISA_IR_SUPPORT_ERROR_WITH_LOCATION(module_name)           \
+    LUISA_ERROR_WITH_LOCATION(                                      \
+        module_name " requires IR support but "                     \
+                    "LuisaCompute is built without the IR module. " \
+                    "This might be caused by missing Rust. "        \
+                    "Please install the Rust toolchain and "        \
+                    "recompile LuisaCompute to get the IR module.")
+
     // Note: we only consider the direct builtin callables here since the indirect
     //       ones should have been transformed by the called function.
-    if (function.direct_builtin_callables().uses_autodiff()) {
-#ifndef LUISA_ENABLE_IR
-        LUISA_ERROR_WITH_LOCATION(
-            "Autodiff requires IR support but "
-            "LuisaCompute is built without the IR module. "
-            "This might be caused by missing Rust. "
-            "Please install the Rust toolchain and "
-            "recompile LuisaCompute to get the IR module.");
-#else
-        LUISA_VERBOSE_WITH_LOCATION("Performing AutoDiff transform "
-                                    "on function with hash {:016x}.",
-                                    function.hash());
 
-        luisa::shared_ptr<const FunctionBuilder> converted;
-        if (function.tag() == Function::Tag::KERNEL) {
-            auto m = AST2IR::build_kernel(function);
-            perform_autodiff_transform(m->get());
-            converted = IR2AST::build(m->get());
-        } else {
-            auto m = AST2IR::build_callable(function);
-            perform_autodiff_transform(m->get());
-            converted = IR2AST::build(m->get());
-        }
-        LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
-                                    "kernel with hash {:016x}. "
-                                    "AutoDiff transform is done.",
-                                    function.hash());
-        return converted;
-#endif
+    if (!function.direct_builtin_callables().uses_autodiff() && !function.direct_builtin_callables().uses_coroutine()) {
+        return function.shared_builder();
     }
-    if (function.direct_builtin_callables().uses_coroutine()) {
-#ifndef LUISA_ENABLE_IR
-        LUISA_ERROR_WITH_LOCATION(
-            "Coroutine requires IR support but "
-            "LuisaCompute is built without the IR module. "
-            "This might be caused by missing Rust. "
-            "Please install the Rust toolchain and "
-            "recompile LuisaCompute to get the IR module.");
-#else
-        LUISA_VERBOSE_WITH_LOCATION("Performing Coroutine transform "
-                                    "on function with hash {:016x}.",
-                                    function.hash());
 
-        luisa::shared_ptr<const FunctionBuilder> converted;
-        if (function.tag() == Function::Tag::KERNEL) {
-            auto m = AST2IR::build_kernel(function);
-            perform_coroutine_transform(m->get());
-            converted = IR2AST::build(m->get());
-        } else {
-            auto m = AST2IR::build_callable(function);
-            perform_coroutine_transform(m->get());
-            converted = IR2AST::build(m->get());
-        }
-        LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
-                                    "kernel with hash {:016x}. "
-                                    "Coroutine transform is done.",
-                                    function.hash());
-        return converted;
+    luisa::shared_ptr<const FunctionBuilder> converted;
+    if (function.tag() == Function::Tag::KERNEL) {
+        auto m = AST2IR::build_kernel(function);
+
+        if (function.direct_builtin_callables().uses_autodiff()) {
+#ifndef LUISA_ENABLE_IR
+            LUISA_IR_SUPPORT_ERROR_WITH_LOCATION("AutoDiff");
+#else
+            LUISA_VERBOSE_WITH_LOCATION("Performing AutoDiff transform "
+                                        "on function with hash {:016x}.",
+                                        function.hash());
 #endif
+            perform_autodiff_transform(m->get());
+        }
+
+        if (function.direct_builtin_callables().uses_coroutine()) {
+#ifndef LUISA_ENABLE_IR
+            LUISA_IR_SUPPORT_ERROR_WITH_LOCATION("Coroutine");
+#else
+            LUISA_VERBOSE_WITH_LOCATION("Performing Coroutine transform "
+                                        "on function with hash {:016x}.",
+                                        function.hash());
+            perform_coroutine_transform(m->get());
+#endif
+        }
+
+        converted = IR2AST::build(m->get());
+    } else {
+        auto m = AST2IR::build_callable(function);
+
+        if (function.direct_builtin_callables().uses_autodiff()) {
+#ifndef LUISA_ENABLE_IR
+            LUISA_IR_SUPPORT_ERROR_WITH_LOCATION("AutoDiff");
+#else
+            LUISA_VERBOSE_WITH_LOCATION("Performing AutoDiff transform "
+                                        "on function with hash {:016x}.",
+                                        function.hash());
+#endif
+            perform_autodiff_transform(m->get());
+        }
+
+        if (function.direct_builtin_callables().uses_coroutine()) {
+#ifndef LUISA_ENABLE_IR
+            LUISA_IR_SUPPORT_ERROR_WITH_LOCATION("Coroutine");
+#else
+            LUISA_VERBOSE_WITH_LOCATION("Performing Coroutine transform "
+                                        "on function with hash {:016x}.",
+                                        function.hash());
+            perform_coroutine_transform(m->get());
+#endif
+        }
+
+        converted = IR2AST::build(m->get());
     }
-    return function.shared_builder();
+
+    LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
+                                "kernel with hash {:016x}. "
+                                "Transform is done.",
+                                function.hash());
+    return converted;
+
+#undef LUISA_IR_SUPPORT_ERROR_WITH_LOCATION
+#endif
 }
 
 }// namespace luisa::compute::detail

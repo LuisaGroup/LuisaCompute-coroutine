@@ -3,7 +3,7 @@ use std::ops::Deref;
 use lazy_static::lazy_static;
 
 use crate::{CArc, CBoxedSlice, Pooled};
-use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module};
+use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef};
 
 struct FrameTokenManager {
     frame_token_counter: u32,
@@ -56,8 +56,9 @@ impl Continuation {
     }
 }
 
-struct FrameBuilder {
+struct ScopeBuilder {
     token: u32,
+    finish: bool,
     builder: IrBuilder,
 }
 
@@ -81,13 +82,58 @@ impl ModuleDuplicator {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SplitPossibility {
+    possibly: bool,
+    directly: bool,
+    definitely: bool,
+}
+
+impl Default for SplitPossibility {
+    fn default() -> Self {
+        Self {
+            possibly: false,
+            directly: false,
+            definitely: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VisitState {
+    bb: *const Pooled<BasicBlock>,
+    start: NodeRef,
+    end: NodeRef,
+    present: NodeRef,
+}
+
+impl VisitState {
+    fn new(bb: &Pooled<BasicBlock>, start: Option<NodeRef>, end: Option<NodeRef>, present: Option<NodeRef>) -> Self {
+        let start = if let Some(node_ref_start) = start { node_ref_start } else { bb.first.get().next };
+        let end = if let Some(node_ref_end) = end { node_ref_end } else { bb.last };
+        let present = if let Some(node_ref_present) = present { node_ref_present } else { start };
+        Self {
+            bb: bb as *const Pooled<BasicBlock>,
+            start,
+            end,
+            present,
+        }
+    }
+    fn new_whole(bb: &Pooled<BasicBlock>) -> Self {
+        Self::new(bb, None, None, None)
+    }
+    fn get_bb_ref(&self) -> &Pooled<BasicBlock> {
+        unsafe { &*self.bb }
+    }
+}
+
 struct SplitManager {
     module_duplicators: HashMap<u32, ModuleDuplicator>,
     old2new: HashMap<NodeRef, HashSet<(u32, NodeRef)>>,
     // map old node to new node
-    coro_frames: HashMap<u32, NodeRef>,
+    coro_scopes: HashMap<u32, NodeRef>,
     continuations: HashMap<u32, Continuation>,
-    split_in_bb: HashSet<*const BasicBlock>,
+    split_possibility: HashMap<*const BasicBlock, SplitPossibility>,
 }
 
 impl SplitManager {
@@ -95,9 +141,9 @@ impl SplitManager {
         Self {
             module_duplicators: HashMap::new(),
             old2new: HashMap::new(),
-            coro_frames: HashMap::new(),
+            coro_scopes: HashMap::new(),
             continuations: HashMap::new(),
-            split_in_bb: HashSet::new(),
+            split_possibility: HashMap::new(),
         }
     }
 
@@ -110,23 +156,24 @@ impl SplitManager {
         self.module_duplicators.get_mut(&frame_token).unwrap().current = Some(ctx);
         ret
     }
-    fn get_frame_builder_temp(&mut self, pools: &CArc<ModulePools>) -> FrameBuilder {
+    fn get_scope_builder_temp(&mut self, pools: &CArc<ModulePools>) -> ScopeBuilder {
         self.module_duplicators.remove(&INVALID_FRAME_TOKEN);
         self.continuations.remove(&INVALID_FRAME_TOKEN);
-        let fb_temp = FrameBuilder {
+        let sb_temp = ScopeBuilder {
             token: INVALID_FRAME_TOKEN,
+            finish: false,
             builder: IrBuilder::new(pools.clone()),
         };
-        fb_temp
+        sb_temp
     }
     fn get_bb_temp(&mut self) -> Pooled<BasicBlock> {
         self.module_duplicators.remove(&INVALID_FRAME_TOKEN);
         self.continuations.remove(&INVALID_FRAME_TOKEN);
-        let fb_temp = self.coro_frames.remove(&INVALID_FRAME_TOKEN).unwrap();
-        let inst = fb_temp.get().instruction.get_mut().unwrap();
+        let sb_temp = self.coro_scopes.remove(&INVALID_FRAME_TOKEN).unwrap();
+        let inst = sb_temp.get().instruction.get_mut().unwrap();
         match inst {
-            Instruction::CoroFrame { token: _, body } => *body,
-            _ => unreachable!("Invalid frame"),
+            Instruction::CoroScope { token, body } => *body,
+            _ => unreachable!("Invalid instruction for SplitManager::get_bb_temp"),
         }
     }
 
@@ -135,218 +182,60 @@ impl SplitManager {
     //     &mut a_
     // }
 
-    /*
-    BLOCK A;
-    loop {
-        BLOCK B;
-        split(1);
-        BLOCK C;
-    } cond(cond_1);
-    BLOCK D;
 
-    ----------------------
-    |     BLOCK A;       |
-    |     BLOCK B;       |
-    |     suspend(1);    |
-    ----------------------
-              |
-              |<----------------
-              |                |
-              V                |
-    ----------------------     |
-    | resume(1);         |     |
-    | BLOCK C;           |     |
-    | if (cond_1) {      |     |
-    |     BLOCK B;       |     |
-    |     suspend(1);    | -----
-    | }                  |
-    | BLOCK D;           |
-    ----------------------
-
-
-    BLOCK A;
-    loop {
-        BLOCK B;
-        if (cond_0) {
-            split(1);
-            BLOCK E;
-        }
-        BLOCK C;
-    } cond(cond_1);
-    BLOCK D;
-
-    ----------------------
-    | BLOCK A;           |
-    | loop {             |
-    |     BLOCK B;       |
-    |     if (cond_0) {  |
-    |         suspend(1);|
-    |         BLOCK E;   |
-    |     }              |
-    |     BLOCK C;       |
-    | } cond(cond_1)     |
-    | BLOCK D;           |
-    ----------------------
-              |
-              |<--------------------
-              |                    |
-              V                    |
-    --------------------------     |
-    | resume(1);             |     |
-    | BLOCK E;               |     |
-    | BLOCK C;               |     |
-    | if (cond_1) {          |<-----
-    |     loop {             |
-    |         BLOCK B;       |
-    |         if (cond_0) {  |
-    |             suspend(1);|
-    |             BLOCK E;   |
-    |         }              |
-    |         BLOCK C;       |
-    |     } cond(cond_1)     |
-    | }                      |
-    | BLOCK D;               |
-    --------------------------
-
-
-    BLOCK A;
-    if (cond_1) {
-        BLOCK B;
-        split(1);
-        BLOCK C;
-    } else {
-        BLOCK D;
-    }
-    BLOCK E;
-
-    ----------------------
-    | BLOCK A;           |
-    | if (cond_1) {      |
-    |     BLOCK B;       |
-    |     suspend(1);    |----
-    | } else {           |   |
-    |     BLOCK D;       |   |
-    | }                  |   |
-    | BLOCK E;           |   |
-    ----------------------   |
-                             |
-               ---------------
-               |
-               V
-    ----------------------
-    | resume(1);         |
-    | BLOCK C;           |
-    | BLOCK E;           |
-    ______________________
-
-
-    BLOCK A;
-    if (cond_1) {
-        BLOCK B;
-        split(1);
-        BLOCK C;
-    } else {
-        BLOCK D;
-        split(2);
-        BLOCK E;
-    }
-    BLOCK F;
-    if (cond_2) {
-        BLOCK G;
-        split(3);
-        BLOCK H;
-    } else {
-        BLOCK I;
-        split(4);
-        BLOCK J;
-    }
-    BLOCK K;
-
-    ----------------------
-    | BLOCK A;           |
-    | if (cond_1) {      |
-    |     BLOCK B;       |
-    |     suspend(1);    |----
-    | } else {           |   |
-    |     BLOCK D;       |   |
-    |     suspend(2);    |---|-----------
-    | }                  |   |          |
-    ----------------------   |          |
-                             |          |
-               ---------------          |
-               |                        |
-               V                        V
-    ----------------------    ----------------------
-    | resume(1);         |    | resume(2);         |
-    | BLOCK C;           |    | BLOCK E;           |
-    | BLOCK F;           |    | BLOCK F;           |
-    | if (cond_2) {      |    | if (cond_2) {      |
-    |     BLOCK G;       |    |     BLOCK G;       |
-    |     suspend(3);    |----|     suspend(3);    |----
-    | } else {           |    | } else {           |   |
-    |     BLOCK I;       |    |     BLOCK I;       |   |
-    |     suspend(4);    |----|     suspend(4);    |---|-----------
-    | }                  |    | }                  |   |          |
-    ----------------------    ----------------------   |          |
-                                                       |          |
-               -----------------------------------------          |
-               |                        ---------------------------
-               |                        |
-               V                        V
-    ----------------------    ----------------------
-    | resume(3);         |    | resume(4);         |
-    | BLOCK H;           |    | BLOCK J;           |
-    | BLOCK K;           |    | BLOCK K;           |
-    ______________________    ______________________
-
-     */
-
-
-    fn coro_split_mark_in_bb(&mut self, bb: &Pooled<BasicBlock>) -> bool {
+    fn coro_split_mark_in_bb(&mut self, bb: &Pooled<BasicBlock>) {
         let frame_token_manager = FrameTokenManager::get_instance();
-        let mut split_in_bb_v = false;
-        let record_bb = |this: &mut Self, bb_t: &Pooled<BasicBlock>, split_in_bb: bool, split_in_bb_v: &mut bool| {
-            if split_in_bb {
-                this.split_in_bb.insert(bb_t.as_ptr());
-                this.split_in_bb.insert(bb.as_ptr());
-            }
-        };
+        let split_poss = self.split_possibility.entry(bb.as_ptr()).or_default();
         bb.iter().for_each(|node_ref_present| {
             let node = node_ref_present.get();
             match node.instruction.as_ref() {
                 Instruction::CoroSplitMark { token } => {
                     frame_token_manager.register_frame_token(*token);
-                    record_bb(self, bb, true, &mut split_in_bb_v);
+                    split_poss.possibly = true;
+                    split_poss.directly = true;
+                    split_poss.definitely = true;
                 }
                 // 3 Instructions that might contain coro split mark
                 Instruction::Loop { body, cond } => {
-                    let split_in_body = self.coro_split_mark_in_bb(body);
-                    record_bb(self, body, split_in_body, &mut split_in_bb_v);
+                    self.coro_split_mark_in_bb(body);
+                    let split_poss_body = self.split_possibility.get(&body.as_ptr()).unwrap();
+                    split_poss.possibly |= split_poss_body.possibly;
+                    split_poss.definitely |= split_poss_body.definitely;
                 }
                 Instruction::If { cond, true_branch, false_branch } => {
-                    let split_in_true_branch = self.coro_split_mark_in_bb(true_branch);
-                    let split_in_false_branch = self.coro_split_mark_in_bb(false_branch);
-                    record_bb(self, true_branch, split_in_true_branch, &mut split_in_bb_v);
-                    record_bb(self, false_branch, split_in_false_branch, &mut split_in_bb_v);
+                    self.coro_split_mark_in_bb(true_branch);
+                    self.coro_split_mark_in_bb(false_branch);
+                    let split_poss_true = self.split_possibility.get(&true_branch.as_ptr()).unwrap();
+                    let split_poss_false = self.split_possibility.get(&false_branch.as_ptr()).unwrap();
+                    split_poss.possibly |= split_poss_true.possibly || split_poss_false.possibly;
+                    split_poss.definitely |= split_poss_true.definitely && split_poss_false.definitely;
                 }
                 Instruction::Switch {
                     value: _,
                     default,
                     cases,
                 } => {
-                    let split_in_default = self.coro_split_mark_in_bb(default);
-                    record_bb(self, default, split_in_default, &mut split_in_bb_v);
+                    self.coro_split_mark_in_bb(default);
+                    let split_poss_default = self.split_possibility.get(&default.as_ptr()).unwrap();
+                    let mut split_poss_cases = SplitPossibility {
+                        possibly: false,
+                        directly: false,
+                        definitely: true,
+                    };
                     for SwitchCase { value: _, block } in cases.as_ref().iter() {
-                        let split_in_case = self.coro_split_mark_in_bb(block);
-                        record_bb(self, block, split_in_case, &mut split_in_bb_v);
+                        self.coro_split_mark_in_bb(block);
+                        let split_poss_case = self.split_possibility.get(&block.as_ptr()).unwrap();
+                        split_poss_cases.possibly |= split_poss_case.possibly;
+                        split_poss_cases.definitely &= split_poss_case.definitely;
                     }
+                    split_poss.possibly |= split_poss_default.possibly || split_poss_cases.possibly;
+                    split_poss.definitely |= split_poss_default.definitely && split_poss_cases.definitely;
                 }
                 _ => {}
             }
         });
-        split_in_bb_v
     }
-    fn preprocess(&mut self, kernel: &KernelModule) -> FrameBuilder {
+    fn preprocess(&mut self, kernel: &KernelModule) -> ScopeBuilder {
         // TODO: where to process captures/args/shared?
         let bb = &kernel.module.entry;
         let mut frame_token_manager = FrameTokenManager::get_instance();
@@ -366,24 +255,25 @@ impl SplitManager {
         frame_token_manager.register_frame_token(entry_token);
         self.continuations.insert(entry_token, Continuation::new(entry_token));
         self.module_duplicators.insert(entry_token, ModuleDuplicator::new());
-        FrameBuilder {
+        ScopeBuilder {
             token: entry_token,
+            finish: false,
             builder: IrBuilder::new(kernel.pools.clone()),
         }
     }
 
-    fn build_frame(&mut self, pools: &CArc<ModulePools>, frame_builder: FrameBuilder) {
-        let frame_token = frame_builder.token;
+    fn build_scope(&mut self, pools: &CArc<ModulePools>, scope_builder: ScopeBuilder) {
+        let frame_token = scope_builder.token;
 
-        // build frame
-        let frame_bb = frame_builder.builder.finish();
-        let frame = Instruction::CoroFrame {
+        // build scope
+        let scope_bb = scope_builder.builder.finish();
+        let scope = Instruction::CoroScope {
             token: frame_token,
-            body: frame_bb,
+            body: scope_bb,
         };
-        let frame_node = Node::new(CArc::new(frame), CArc::new(Type::Void));
-        let frame_node_ref = new_node(pools, frame_node);
-        self.coro_frames.insert(frame_token, frame_node_ref);
+        let scope_node = Node::new(CArc::new(scope), CArc::new(Type::Void));
+        let scope_node_ref = new_node(pools, scope_node);
+        self.coro_scopes.insert(frame_token, scope_node_ref);
     }
 
     fn record_continuation(&mut self, prev: u32, next: u32) {
@@ -395,35 +285,33 @@ impl SplitManager {
         continuation.prev.insert(prev);
     }
 
-    fn visit_bb(&mut self, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>,
-                mut frame_builder: FrameBuilder, node_ref_start: Option<NodeRef>) -> Vec<FrameBuilder> {
+    fn visit_bb(&mut self, pools: &CArc<ModulePools>, visit_state: VisitState, mut scope_builder: ScopeBuilder) -> Vec<ScopeBuilder> {
         let mut split_in_branch =
-            |this: &mut Self, branch: &Pooled<BasicBlock>, fb_next_vec: &mut Vec<FrameBuilder>| -> Pooled<BasicBlock> {
-                let fb_temp = this.get_frame_builder_temp(&pools);
-                let fb_vec = this.visit_bb(pools, branch, fb_temp, None);
-                fb_next_vec.extend(fb_vec);
-                this.get_bb_temp()
+            |this: &mut SplitManager, branch: &Pooled<BasicBlock>, sb_next_vec: &mut Vec<ScopeBuilder>| -> Pooled<BasicBlock> {
+                let sb_temp = this.get_scope_builder_temp(&pools);
+                let mut sb_vec = this.visit_bb(pools, VisitState::new_whole(branch), sb_temp);
+                let sb_before_split = sb_vec.pop().unwrap();
+                sb_next_vec.extend(sb_vec);
+                sb_before_split.builder.finish()
             };
 
-        let mut node_ref_present = match node_ref_start {
-            Some(node_ref_start) => node_ref_start,
-            None => bb.first.get().next,
-        };
-        while node_ref_present != bb.last {
+        let mut node_ref_present = visit_state.start;
+        while node_ref_present != visit_state.end {
             let node = node_ref_present.get();
             match node.instruction.as_ref() {
                 // coroutine related instructions
                 Instruction::CoroSplitMark { token } => {
                     // TODO: different behaviors for loop/if
-                    let fb_next = self.visit_coro_split_mark(*token, &mut frame_builder, &node_ref_present);
-                    let mut fb_vec = self.visit_bb(pools, bb, fb_next, Some(node_ref_present.get().next));
-                    // index 0 for the frame block before coro split mark
-                    fb_vec.insert(0, frame_builder);
-                    return fb_vec;
+                    let (sb_before, sb_next) = self.visit_coro_split_mark(scope_builder, *token, node_ref_present.clone());
+                    let visit_state_next = VisitState::new(visit_state.get_bb_ref(), Some(node_ref_present.get().next), None, None);
+                    let mut sb_vec = self.visit_bb(pools, visit_state_next, sb_next);
+                    // index 0 for the scope block before coro split mark
+                    sb_vec.insert(0, sb_before);
+                    return sb_vec;
                 }
                 Instruction::CoroSuspend { token } => {
-                    self.visit_coro_suspend(*token, &frame_builder);
-                    return vec![frame_builder];
+                    let sb_before = self.visit_coro_suspend(scope_builder, *token);
+                    return vec![sb_before];
                 }
                 Instruction::CoroResume { token } => {
                     unreachable!("Split: CoroResume");
@@ -431,105 +319,175 @@ impl SplitManager {
 
                 // 3 Instructions to be processed
                 Instruction::Loop { body, cond } => {
-                    let split_in_body = self.split_in_bb.contains(&body.as_ptr());
-                    if split_in_body {
+                    // TODO: cases that cannot be simplified
+                    let split_poss = self.split_possibility.get(&body.as_ptr()).unwrap();
+                    if split_poss.possibly {
                         /// split in body
-                        let mut fb_vec = self.visit_bb(pools, body, frame_builder, None);
-                        let fb_body_before_split = fb_vec.pop().unwrap();
-                        self.build_frame(pools, fb_body_before_split);
-                        assert!(!fb_vec.is_empty());
-
-                        // use a new IrBuilder to get the start part of the body bb (util CoroSuspend)
-                        let fb_temp = self.get_frame_builder_temp(&pools);
-                        let mut fb_body_vec = self.visit_bb(pools, body, fb_temp, None);
-                        assert_eq!(fb_body_vec.len(), 0);
-                        let frame_body = self.get_bb_temp();
-
-                        let mut fb_ans_vec = vec![];
-                        // replace loop with if
-                        for mut fb in fb_vec {
-                            let true_branch = self.duplicate_block(fb.token, &fb.builder.pools, &frame_body);
-                            // empty false branch
-                            let false_branch = fb.builder.pools.bb_pool.alloc(BasicBlock::new(&pools));
-                            // TODO: local/frame may fail in function find_duplicated_node. example: phi cond in loop
-                            let dup_cond = self.find_duplicated_node(fb.token, *cond);
-                            fb.builder.if_(dup_cond, true_branch, false_branch);
-                            let fb_next_vec = self.visit_bb(pools, bb, fb, Some(node_ref_present.get().next));
-                            fb_ans_vec.extend(fb_next_vec);
-                        }
-                        return fb_ans_vec;
+                        let mut visit_state_next = visit_state.clone();
+                        visit_state_next.present = node_ref_present;
+                        return self.visit_loop_split(pools, scope_builder, visit_state_next, body, *cond);
                     } else {
-                        self.duplicate_node(&mut frame_builder, node_ref_present);
+                        self.duplicate_node(&mut scope_builder, node_ref_present);
                     }
                 }
                 Instruction::If { cond, true_branch, false_branch } => {
-                    let split_in_true_branch = self.split_in_bb.contains(&true_branch.as_ptr());
-                    let split_in_false_branch = self.split_in_bb.contains(&false_branch.as_ptr());
-                    if !split_in_true_branch && !split_in_false_branch {
-                        /// no split, duplicate the node
-                        self.duplicate_node(&mut frame_builder, node_ref_present);
+                    /*
+
+                    BLOCK A;
+                    if (cond_1) {
+                        BLOCK B;
+                        split(1);
+                        BLOCK C;
                     } else {
-                        /// split in true/false_branch
-                        let mut fb_next_vec = vec![];
+                        BLOCK D;
+                    }
+                    BLOCK E;
+
+                    ----------------------
+                    | BLOCK A;           |
+                    | if (cond_1) {      |
+                    |     BLOCK B;       |
+                    |     suspend(1);    |----
+                    | } else {           |   |
+                    |     BLOCK D;       |   |
+                    | }                  |   |
+                    | BLOCK E;           |   |
+                    ----------------------   |
+                                             |
+                               ---------------
+                               |
+                               V
+                    ----------------------
+                    | resume(1);         |
+                    | BLOCK C;           |
+                    | BLOCK E;           |
+                    ______________________
+
+
+                    BLOCK A;
+                    if (cond_1) {
+                        BLOCK B;
+                        split(1);
+                        BLOCK C;
+                    } else {
+                        BLOCK D;
+                        split(2);
+                        BLOCK E;
+                    }
+                    BLOCK F;
+                    if (cond_2) {
+                        BLOCK G;
+                        split(3);
+                        BLOCK H;
+                    } else {
+                        BLOCK I;
+                        split(4);
+                        BLOCK J;
+                    }
+                    BLOCK K;
+
+                    ----------------------
+                    | BLOCK A;           |
+                    | if (cond_1) {      |
+                    |     BLOCK B;       |
+                    |     suspend(1);    |----
+                    | } else {           |   |
+                    |     BLOCK D;       |   |
+                    |     suspend(2);    |---|-----------
+                    | }                  |   |          |
+                    ----------------------   |          |
+                                             |          |
+                               ---------------          |
+                               |                        |
+                               V                        V
+                    ----------------------    ----------------------
+                    | resume(1);         |    | resume(2);         |
+                    | BLOCK C;           |    | BLOCK E;           |
+                    | BLOCK F;           |    | BLOCK F;           |
+                    | if (cond_2) {      |    | if (cond_2) {      |
+                    |     BLOCK G;       |    |     BLOCK G;       |
+                    |     suspend(3);    |----|     suspend(3);    |----
+                    | } else {           |    | } else {           |   |
+                    |     BLOCK I;       |    |     BLOCK I;       |   |
+                    |     suspend(4);    |----|     suspend(4);    |---|-----------
+                    | }                  |    | }                  |   |          |
+                    ----------------------    ----------------------   |          |
+                                                                       |          |
+                               -----------------------------------------          |
+                               |                        ---------------------------
+                               |                        |
+                               V                        V
+                    ----------------------    ----------------------
+                    | resume(3);         |    | resume(4);         |
+                    | BLOCK H;           |    | BLOCK J;           |
+                    | BLOCK K;           |    | BLOCK K;           |
+                    ______________________    ______________________
+
+                     */
+                    let split_poss_true = self.split_possibility.get(&true_branch.as_ptr()).unwrap();
+                    let split_poss_false = self.split_possibility.get(&false_branch.as_ptr()).unwrap();
+                    if !split_poss_true.possibly && !split_poss_false.possibly {
+                        // no split, duplicate the node
+                        self.duplicate_node(&mut scope_builder, node_ref_present);
+                    } else {
+                        // split in true/false_branch
+                        let mut sb_next_vec = vec![];
 
                         // process true/false branch
-                        let dup_true_branch = if split_in_true_branch {
-                            split_in_branch(self, true_branch, &mut fb_next_vec)
+                        let dup_true_branch = if split_poss_true.possibly {
+                            split_in_branch(self, true_branch, &mut sb_next_vec)
                         } else {
-                            self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, true_branch)
+                            self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, true_branch)
                         };
-                        let dup_false_branch = if split_in_false_branch {
-                            split_in_branch(self, false_branch, &mut fb_next_vec)
+                        let dup_false_branch = if split_poss_false.possibly {
+                            split_in_branch(self, false_branch, &mut sb_next_vec)
                         } else {
-                            self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, false_branch)
+                            self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, false_branch)
                         };
-                        let dup_cond = self.find_duplicated_node(frame_builder.token, *cond);
-                        frame_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch);
+                        let dup_cond = self.find_duplicated_node(scope_builder.token, *cond);
+                        scope_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch);
 
                         // process next bb
-                        if split_in_true_branch && split_in_false_branch {
-                            self.build_frame(pools, frame_builder);
+                        if split_poss_true.definitely && split_poss_false.definitely {
+                            self.build_scope(pools, scope_builder);
                         } else {
-                            fb_next_vec.push(frame_builder);
+                            sb_next_vec.push(scope_builder);
                         }
 
-                        let mut fb_ans_vec = vec![];
-                        for fb_next in fb_next_vec {
-                            fb_ans_vec.extend(self.visit_bb(pools, bb, fb_next, Some(node_ref_present.get().next)));
+                        let mut sb_ans_vec = vec![];
+                        for sb_next in sb_next_vec {
+                            let mut visit_state_next = visit_state.clone();
+                            visit_state_next.present = node_ref_present.get().next;
+                            sb_ans_vec.extend(self.visit_bb(pools, visit_state_next, sb_next));
                         }
-                        return fb_ans_vec;
+                        return sb_ans_vec;
                     }
                 }
                 Instruction::Switch { value, cases, default } => {
-                    /// split in cases/default
+                    // split in cases/default
                     let cases_ref = cases.as_ref();
-                    let mut split_in_cases = Vec::with_capacity(cases_ref.len());
+                    let mut split_poss_cases = Vec::with_capacity(cases_ref.len());
                     let mut split_in_any_case = false;
                     let mut split_in_all_cases = true;
-                    let split_in_default = self.split_in_bb.contains(&default.as_ptr());
-                    for (i, case) in cases_ref.iter().enumerate() {
-                        if self.split_in_bb.contains(&case.block.as_ptr()) {
-                            split_in_cases.push(true);
-                            split_in_any_case = true;
-                        } else {
-                            split_in_cases.push(false);
-                            split_in_all_cases = false;
-                        }
+                    let split_in_default = self.split_possibly.contains(&default.as_ptr());
+                    for case in cases_ref.iter() {
+                        let split_poss_case = self.split_possibility.get(&case.block.as_ptr()).unwrap();
+                        split_poss_cases.push(split_poss_case);
                     }
 
                     if !split_in_any_case && !split_in_default {
-                        /// no split, duplicate the node
-                        self.duplicate_node(&mut frame_builder, node_ref_present);
+                        // no split, duplicate the node
+                        self.duplicate_node(&mut scope_builder, node_ref_present);
                     } else {
-                        /// split in cases/default
-                        let mut fb_next_vec = vec![];
+                        // split in cases/default
+                        let mut sb_next_vec = vec![];
 
                         // process cases
                         let dup_cases: Vec<_> = cases_ref.iter().enumerate().map(|(i, case)| {
                             let dup_block = if split_in_cases[i] {
-                                split_in_branch(self, &case.block, &mut fb_next_vec)
+                                split_in_branch(self, &case.block, &mut sb_next_vec)
                             } else {
-                                self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, &case.block)
+                                self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, &case.block)
                             };
                             SwitchCase {
                                 value: case.value,
@@ -538,84 +496,202 @@ impl SplitManager {
                         }).collect();
                         // process default
                         let dup_default = if split_in_default {
-                            split_in_branch(self, default, &mut fb_next_vec)
+                            split_in_branch(self, default, &mut sb_next_vec)
                         } else {
-                            self.duplicate_block(frame_builder.token, &frame_builder.builder.pools, default)
+                            self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, default)
                         };
-                        let dup_value = self.find_duplicated_node(frame_builder.token, *value);
-                        frame_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default);
+                        let dup_value = self.find_duplicated_node(scope_builder.token, *value);
+                        scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default);
 
                         // process next bb
                         if split_in_all_cases && split_in_default {
-                            self.build_frame(pools, frame_builder);
+                            self.build_scope(pools, scope_builder);
                         } else {
-                            fb_next_vec.push(frame_builder);
+                            sb_next_vec.push(scope_builder);
                         }
 
-                        let mut fb_ans_vec = vec![];
-                        for fb_next in fb_next_vec {
-                            fb_ans_vec.extend(self.visit_bb(pools, bb, fb_next, Some(node_ref_present.get().next)));
+                        let mut sb_ans_vec = vec![];
+                        for sb_next in sb_next_vec {
+                            let mut visit_state_next = visit_state.clone();
+                            visit_state_next.present = node_ref_present.get().next;
+                            sb_ans_vec.extend(self.visit_bb(pools, visit_state_next, sb_next));
                         }
-                        return fb_ans_vec;
+                        return sb_ans_vec;
                     }
                 }
 
                 // other instructions, just deep clone and change the node_ref to new ones
                 _ => {
-                    self.duplicate_node(&mut frame_builder, node_ref_present);
+                    self.duplicate_node(&mut scope_builder, node_ref_present);
                 }
             }
             node_ref_present = node_ref_present.get().next;
         }
-        vec![frame_builder]
+        vec![scope_builder]
     }
-    fn visit_coro_split_mark(&mut self, token_next: u32, frame_builder: &mut FrameBuilder, node_ref: &NodeRef) -> FrameBuilder {
-        /// frame_next has not been processed
-
-        let frame_token = frame_builder.token;
-        let mut builder = &mut frame_builder.builder;
-
-        // create a new frame builder for the next frame
-        // the next frame must have a CoroResume
-        let mut builder_next = IrBuilder::new(builder.pools.clone());
-
-        // record continuation
-        self.record_continuation(frame_token, token_next);
+    fn visit_coro_split_mark(&mut self, mut scope_builder: ScopeBuilder, token_next: u32, node_ref: NodeRef) -> (ScopeBuilder, ScopeBuilder) {
+        let frame_token = scope_builder.token;
+        let mut builder = &mut scope_builder.builder;
 
         // replace CoroSplitMark with CoroSuspend
         let coro_suspend = builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
-        // return
-        builder_next.coro_resume(token_next);
-        FrameBuilder {
-            token: token_next,
-            builder: builder_next,
-        }
-    }
-    fn visit_coro_suspend(&mut self, token_next: u32, frame_builder: &FrameBuilder) {
-        /// frame_next is already processed
+        // record continuation
+        self.record_continuation(frame_token, token_next);
 
-        let frame_token = frame_builder.token;
+        // create a new scope builder for the next scope
+        // the next frame must have a CoroResume
+        let mut builder_next = IrBuilder::new(builder.pools.clone());
+        builder_next.coro_resume(token_next);
+        let sb_next = ScopeBuilder {
+            token: token_next,
+            finish: false,
+            builder: builder_next,
+        };
+        scope_builder.finish = true;
+        (scope_builder, sb_next)
+    }
+    fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
+        unimplemented!("Multi-visit unsupported");
+        let frame_token = scope_builder.token;
+        let mut builder = &mut scope_builder.builder;
 
         // record continuation
         self.record_continuation(frame_token, token_next);
 
-        // the next frame must have been processed
-        // there is no need to create a new frame builder
+        scope_builder.finish = true;
+        scope_builder
+    }
+    fn visit_loop_split(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
+                        visit_state: VisitState, body: &Pooled<BasicBlock>, cond: NodeRef) {
+        let split_poss = self.split_possibility.get(&body.as_ptr()).unwrap();
+        assert_eq!(split_poss.possibly, true);
+
+        if split_poss.definitely {
+            /*
+            BLOCK A;
+            loop {
+                BLOCK B;
+                if (cond_0) {
+                    BLOCK E;
+                    split(1);
+                    BLOCK F;
+                } else {
+                    BLOCK G;
+                    split(2);
+                    BLOCK H;
+                }
+                BLOCK C;
+            } cond(cond_1);
+            BLOCK D;
+
+
+            ----------------------
+            | BLOCK A;           |
+            | BLOCK B;           |
+            | if (cond_0) {      |
+            |     BLOCK E;       |
+            |     suspend(1);    |----
+            | } else {           |   |
+            |     BLOCK G;       |   |
+            |     suspend(2);    |---|------------------------------
+            | }                  |   |                             |
+            ----------------------   |                             |
+                                     |                             |
+                      ----------------                             |
+                      |                                            |
+                      |                          ----------------->|<--------------------
+                      |                          |                 |                    |
+                      |<-------------------- <---------------------|-----------------   |
+                      |                    |     |                 |                |   |
+                      V                    |     |                 V                |   |
+            --------------------------     |     |      --------------------------  |   |
+            | resume(1);             |     |     |      | resume(2);             |  |   |
+            | BLOCK F;               |     |     |      | BLOCK H;               |  |   |
+            | BLOCK C;               |     |     |      | BLOCK C;               |  |   |
+            | if (cond_1) {          |     |     |      | if (cond_1) {          |  |   |
+            |     loop {             |     |     |      |     loop {             |  |   |
+            |         BLOCK B;       |     |     |      |         BLOCK B;       |  |   |
+            |         if (cond_0) {  |     |     |      |         if (cond_0) {  |  |   |
+            |             BLOCK E;   |     |     |      |             BLOCK E;   |  |   |
+            |             suspend(1);|------     |      |             suspend(1);|---   |
+            |         } else {       |           |      |         } else {       |      |
+            |             BLOCK G;   |           |      |             BLOCK G;   |      |
+            |             suspend(2);|------------      |             suspend(2);|-------
+            |         }              |                  |         }              |
+            |     } cond(cond_1)     |                  |     } cond(cond_1)     |
+            | }                      |                  | }                      |
+            | BLOCK D;               |                  | BLOCK D;               |
+            --------------------------                  --------------------------
+             */
+        } else {
+            /*
+            BLOCK A;
+            loop {
+                BLOCK B;
+                if (cond_0) {
+                    BLOCK E;
+                    split(1);
+                    BLOCK F;
+                }
+                BLOCK C;
+            } cond(cond_1);
+            BLOCK D;
+
+            ----------------------
+            | BLOCK A;           |
+            | loop {             |
+            |     BLOCK B;       |
+            |     if (cond_0) {  |
+            |         BLOCK E;   |
+            |         suspend(1);|
+            |     }              |
+            |     BLOCK C;       |
+            | } cond(cond_1)     |
+            | BLOCK D;           |
+            ----------------------
+                      |
+                      |<--------------------
+                      |                    |
+                      V                    |
+            --------------------------     |
+            | resume(1);             |     |
+            | BLOCK F;               |     |
+            | BLOCK C;               |     |
+            | if (cond_1) {          |     |
+            |     loop {             |     |
+            |         BLOCK B;       |     |
+            |         if (cond_0) {  |     |
+            |             BLOCK E;   |     |
+            |             suspend(1);|------
+            |         }              |
+            |         BLOCK C;       |
+            |     } cond(cond_1)     |
+            | }                      |
+            | BLOCK D;               |
+            --------------------------
+             */
+            let sb_temp = self.get_scope_builder_temp(&pools);
+            let mut sb_vec = self.visit_bb(pools, VisitState::new_whole(body), sb_temp);
+            let sb_body_before_split = sb_vec.pop().unwrap();
+            let bb_body_before_split = sb_body_before_split.builder.finish();
+            let dup_cond = self.find_duplicated_node(scope_builder.token, cond);
+            scope_builder.builder.loop_(bb_body_before_split, dup_cond);
+        }
     }
 
     fn split(&mut self, kernel: &KernelModule) {
         // prepare
         let pools = &kernel.pools;
-        let frame_builder = self.preprocess(kernel);
+        let scope_builder = self.preprocess(kernel);
         let bb = &kernel.module.entry;
 
         // visit
-        let mut fb_vec = self.visit_bb(pools, bb, frame_builder, None);
-        while !fb_vec.is_empty() {
-            let frame_builder = fb_vec.pop().unwrap();
-            self.build_frame(pools, frame_builder);
+        let mut sb_vec = self.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
+        while !sb_vec.is_empty() {
+            let scope_builder = sb_vec.pop().unwrap();
+            self.build_scope(pools, scope_builder);
         }
     }
 
@@ -704,14 +780,15 @@ impl SplitManager {
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
         assert!(!self.module_duplicators.get_mut(&frame_token).unwrap().current.as_ref().unwrap().blocks.contains_key(&bb.as_ptr()),
                 "Basic block {:?} has already been duplicated", bb);
-        let mut frame_builder = FrameBuilder {
+        let mut scope_builder = ScopeBuilder {
             token: frame_token,
+            finish: false,
             builder: IrBuilder::new(pools.clone()),
         };
         bb.iter().for_each(|node| {
-            self.duplicate_node(&mut frame_builder, node);
+            self.duplicate_node(&mut scope_builder, node);
         });
-        let dup_bb = frame_builder.builder.finish();
+        let dup_bb = scope_builder.builder.finish();
         // insert the duplicated block into the map
         self.module_duplicators.get_mut(&frame_token).unwrap()
             .current.as_mut().unwrap().blocks.insert(bb.as_ptr(), dup_bb.clone());
@@ -726,10 +803,10 @@ impl SplitManager {
         }
     }
 
-    fn duplicate_node(&mut self, frame_builder: &mut FrameBuilder, node_ref: NodeRef) -> NodeRef {
+    fn duplicate_node(&mut self, scope_builder: &mut ScopeBuilder, node_ref: NodeRef) -> NodeRef {
         if !node_ref.valid() { return INVALID_REF; }
-        let frame_token = frame_builder.token;
-        let mut builder = &mut frame_builder.builder;
+        let frame_token = scope_builder.token;
+        let mut builder = &mut scope_builder.builder;
         let node = node_ref.get();
         assert!(!self.module_duplicators.get_mut(&frame_token).unwrap().current.as_ref().unwrap().nodes.contains_key(&node_ref),
                 "Node {:?} has already been duplicated", node);
@@ -759,9 +836,8 @@ impl SplitManager {
             Instruction::Call(func, args) => {
                 let dup_func = match func {
                     Func::Callable(callable) => {
-                        // let dup_callable = self.duplicate_callable(&callable.0);
-                        // Func::Callable(CallableModuleRef(dup_callable))
-                        unimplemented!("Split: duplicate callable");
+                        let dup_callable = self.duplicate_callable(frame_token, &callable.0);
+                        Func::Callable(CallableModuleRef(dup_callable))
                     }
                     _ => func.clone()
                 };
@@ -834,10 +910,10 @@ impl SplitManager {
             }
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
-            Instruction::CoroSuspend { .. }
-            | Instruction::Suspend(..)
+            Instruction::CoroSuspend { token } => builder.coro_suspend(*token),
+            Instruction::Suspend(..)
             | Instruction::CoroResume { .. }
-            | Instruction::CoroFrame { .. } => {
+            | Instruction::CoroScope { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
             }
         };

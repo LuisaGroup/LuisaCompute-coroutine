@@ -1738,7 +1738,7 @@ impl Backward {
             Instruction::CoroSplitMark { .. }
             | Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. }
-            | Instruction::CoroFrame { .. } => {}
+            | Instruction::CoroScope { .. } => {}
         }
     }
     fn backward_block(&mut self, block: &BasicBlock, mut builder: IrBuilder) -> Pooled<BasicBlock> {

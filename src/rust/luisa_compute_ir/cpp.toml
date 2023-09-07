@@ -24,7 +24,7 @@ using_namespaces = []
 sys_includes = []
 includes = ["ir_common.h"]
 no_includes = false
-after_includes = "namespace luisa::compute::ir {\nstruct CallableModuleRef;\n}"
+after_includes = "namespace luisa::compute::ir {\nstruct CallableModuleRef;struct CallableModule;\n}"
 
 
 

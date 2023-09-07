@@ -545,6 +545,8 @@ impl<'a, 'b> AST2IR<'a, 'b> {
             args: CBoxedSlice::new(args),
             captures: CBoxedSlice::new(Vec::new()),
             cpu_custom_ops: CBoxedSlice::new(Vec::new()),
+            subroutine_ids: CBoxedSlice::new(Vec::new()),
+            subroutines: CBoxedSlice::new(Vec::new()),
             pools: self.pools.clone(),
         }
     }

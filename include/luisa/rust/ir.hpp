@@ -8,7 +8,7 @@
 #include <new>
 #include "ir_common.h"
 namespace luisa::compute::ir {
-struct CallableModuleRef;
+struct CallableModuleRef;struct CallableModule;
 }
 
 namespace luisa::compute::ir {
@@ -214,6 +214,10 @@ struct Capture {
     Binding binding;
 };
 
+struct CallableModuleRef {
+    CArc<CallableModule> _0;
+};
+
 struct CpuCustomOp {
     uint8_t *data;
     /// func(data, args); func should modify args in place
@@ -241,10 +245,6 @@ struct KernelModule {
     CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
     uint32_t block_size[3];
     CArc<ModulePools> pools;
-};
-
-struct CallableModuleRef {
-    CArc<CallableModule> _0;
 };
 
 struct Func {

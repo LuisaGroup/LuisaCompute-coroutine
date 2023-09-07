@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/10/18.
-//
-
 #include <luisa/core/logging.h>
 #include <luisa/api/api.h>
 
@@ -38,6 +34,7 @@ void luisa_compute_log_error(const char *msg) LUISA_NOEXCEPT {
 }
 
 LUISA_EXPORT_API void luisa_compute_set_logger_callback(LoggerCallback callback) LUISA_NOEXCEPT {
+    luisa::log_level_verbose();
     auto sink = luisa::detail::create_sink_with_callback(callback);
     luisa::detail::set_sink(sink);
 }

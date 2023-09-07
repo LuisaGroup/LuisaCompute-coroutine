@@ -1,9 +1,6 @@
-//
-// Created by Mike Smith on 2021/11/1.
-//
-
 #include <luisa/ast/statement.h>
 #include <luisa/core/logging.h>
+#include <luisa/core/stl/hash.h>
 
 namespace luisa::compute {
 

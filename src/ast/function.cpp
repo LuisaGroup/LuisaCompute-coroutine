@@ -1,8 +1,4 @@
 //
-//
-// Created by Mike Smith on 2021/2/23.
-//
-
 #include <luisa/ast/function.h>
 #include <luisa/ast/function_builder.h>
 

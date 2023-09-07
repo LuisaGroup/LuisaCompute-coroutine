@@ -1,7 +1,3 @@
-//
-// Created by Mike on 7/28/2021.
-//
-
 #include <cstring>
 #include <fstream>
 #include <future>
@@ -45,7 +41,12 @@
 #include "cuda_ext.h"
 
 #define LUISA_CUDA_ENABLE_OPTIX_VALIDATION 0
-#define LUISA_CUDA_DUMP_SOURCE 1
+static const bool LUISA_CUDA_DUMP_SOURCE = ([]{
+    // read env LUISA_DUMP_SOURCE
+    auto env = std::getenv("LUISA_DUMP_SOURCE");
+    if (env == nullptr) return false;
+    return std::string_view{env} == "1";
+})();
 #define LUISA_CUDA_KERNEL_DEBUG 1
 
 namespace luisa::compute::cuda {
@@ -102,8 +103,7 @@ CUDADevice::CUDADevice(Context &&ctx,
         _io = _default_io.get();
     }
     _compiler = luisa::make_unique<CUDACompiler>(this);
-
-    auto sm_option = luisa::format("-arch=sm_{}", handle().compute_capability());
+    auto sm_option = luisa::format("-arch=compute_{}", handle().compute_capability());
     std::array options{sm_option.c_str(),
                        "--std=c++17",
                        "--use_fast_math",
@@ -119,11 +119,21 @@ CUDADevice::CUDADevice(Context &&ctx,
     auto builtin_kernel_ptx = _compiler->compile(builtin_kernel_src, "luisa_builtin.cu", options);
 
     // prepare default shaders
-    with_handle([this, &builtin_kernel_ptx] {
-        LUISA_CHECK_CUDA(cuCtxResetPersistingL2Cache());
-        LUISA_CHECK_CUDA(cuCtxSetCacheConfig(CU_FUNC_CACHE_PREFER_L1));
-        LUISA_CHECK_CUDA(cuModuleLoadData(
-            &_builtin_kernel_module, builtin_kernel_ptx.data()));
+    with_handle([&] {
+        auto error = cuModuleLoadData(&_builtin_kernel_module, builtin_kernel_ptx.data());
+        if (error != CUDA_SUCCESS) {
+            const char *error_string = nullptr;
+            cuGetErrorString(error, &error_string);
+            LUISA_WARNING_WITH_LOCATION(
+                "Failed to load built-in kernels: {}. "
+                "Re-trying with lower compute capability...",
+                error_string ? error_string : "Unknown error");
+            _handle.force_compute_capability(60u);
+            options.front() = "-arch=compute_60";
+            builtin_kernel_ptx = _compiler->compile(builtin_kernel_src, "luisa_builtin.cu", options);
+            error = cuModuleLoadData(&_builtin_kernel_module, builtin_kernel_ptx.data());
+        }
+        LUISA_CHECK_CUDA(error);
         LUISA_CHECK_CUDA(cuModuleGetFunction(
             &_accel_update_function, _builtin_kernel_module,
             "update_accel"));
@@ -380,9 +390,9 @@ template<bool allow_update_expected_metadata>
                 "The shader will be recompiled.",
                 name);
         } else {
-            LUISA_INFO("Shader '{}' is not found in cache. "
-                       "The shader will be recompiled.",
-                       name);
+            LUISA_VERBOSE("Shader '{}' is not found in cache. "
+                          "The shader will be recompiled.",
+                          name);
         }
         return {};
     }
@@ -482,11 +492,11 @@ ShaderCreationInfo CUDADevice::_create_shader(luisa::string name,
             auto metadata = luisa::format("// METADATA: {}\n\n", serialize_cuda_shader_metadata(expected_metadata));
             luisa::span metadata_data{reinterpret_cast<const std::byte *>(metadata.data()), metadata.size()};
             if (uses_user_path) {
-                _io->write_shader_bytecode(name, ptx_data);
-                _io->write_shader_bytecode(metadata_name, metadata_data);
+                static_cast<void>(_io->write_shader_bytecode(name, ptx_data));
+                static_cast<void>(_io->write_shader_bytecode(metadata_name, metadata_data));
             } else if (option.enable_cache) {
-                _io->write_shader_cache(name, ptx_data);
-                _io->write_shader_cache(metadata_name, metadata_data);
+                static_cast<void>(_io->write_shader_cache(name, ptx_data));
+                static_cast<void>(_io->write_shader_cache(metadata_name, metadata_data));
             }
         }
     }
@@ -525,7 +535,7 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
     StringScratch scratch;
     CUDACodegenAST codegen{scratch, !_cudadevrt_library.empty()};
     codegen.emit(kernel, _compiler->device_library(), option.native_include);
-    LUISA_INFO("Generated CUDA source in {} ms.", clk.toc());
+    LUISA_VERBOSE("Generated CUDA source in {} ms.", clk.toc());
 
     // process bound arguments
     luisa::vector<ShaderDispatchCommand::Argument> bound_arguments;
@@ -628,7 +638,7 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, const i
 #ifdef LUISA_ENABLE_IR
     Clock clk;
     auto function = IR2AST::build(kernel);
-    LUISA_INFO("IR2AST done in {} ms.", clk.toc());
+    LUISA_VERBOSE("IR2AST done in {} ms.", clk.toc());
     return create_shader(option, function->function());
 #else
     LUISA_ERROR_WITH_LOCATION("CUDA device does not support creating shader from IR types.");
@@ -836,9 +846,9 @@ static void initialize() {
                      "Please update your driver.",
                      driver_version_major, driver_version_minor,
                      required_cuda_version_major, required_cuda_version_minor);
-        LUISA_INFO("Successfully initialized CUDA "
-                   "backend with driver version {}.{}.",
-                   driver_version_major, driver_version_minor);
+        LUISA_VERBOSE("Successfully initialized CUDA "
+                      "backend with driver version {}.{}.",
+                      driver_version_major, driver_version_minor);
         // OptiX
         static_cast<void>(optix::api());
     });
@@ -878,8 +888,8 @@ CUDADevice::Handle::Handle(size_t index) noexcept {
     auto unified_addressing = 0;
     LUISA_CHECK_CUDA(cuDeviceGetAttribute(&can_map_host_memory, CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY, _device));
     LUISA_CHECK_CUDA(cuDeviceGetAttribute(&unified_addressing, CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING, _device));
-    LUISA_INFO("Device {} can map host memory: {}", index, can_map_host_memory != 0);
-    LUISA_INFO("Device {} supports unified addressing: {}", index, unified_addressing != 0);
+    LUISA_VERBOSE("Device {} can map host memory: {}", index, can_map_host_memory != 0);
+    LUISA_VERBOSE("Device {} supports unified addressing: {}", index, unified_addressing != 0);
 
     auto format_uuid = [](auto uuid) noexcept {
         luisa::string result;
@@ -909,7 +919,7 @@ CUDADevice::Handle::~Handle() noexcept {
         LUISA_CHECK_OPTIX(optix::api().deviceContextDestroy(_optix_context));
     }
     LUISA_CHECK_CUDA(cuDevicePrimaryCtxRelease(_device));
-    LUISA_INFO("Destroyed CUDA device: {}.", name());
+    LUISA_VERBOSE("Destroyed CUDA device: {}.", name());
 }
 
 std::string_view CUDADevice::Handle::name() const noexcept {
@@ -931,7 +941,7 @@ optix::DeviceContext CUDADevice::Handle::optix_context() const noexcept {
         optix_options.logCallbackFunction = [](uint level, const char *tag, const char *message, void *) noexcept {
             auto log = luisa::format("Logs from OptiX ({}): {}", tag, message);
             if (level >= 4) {
-                LUISA_INFO("{}", log);
+                LUISA_VERBOSE("{}", log);
             } else [[unlikely]] {
                 LUISA_WARNING("{}", log);
             }

@@ -2,6 +2,7 @@ pub mod convert;
 use crate::ir::{Binding, KernelModule, Primitive};
 use crate::CBoxedSlice;
 use serde::{Deserialize, Serialize};
+use half::f16;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SerializedKernelModule {
@@ -65,10 +66,13 @@ pub enum SerializedConst {
     Zero(SerializedTypeRef),
     One(SerializedTypeRef),
     Bool(bool),
+    Int16(i16),
+    Uint16(u16),
     Int32(i32),
     Uint32(u32),
     Int64(i64),
     Uint64(u64),
+    Float16(f16),
     Float32(f32),
     Float64(f64),
     Generic(Vec<u8>, SerializedTypeRef),
@@ -147,6 +151,19 @@ pub enum SerializedInstruction {
     Suspend(SerializedNodeRef),
     Comment(Vec<u8>),
     Assert(SerializedNodeRef, Vec<u8>),
+    CoroSplitMark{
+        token: u32,
+    },
+    CoroSuspend {
+        token: u32,
+    },
+    CoroResume {
+        token: u32,
+    },
+    CoroFrame {
+        token: u32,
+        body: SerializedBlockRef,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -202,6 +219,8 @@ pub enum SerializedFunc {
 
     Cast,
     Bitcast,
+    Pack,
+    Unpack,
 
     // Binary op
     Add,
@@ -237,6 +256,7 @@ pub enum SerializedFunc {
     Clamp,
     Lerp,
     Step,
+    SmoothStep,
     Saturate,
 
     Abs,
@@ -380,7 +400,7 @@ pub enum SerializedFunc {
     /// (bindless_array, index: uint, element: uint) -> T
     BindlessBufferRead,
     /// (bindless_array, index: uint) -> uint: returns the size of the buffer in *elements*
-    BindlessBufferSize(SerializedTypeRef),
+    BindlessBufferSize,
     // (bindless_array, index: uint) -> u64: returns the type of the buffer
     BindlessBufferType,
 

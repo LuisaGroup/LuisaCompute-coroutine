@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2020/12/2.
-//
-
 #pragma once
 
 #include <luisa/core/stl/vector.h>
@@ -29,6 +25,7 @@ class FunctionBuilder;
  * 
  */
 class LC_AST_API Expression : public concepts::Noncopyable {
+    friend class CallableLibrary;
 
 public:
     /// Expression type
@@ -42,6 +39,7 @@ public:
         CONSTANT,
         CALL,
         CAST,
+        TYPE_ID,
         CPUCUSTOM,
         GPUCUSTOM
     };
@@ -56,6 +54,7 @@ protected:
     mutable Usage _usage{Usage::NONE};
     virtual void _mark(Usage usage) const noexcept = 0;
     [[nodiscard]] virtual uint64_t _compute_hash() const noexcept = 0;
+    Expression() noexcept = default;
 
 public:
     /**
@@ -83,6 +82,7 @@ class RefExpr;
 class ConstantExpr;
 class CallExpr;
 class CastExpr;
+class TypeIDExpr;
 class CpuCustomOpExpr;
 class GpuCustomOpExpr;
 
@@ -96,6 +96,7 @@ struct LC_AST_API ExprVisitor {
     virtual void visit(const ConstantExpr *) = 0;
     virtual void visit(const CallExpr *) = 0;
     virtual void visit(const CastExpr *) = 0;
+    virtual void visit(const TypeIDExpr *) = 0;
     virtual void visit(const CpuCustomOpExpr *);
     virtual void visit(const GpuCustomOpExpr *);
     virtual ~ExprVisitor() noexcept = default;
@@ -106,10 +107,12 @@ struct LC_AST_API ExprVisitor {
 
 /// Unary expression
 class LC_AST_API UnaryExpr final : public Expression {
+    friend class CallableLibrary;
 
 private:
     const Expression *_operand;
     UnaryOp _op;
+    UnaryExpr() noexcept = default;
 
 protected:
     void _mark(Usage) const noexcept override {}
@@ -134,12 +137,13 @@ public:
 
 /// Binary expression
 class LC_AST_API BinaryExpr final : public Expression {
+    friend class CallableLibrary;
 
 private:
     const Expression *_lhs;
     const Expression *_rhs;
     BinaryOp _op;
-
+    BinaryExpr() noexcept = default;
 protected:
     void _mark(Usage) const noexcept override {}
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -169,11 +173,12 @@ public:
 
 /// Access expression
 class LC_AST_API AccessExpr final : public Expression {
+    friend class CallableLibrary;
 
 private:
     const Expression *_range;
     const Expression *_index;
-
+    AccessExpr() noexcept = default;
 protected:
     void _mark(Usage usage) const noexcept override { _range->mark(usage); }
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -199,6 +204,7 @@ public:
 
 /// Member expression
 class LC_AST_API MemberExpr final : public Expression {
+    friend class CallableLibrary;
 
 public:
     static constexpr auto swizzle_mask = 0xff000000u;
@@ -208,6 +214,7 @@ private:
     const Expression *_self;
     uint32_t _swizzle_size;
     uint32_t _swizzle_code;
+    MemberExpr() noexcept = default;
 
 protected:
     void _mark(Usage usage) const noexcept override { _self->mark(usage); }
@@ -275,12 +282,14 @@ using make_literal_value_t = typename make_literal_value<T>::type;
 }// namespace detail
 
 class LC_AST_API LiteralExpr final : public Expression {
+    friend class CallableLibrary;
 
 public:
     using Value = detail::make_literal_value_t<basic_types>;
 
 private:
     Value _value;
+    LiteralExpr() noexcept = default;
 
 protected:
     void _mark(Usage) const noexcept override {}
@@ -301,9 +310,11 @@ public:
 
 /// Reference expression
 class LC_AST_API RefExpr final : public Expression {
+    friend class CallableLibrary;
 
 private:
     Variable _variable;
+    RefExpr() noexcept = default;
 
 protected:
     void _mark(Usage usage) const noexcept override;
@@ -323,9 +334,11 @@ public:
 
 /// Constant expression
 class LC_AST_API ConstantExpr final : public Expression {
+    friend class CallableLibrary;
 
 private:
     ConstantData _data;
+    ConstantExpr() noexcept = default;
 
 protected:
     void _mark(Usage) const noexcept override {}
@@ -346,6 +359,7 @@ public:
 
 /// Call expression
 class LC_AST_API CallExpr final : public Expression {
+    friend class CallableLibrary;
 
 public:
     using ArgumentList = luisa::vector<const Expression *>;
@@ -362,6 +376,7 @@ private:
     ArgumentList _arguments;
     CallOp _op;
     Callee _func;
+    CallExpr() noexcept = default;
 
 protected:
     void _mark(Usage) const noexcept override {}
@@ -410,10 +425,12 @@ enum struct CastOp {
 
 /// Cast expression
 class LC_AST_API CastExpr final : public Expression {
+    friend class CallableLibrary;
 
 private:
     const Expression *_source;
     CastOp _op;
+    CastExpr() noexcept = default;
 
 protected:
     void _mark(Usage) const noexcept override {}
@@ -431,6 +448,26 @@ public:
         : Expression{Tag::CAST, type}, _source{src}, _op{op} { _source->mark(Usage::READ); }
     [[nodiscard]] auto op() const noexcept { return _op; }
     [[nodiscard]] auto expression() const noexcept { return _source; }
+    LUISA_EXPRESSION_COMMON()
+};
+
+class TypeIDExpr final : public Expression {
+    friend class CallableLibrary;
+
+private:
+    // Note: `data_type` is the argument of the expression,
+    //   not the result type. The result type is always uint64.
+    const Type *_data_type;
+    TypeIDExpr() noexcept = default;
+
+protected:
+    void _mark(Usage) const noexcept override {}
+    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+
+public:
+    explicit TypeIDExpr(const Type *type) noexcept
+        : Expression{Tag::TYPE_ID, Type::of<ulong>()}, _data_type{type} {}
+    [[nodiscard]] auto data_type() const noexcept { return _data_type; }
     LUISA_EXPRESSION_COMMON()
 };
 
@@ -461,13 +498,13 @@ public:
 class GpuCustomOpExpr final : public Expression {
 
 public:
-    GpuCustomOpExpr(const Type *type, std::string source, const Expression *arg) noexcept
+    GpuCustomOpExpr(const Type *type, luisa::string source, const Expression *arg) noexcept
         : Expression{Tag::GPUCUSTOM, type}, _source{std::move(source)}, _arg(arg) {}
     [[nodiscard]] auto source() const noexcept { return _source; }
     LUISA_EXPRESSION_COMMON()
 
 private:
-    std::string _source;
+    luisa::string _source;
     const Expression *_arg;
 
 protected:
@@ -510,8 +547,8 @@ void traverse_subexpressions(const Expression *expr,
             traverse_subexpressions(access_expr->index(), enter, exit);
             break;
         }
-        case Expression::Tag::LITERAL: break;
-        case Expression::Tag::REF: break;
+        case Expression::Tag::LITERAL:
+        case Expression::Tag::REF:
         case Expression::Tag::CONSTANT: break;
         case Expression::Tag::CALL: {
             auto call_expr = static_cast<const CallExpr *>(expr);
@@ -525,7 +562,8 @@ void traverse_subexpressions(const Expression *expr,
             traverse_subexpressions(cast_expr->expression(), enter, exit);
             break;
         }
-        case Expression::Tag::CPUCUSTOM: break;
+        case Expression::Tag::TYPE_ID:
+        case Expression::Tag::CPUCUSTOM:
         case Expression::Tag::GPUCUSTOM: break;
     }
     exit(expr);

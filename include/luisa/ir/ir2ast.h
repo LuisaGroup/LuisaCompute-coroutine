@@ -36,6 +36,7 @@ public:
 
     struct IR2ASTContext {
         ir::Module module;
+        const RefExpr *generic_loop_break;
         luisa::shared_ptr<detail::FunctionBuilder> function_builder;
         luisa::unordered_map<const ir::Node *, const Expression *> node_to_exprs;
         luisa::unordered_map<const ir::BasicBlock *, luisa::vector<PhiAssignment>> block_to_phis;
@@ -52,9 +53,8 @@ private:
         }
     }
 
-    IR2ASTContext *_ctx;
+    IR2ASTContext *_ctx{nullptr};
     luisa::unordered_map<const ir::CallableModule *, luisa::shared_ptr<detail::FunctionBuilder>> _converted_callables;
-    luisa::unordered_map<uint64_t, luisa::shared_ptr<detail::FunctionBuilder>> _unique_callables;
 
     [[nodiscard]] static const Type *_convert_primitive_type(const ir::Primitive &type) noexcept;
     [[nodiscard]] static const Type *_convert_type(const ir::Type *type) noexcept;

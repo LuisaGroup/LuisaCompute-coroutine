@@ -19,14 +19,15 @@ int main(int argc, char *argv[]) {
     Context context{argv[0]};
 
     if (argc <= 1) {
-        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, ispc, metal", argv[0]);
+        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, cpu, metal", argv[0]);
         exit(1);
     }
     auto device = context.create_device(argv[1]);
     auto dstorage_ext = device.extension<DStorageExt>();
-
+    static constexpr uint32_t width = 4096;
+    static constexpr uint32_t height = 4096;
     Stream dstorage_memory_stream = dstorage_ext->create_stream(DStorageStreamOption{DStorageStreamSource::MemorySource});
-    Stream dstorage_file_stream = dstorage_ext->create_stream(DStorageStreamOption{DStorageStreamSource::FileSource});
+    Stream dstorage_file_stream = dstorage_ext->create_stream(DStorageStreamOption{DStorageStreamSource::FileSource,});
     Stream compute_stream = device.create_stream();
     TimelineEvent event = device.create_timeline_event();
     LUISA_INFO("Start test memory and buffer read.");
@@ -73,8 +74,7 @@ int main(int argc, char *argv[]) {
         LUISA_INFO("Buffer result: {}", buffer_data.data());
     }
     LUISA_INFO("Start test texture read.");
-    static constexpr uint32_t width = 512;
-    static constexpr uint32_t height = 512;
+
     luisa::vector<uint8_t> pixels(width * height * 4);
     for (size_t x = 0; x < width; ++x)
         for (size_t y = 0; y < height; ++y) {

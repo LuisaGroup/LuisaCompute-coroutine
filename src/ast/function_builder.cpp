@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2020/12/2.
-//
-
 #include <luisa/core/logging.h>
 #include <luisa/ast/function_builder.h>
 
@@ -143,25 +139,14 @@ void FunctionBuilder::assign(const Expression *lhs, const Expression *rhs) noexc
 }
 
 const LiteralExpr *FunctionBuilder::literal(const Type *type, LiteralExpr::Value value) noexcept {
-    value = luisa::visit([type](auto x) noexcept -> LiteralExpr::Value {
-        if constexpr (luisa::is_scalar_v<decltype(x)>) {
-            switch (type->tag()) {
-                case Type::Tag::BOOL: return bool(x);
-                case Type::Tag::FLOAT16:
-                case Type::Tag::FLOAT32: return float(x);
-                case Type::Tag::INT16:
-                case Type::Tag::INT32:
-                case Type::Tag::INT64: return int(x);
-                case Type::Tag::UINT16:
-                case Type::Tag::UINT32:
-                case Type::Tag::UINT64: return uint(x);
-                default: LUISA_ERROR_WITH_LOCATION("Invalid type for LiteralExpr: {}", type->description());
-            }
-        } else {
-            return x;
-        }
-    },
-                         value);
+    luisa::visit(
+        [type]<typename T>(T x) noexcept {
+            auto t = Type::of<T>();
+            LUISA_ASSERT(*type == *t,
+                         "Type mismatch: declared as {}, got {}.",
+                         type->description(), t->description());
+        },
+        value);
     return _create_expression<LiteralExpr>(type, value);
 }
 
@@ -189,6 +174,8 @@ const RefExpr *FunctionBuilder::dispatch_id() noexcept { return _builtin(Type::o
 const RefExpr *FunctionBuilder::dispatch_size() noexcept { return _builtin(Type::of<uint3>(), Variable::Tag::DISPATCH_SIZE); }
 const RefExpr *FunctionBuilder::kernel_id() noexcept { return _builtin(Type::of<uint3>(), Variable::Tag::KERNEL_ID); }
 const RefExpr *FunctionBuilder::object_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::OBJECT_ID); }
+const RefExpr *FunctionBuilder::warp_lane_count() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_COUNT); }
+const RefExpr *FunctionBuilder::warp_lane_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_ID); }
 
 inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag tag) noexcept {
     if (auto iter = std::find_if(
@@ -272,20 +259,20 @@ const Expression *FunctionBuilder::swizzle(const Type *type, const Expression *s
                     } else if (swizzle_size == 2u) {
                         auto i = (swizzle_code >> 0u) & 0b11u;
                         auto j = (swizzle_code >> 4u) & 0b11u;
-                        return literal(Type::of<TVec>(),
+                        return literal(Type::of<Vector<TElem, 2u>>(),
                                        Vector<TElem, 2u>{v[i], v[j]});
                     } else if (swizzle_size == 3u) {
                         auto i = (swizzle_code >> 0u) & 0b11u;
                         auto j = (swizzle_code >> 4u) & 0b11u;
                         auto k = (swizzle_code >> 8u) & 0b11u;
-                        return literal(Type::of<TVec>(),
+                        return literal(Type::of<Vector<TElem, 3u>>(),
                                        Vector<TElem, 3u>{v[i], v[j], v[k]});
                     } else if (swizzle_size == 4u) {
                         auto i = (swizzle_code >> 0u) & 0b11u;
                         auto j = (swizzle_code >> 4u) & 0b11u;
                         auto k = (swizzle_code >> 8u) & 0b11u;
                         auto l = (swizzle_code >> 12u) & 0b11u;
-                        return literal(Type::of<TVec>(),
+                        return literal(Type::of<Vector<TElem, 4u>>(),
                                        Vector<TElem, 4u>{v[i], v[j], v[k], v[l]});
                     }
                     LUISA_ERROR_WITH_LOCATION("Invalid swizzle size.");
@@ -570,25 +557,26 @@ const CallExpr *FunctionBuilder::call(const Type *type, Function custom, luisa::
     if (in_iter != args.end()) [[unlikely]] {
         luisa::string expected_args{"("};
         for (auto a : f->_arguments) {
-            expected_args.append(a.type()->description()).append(", ");
+            expected_args.append("\n    ").append(a.type()->description()).append(",");
         }
         if (!f->_arguments.empty()) {
             expected_args.pop_back();
-            expected_args.pop_back();
+            expected_args.append("\n");
         }
         expected_args.append(")");
         luisa::string received_args{"("};
         for (auto a : args) {
-            received_args.append(a->type()->description()).append(", ");
+            received_args.append("\n    ").append(a->type()->description()).append(",");
         }
         if (!args.empty()) {
             received_args.pop_back();
-            received_args.pop_back();
+            received_args.append("\n");
         }
         received_args.append(")");
         LUISA_ERROR_WITH_LOCATION(
-            "Invalid call arguments for custom callable #{:016x}. "
-            "Expected {}, but received {}.",
+            "Invalid call arguments for custom callable #{:016x}.\n"
+            "Expected: {},\n"
+            "Received: {}.",
             custom.hash(), expected_args, received_args);
     }
     auto expr = _create_expression<CallExpr>(type, custom, std::move(call_args));
@@ -688,4 +676,3 @@ void FunctionBuilder::sort_bindings() noexcept {
 }
 
 }// namespace luisa::compute::detail
-

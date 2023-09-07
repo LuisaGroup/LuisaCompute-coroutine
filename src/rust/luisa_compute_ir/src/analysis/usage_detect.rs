@@ -169,6 +169,13 @@ impl UsageDetector {
                 self.detect_block(block);
             }
             crate::ir::Instruction::Comment(_) => {}
+            crate::ir::Instruction::CoroSplitMark{..} => {}
+            crate::ir::Instruction::CoroFrame{..}
+            | crate::ir::Instruction::CoroSuspend{..}
+            | crate::ir::Instruction::CoroResume{..}
+            | crate::ir::Instruction::CoroFrame{..} => {
+                unreachable!("Unexpected coroutine instruction in UsageDetector::detect_node");
+            }
         }
     }
 

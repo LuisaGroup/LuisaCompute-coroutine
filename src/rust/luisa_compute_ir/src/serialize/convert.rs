@@ -110,10 +110,13 @@ impl KernelSerializer {
             Const::Zero(t) => SerializedConst::Zero(self.serialize_type(t)),
             Const::One(t) => SerializedConst::One(self.serialize_type(t)),
             Const::Bool(v) => SerializedConst::Bool(*v),
+            Const::Int16(v) => SerializedConst::Int16(*v),
+            Const::Uint16(v) => SerializedConst::Uint16(*v),
             Const::Int32(v) => SerializedConst::Int32(*v),
             Const::Uint32(v) => SerializedConst::Uint32(*v),
             Const::Int64(v) => SerializedConst::Int64(*v),
             Const::Uint64(v) => SerializedConst::Uint64(*v),
+            Const::Float16(v) => SerializedConst::Float16(*v),
             Const::Float32(v) => SerializedConst::Float32(*v),
             Const::Float64(v) => SerializedConst::Float64(*v),
             Const::Generic(v, t) => {
@@ -258,6 +261,19 @@ impl KernelSerializer {
                 let s = s.as_ref().to_vec();
                 SerializedInstruction::Comment(s)
             }
+            Instruction::CoroSplitMark { token } => {
+                SerializedInstruction::CoroSplitMark { token: *token }
+            }
+            Instruction::CoroSuspend { token } => {
+                SerializedInstruction::CoroSuspend { token: *token }
+            }
+            | Instruction::CoroResume { token } => {
+                SerializedInstruction::CoroResume { token: *token }
+            }
+            | Instruction::CoroFrame { token, body } => {
+                let body = self.serialize_block(body);
+                SerializedInstruction::CoroFrame { token: *token, body }
+            }
         }
     }
     fn serialize_func(&mut self, func: &Func) -> SerializedFunc {
@@ -299,6 +315,8 @@ impl KernelSerializer {
             Func::Load => SerializedFunc::Load,
             Func::Cast => SerializedFunc::Cast,
             Func::Bitcast => SerializedFunc::Bitcast,
+            Func::Pack => SerializedFunc::Pack,
+            Func::Unpack => SerializedFunc::Unpack,
             Func::Add => SerializedFunc::Add,
             Func::Sub => SerializedFunc::Sub,
             Func::Mul => SerializedFunc::Mul,
@@ -327,6 +345,7 @@ impl KernelSerializer {
             Func::Clamp => SerializedFunc::Clamp,
             Func::Lerp => SerializedFunc::Lerp,
             Func::Step => SerializedFunc::Step,
+            Func::SmoothStep => SerializedFunc::SmoothStep,
             Func::Saturate => SerializedFunc::Saturate,
             Func::Abs => SerializedFunc::Abs,
             Func::Min => SerializedFunc::Min,
@@ -420,10 +439,7 @@ impl KernelSerializer {
             Func::BindlessTexture2dSizeLevel => SerializedFunc::BindlessTexture2dSizeLevel,
             Func::BindlessTexture3dSizeLevel => SerializedFunc::BindlessTexture3dSizeLevel,
             Func::BindlessBufferRead => SerializedFunc::BindlessBufferRead,
-            Func::BindlessBufferSize(ty) => {
-                let ty = self.serialize_type(ty);
-                SerializedFunc::BindlessBufferSize(ty)
-            }
+            Func::BindlessBufferSize => SerializedFunc::BindlessBufferSize,
             Func::BindlessBufferType => SerializedFunc::BindlessBufferType,
             Func::Vec => SerializedFunc::Vec,
             Func::Vec2 => SerializedFunc::Vec2,
@@ -441,6 +457,7 @@ impl KernelSerializer {
             Func::Mat4 => SerializedFunc::Mat4,
             Func::Callable(_) => todo!(),
             Func::CpuCustomOp(_) => panic!("cpu custom op not serializabl"),
+            _ => todo!(),
         }
     }
     fn new() -> Self {

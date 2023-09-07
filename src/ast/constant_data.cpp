@@ -1,9 +1,3 @@
-//
-// Created by Mike Smith on 2021/3/6.
-//
-
-#include <algorithm>
-
 #include <luisa/core/stl/hash.h>
 #include <luisa/core/spin_mutex.h>
 #include <luisa/core/logging.h>

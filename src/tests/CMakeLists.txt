@@ -1,3 +1,23 @@
+set(test_common_source
+        common/test_main.cpp
+        common/config.h
+        common/doctest.h
+        common/cornell_box.h
+        common/tiny_obj_loader.h
+        common/tinyexr.h)
+
+function(luisa_compute_test_suite name)
+    file(GLOB_RECURSE test_${name}_source next/test/${name}/**.cpp)
+    luisa_compute_add_executable(test_${name} ${test_common_source} ${test_${name}_source})
+    target_include_directories(test_${name} PRIVATE ./)
+endfunction()
+
+luisa_compute_test_suite(feat)
+
+file(GLOB_RECURSE test_all_source next/test/**.cpp)
+luisa_compute_add_executable(test_all ${test_common_source} ${test_all_source})
+target_include_directories(test_all PRIVATE ./)
+
 luisa_compute_add_executable(test_main
         common/test_main.cpp
         common/config.h
@@ -16,10 +36,12 @@ luisa_compute_add_test(buffer_io)
 
 if (LUISA_COMPUTE_ENABLE_RUST)
     luisa_compute_add_executable(test_autodiff test_autodiff.cpp)
+    luisa_compute_add_executable(test_autodiff_full test_autodiff_full.cpp)
     luisa_compute_add_executable(test_coroutine test_coroutine.cpp)
     luisa_compute_add_executable(test_ast2ir test_ast2ir.cpp)
     luisa_compute_add_executable(test_ast2ir_headless test_ast2ir_headless.cpp)
     luisa_compute_add_executable(test_ast2ir_ir2ast test_ast2ir_ir2ast.cpp)
+
     if (LUISA_COMPUTE_ENABLE_GUI)
         luisa_compute_add_executable(test_kernel_ir test_kernel_ir.cpp)
         luisa_compute_add_executable(test_sdf_renderer_ir test_sdf_renderer_ir.cpp)
@@ -30,6 +52,8 @@ endif ()
 luisa_compute_add_executable(test_helloworld test_helloworld.cpp)
 luisa_compute_add_executable(test_type test_type.cpp)
 luisa_compute_add_executable(test_ast test_ast.cpp)
+luisa_compute_add_executable(test_binding_group test_binding_group.cpp)
+luisa_compute_add_executable(test_binding_group_template test_binding_group_template.cpp)
 luisa_compute_add_executable(test_copy test_copy.cpp)
 luisa_compute_add_executable(test_dsl_multithread test_dsl_multithread.cpp)
 luisa_compute_add_executable(test_dsl_sugar test_dsl_sugar.cpp)
@@ -57,8 +81,12 @@ luisa_compute_add_executable(test_mipmap test_mipmap.cpp)
 luisa_compute_add_executable(test_native_include test_native_include.cpp)
 luisa_compute_add_executable(test_select_device test_select_device.cpp)
 luisa_compute_add_executable(test_sparse_texture test_sparse_texture.cpp)
+luisa_compute_add_executable(test_soa test_soa.cpp)
+luisa_compute_add_executable(test_soa_subview test_soa_subview.cpp)
+luisa_compute_add_executable(test_soa_simple test_soa_simple.cpp)
 luisa_compute_add_executable(test_raytracing_weekend test_raytracing_weekend/main.cpp)
 luisa_compute_add_executable(test_dml test_dml.cpp)
+luisa_compute_add_executable(test_oso_parser test_oso_parser.cpp)
 
 if (LUISA_COMPUTE_ENABLE_GUI)
     luisa_compute_add_executable(test_swapchain test_swapchain.cpp)
@@ -78,11 +106,14 @@ if (LUISA_COMPUTE_ENABLE_GUI)
     luisa_compute_add_executable(test_texture3d test_texture3d.cpp)
 endif ()
 
+if (LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
+    luisa_compute_add_executable(test_cuda_lcub test_cuda_lcub.cpp)
+endif ()
+
 # GUI interaction with wxWidgets
 find_package(wxWidgets COMPONENTS core base)
 
 if (wxWidgets_FOUND)
-
     include(${wxWidgets_USE_FILE})
     message(STATUS "Found wxWidgets: ${wxWidgets_INCLUDE_DIRS}")
 
@@ -100,9 +131,11 @@ if (wxWidgets_FOUND)
 
     if (LUISA_REQUIRED_GTK_LIB)
         find_package(PkgConfig)
+
         if (PkgConfig_FOUND)
             pkg_check_modules(GTK ${LUISA_REQUIRED_GTK_LIB})
         endif ()
+
         if (GTK_FOUND)
             message(STATUS "Found GTK: ${GTK_INCLUDE_DIRS}")
         endif ()
@@ -129,9 +162,11 @@ if (WIN32 AND NOT MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(WARNING "Clang has trouble with Qt on Windows. The Qt example will not be built.")
 else ()
     find_package(Qt6 COMPONENTS Widgets Core Gui QUIET CONFIG)
+
     if (NOT Qt6_FOUND)
         find_package(Qt5 COMPONENTS Widgets Core Gui QUIET CONFIG)
     endif ()
+
     if (Qt6_FOUND OR Qt5_FOUND)
         message(STATUS "Found Qt")
         luisa_compute_add_executable(test_swapchain_qt test_swapchain_qt.cpp)

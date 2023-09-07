@@ -1,13 +1,17 @@
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
+use half::f16;
 
-use crate::usage_detect::detect_usage;
+use crate::analysis::usage_detect::detect_usage;
 use crate::*;
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Formatter, write};
 use std::hash::Hasher;
 use std::ops::Deref;
+use std::ptr::replace;
+use std::thread::current;
+use crate::context::with_context;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
@@ -20,6 +24,7 @@ pub enum Primitive {
     Uint32,
     Int64,
     Uint64,
+    Float16,
     Float32,
     Float64,
 }
@@ -37,6 +42,7 @@ impl std::fmt::Display for Primitive {
                 Self::Uint32 => "u32",
                 Self::Int64 => "i64",
                 Self::Uint64 => "u64",
+                Self::Float16 => "f16",
                 Self::Float32 => "f32",
                 Self::Float64 => "f64",
             }
@@ -62,6 +68,7 @@ impl VectorElementType {
     }
     pub fn is_float(&self) -> bool {
         match self {
+            VectorElementType::Scalar(Primitive::Float16) => true,
             VectorElementType::Scalar(Primitive::Float32) => true,
             VectorElementType::Scalar(Primitive::Float64) => true,
             VectorElementType::Vector(v) => v.element.is_float(),
@@ -70,6 +77,8 @@ impl VectorElementType {
     }
     pub fn is_int(&self) -> bool {
         match self {
+            VectorElementType::Scalar(Primitive::Int16) => true,
+            VectorElementType::Scalar(Primitive::Uint16) => true,
             VectorElementType::Scalar(Primitive::Int32) => true,
             VectorElementType::Scalar(Primitive::Uint32) => true,
             VectorElementType::Scalar(Primitive::Int64) => true,
@@ -208,6 +217,7 @@ impl Primitive {
             Primitive::Uint32 => 4,
             Primitive::Int64 => 8,
             Primitive::Uint64 => 8,
+            Primitive::Float16 => 2,
             Primitive::Float32 => 4,
             Primitive::Float64 => 8,
         }
@@ -227,13 +237,23 @@ impl VectorType {
             }
         };
         let len = match self.element {
-            VectorElementType::Scalar(s) => match s {
-                Primitive::Bool => self.length,
-                _ => aligned_len,
-            },
+            VectorElementType::Scalar(s) => aligned_len,
             VectorElementType::Vector(_) => self.length,
         };
         el_sz * len as usize
+    }
+    pub fn alignment(&self) -> usize {
+        match self.element {
+            VectorElementType::Scalar(prim) => {
+                let elem_align = prim.size();
+                let aligned_dim = if self.length == 3 { 4 } else {
+                    assert!(self.length >= 2 && self.length <= 4);
+                    self.length
+                };
+                std::cmp::min(elem_align * aligned_dim as usize, 16)
+            }
+            VectorElementType::Vector(_) => todo!(),
+        }
     }
     pub fn element(&self) -> Primitive {
         match self.element {
@@ -332,8 +352,8 @@ impl Type {
             Type::Void | Type::UserData => 0,
             Type::Primitive(t) => t.size(),
             Type::Struct(t) => t.alignment,
-            Type::Vector(t) => t.element.size(), // TODO
-            Type::Matrix(t) => t.element.size(),
+            Type::Vector(t) => t.alignment(),
+            Type::Matrix(t) => t.column().alignment(),
             Type::Array(t) => t.element.alignment(),
             Self::Opaque(_) => unreachable!(),
         }
@@ -386,6 +406,12 @@ impl Type {
             dimension,
         }))
     }
+    pub fn is_void(&self) -> bool {
+        match self {
+            Type::Void => true,
+            _ => false,
+        }
+    }
     pub fn is_opaque(&self, name: &str) -> bool {
         match self {
             Type::Opaque(name_) => name_.to_string().as_str() == name,
@@ -407,7 +433,7 @@ impl Type {
     pub fn is_float(&self) -> bool {
         match self {
             Type::Primitive(p) => match p {
-                Primitive::Float32 | Primitive::Float64 => true,
+                Primitive::Float16 | Primitive::Float32 | Primitive::Float64 => true,
                 _ => false,
             },
             Type::Vector(v) => v.element.is_float(),
@@ -429,7 +455,9 @@ impl Type {
     pub fn is_int(&self) -> bool {
         match self {
             Type::Primitive(p) => match p {
-                Primitive::Int32 | Primitive::Uint32 | Primitive::Int64 | Primitive::Uint64 => true,
+                Primitive::Int16 | Primitive::Uint16 |
+                Primitive::Int32 | Primitive::Uint32 |
+                Primitive::Int64 | Primitive::Uint64 => true,
                 _ => false,
             },
             Type::Vector(v) => v.element.is_int(),
@@ -478,6 +506,7 @@ impl Node {
         }
     }
 }
+
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash, Serialize)]
 #[repr(C)]
@@ -530,7 +559,7 @@ pub enum Func {
     // (rq) -> ()
     RayQueryCommitProcedural,
     // (rq, f32) -> ()
-    RayQueryTerminate,              // (rq) -> ()
+    RayQueryTerminate, // (rq) -> ()
 
     RasterDiscard,
 
@@ -543,6 +572,9 @@ pub enum Func {
 
     Cast,
     Bitcast,
+
+    Pack,
+    Unpack,
 
     // Binary op
     Add,
@@ -578,6 +610,7 @@ pub enum Func {
     Clamp,
     Lerp,
     Step,
+    SmoothStep,
     Saturate,
 
     Abs,
@@ -654,23 +687,23 @@ pub enum Func {
 
     SynchronizeBlock,
 
-    /// (buffer/smem, index, desired) -> old: stores desired, returns old.
+    /// (buffer/smem, indices..., desired) -> old: stores desired, returns old.
     AtomicExchange,
-    /// (buffer/smem, index, expected, desired) -> old: stores (old == expected ? desired : old), returns old.
+    /// (buffer/smem, indices..., expected, desired) -> old: stores (old == expected ? desired : old), returns old.
     AtomicCompareExchange,
-    /// (buffer/smem, index, val) -> old: stores (old + val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old + val), returns old.
     AtomicFetchAdd,
-    /// (buffer/smem, index, val) -> old: stores (old - val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old - val), returns old.
     AtomicFetchSub,
-    /// (buffer/smem, index, val) -> old: stores (old & val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old & val), returns old.
     AtomicFetchAnd,
-    /// (buffer/smem, index, val) -> old: stores (old | val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old | val), returns old.
     AtomicFetchOr,
-    /// (buffer/smem, index, val) -> old: stores (old ^ val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores (old ^ val), returns old.
     AtomicFetchXor,
-    /// (buffer/smem, index, val) -> old: stores min(old, val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores min(old, val), returns old.
     AtomicFetchMin,
-    /// (buffer/smem, index, val) -> old: stores max(old, val), returns old.
+    /// (buffer/smem, indices..., val) -> old: stores max(old, val), returns old.
     AtomicFetchMax,
     // memory access
     /// (buffer, index) -> value: reads the index-th element in buffer
@@ -721,8 +754,8 @@ pub enum Func {
     BindlessTexture3dSizeLevel,
     /// (bindless_array, index: uint, element: uint) -> T
     BindlessBufferRead,
-    /// (bindless_array, index: uint) -> uint: returns the size of the buffer in *elements*
-    BindlessBufferSize(CArc<Type>),
+    /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
+    BindlessBufferSize,
     // (bindless_array, index: uint) -> u64: returns the type of the buffer
     BindlessBufferType,
 
@@ -762,6 +795,11 @@ pub enum Func {
 
     // ArgT -> ArgT
     CpuCustomOp(CArc<CpuCustomOp>),
+
+    ShaderExecutionReorder, // (uint hint, uint hint_bits): void
+
+    Unknown0,
+    Unknown1,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -770,10 +808,13 @@ pub enum Const {
     Zero(CArc<Type>),
     One(CArc<Type>),
     Bool(bool),
+    Int16(i16),
+    Uint16(u16),
     Int32(i32),
     Uint32(u32),
     Int64(i64),
     Uint64(u64),
+    Float16(f16),
     Float32(f32),
     Float64(f64),
     Generic(CBoxedSlice<u8>, CArc<Type>),
@@ -785,10 +826,13 @@ impl std::fmt::Display for Const {
             Const::Zero(t) => write!(f, "0_{}", t),
             Const::One(t) => write!(f, "1_{}", t),
             Const::Bool(b) => write!(f, "{}", b),
+            Const::Int16(i) => write!(f, "{}", i),
+            Const::Uint16(u) => write!(f, "{}", u),
             Const::Int32(i) => write!(f, "{}", i),
             Const::Uint32(u) => write!(f, "{}", u),
             Const::Int64(i) => write!(f, "{}", i),
             Const::Uint64(u) => write!(f, "{}", u),
+            Const::Float16(fl) => write!(f, "{}", fl),
             Const::Float32(fl) => write!(f, "{}", fl),
             Const::Float64(fl) => write!(f, "{}", fl),
             Const::Generic(data, t) => write!(f, "byte<{}>[{}]", t, data.as_ref().len()),
@@ -799,18 +843,34 @@ impl std::fmt::Display for Const {
 impl Const {
     pub fn get_i32(&self) -> i32 {
         match self {
+            Const::Int16(v) => *v as i32,
+            Const::Uint16(v) => *v as i32,
             Const::Int32(v) => *v,
             Const::Uint32(v) => *v as i32,
+            Const::Int64(v) => *v as i32,
+            Const::Uint64(v) => *v as i32,
             Const::One(t) => {
-                assert!(t.is_primitive() && t.is_int(), "cannot convert {:?} to i32", t);
+                assert!(
+                    t.is_primitive() && t.is_int(),
+                    "cannot convert {:?} to i32",
+                    t
+                );
                 1
             }
             Const::Zero(t) => {
-                assert!(t.is_primitive() && t.is_int(), "cannot convert {:?} to i32", t);
+                assert!(
+                    t.is_primitive() && t.is_int(),
+                    "cannot convert {:?} to i32",
+                    t
+                );
                 0
             }
             Const::Generic(slice, t) => {
-                assert!(t.is_primitive() && t.is_int(), "cannot convert {:?} to i32", t);
+                assert!(
+                    t.is_primitive() && t.is_int(),
+                    "cannot convert {:?} to i32",
+                    t
+                );
                 assert_eq!(slice.len(), 4, "invalid slice length for i32");
                 let mut buf = [0u8; 4];
                 buf.copy_from_slice(slice);
@@ -824,10 +884,13 @@ impl Const {
             Const::Zero(ty) => ty.clone(),
             Const::One(ty) => ty.clone(),
             Const::Bool(_) => <bool as TypeOf>::type_(),
+            Const::Int16(_) => <i16 as TypeOf>::type_(),
+            Const::Uint16(_) => <u16 as TypeOf>::type_(),
             Const::Int32(_) => <i32 as TypeOf>::type_(),
             Const::Uint32(_) => <u32 as TypeOf>::type_(),
             Const::Int64(_) => <i64 as TypeOf>::type_(),
             Const::Uint64(_) => <u64 as TypeOf>::type_(),
+            Const::Float16(_) => <f16 as TypeOf>::type_(),
             Const::Float32(_) => <f32 as TypeOf>::type_(),
             Const::Float64(_) => <f64 as TypeOf>::type_(),
             Const::Generic(_, t) => t.clone(),
@@ -988,9 +1051,24 @@ pub enum Instruction {
         on_triangle_hit: Pooled<BasicBlock>,
         on_procedural_hit: Pooled<BasicBlock>,
     },
-    Suspend (NodeRef),
     AdDetach(Pooled<BasicBlock>),
     Comment(CBoxedSlice<u8>),
+    CoroSplitMark {
+        token: u32,
+    },
+    // TODO: merge the 2 instructions below
+    CoroSuspend {
+        token: u32,
+    },
+    Suspend(NodeRef),
+    // ------------------
+    CoroResume {
+        token: u32,
+    },
+    CoroFrame {
+        token: u32,
+        body: Pooled<BasicBlock>,
+    },
 }
 
 extern "C" fn eq_impl<T: UserNodeData>(a: *const u8, b: *const u8) -> bool {
@@ -1134,7 +1212,7 @@ impl BasicBlock {
     pub fn nodes(&self) -> Vec<NodeRef> {
         self.iter().collect()
     }
-    pub fn into_vec(&self) -> Vec<NodeRef> {
+    pub fn into_vec(self) -> Vec<NodeRef> {
         let mut vec = Vec::new();
         let mut cur = self.first.get().next;
         while cur != self.last {
@@ -1301,6 +1379,12 @@ impl NodeRef {
     pub fn set(&self, node: Node) {
         *self.get_mut() = node;
     }
+    pub fn replace_with(&self, node: &Node) {
+        let instr = node.instruction.clone();
+        let type_ = node.type_.clone();
+        self.get_mut().instruction = instr;
+        self.get_mut().type_ = type_;
+    }
     pub fn update<T>(&self, f: impl FnOnce(&mut Node) -> T) -> T {
         f(self.get_mut())
     }
@@ -1400,7 +1484,6 @@ pub struct CallableModule {
     pub ret_type: CArc<Type>,
     pub args: CBoxedSlice<NodeRef>,
     pub captures: CBoxedSlice<Capture>,
-    pub callables: CBoxedSlice<CallableModuleRef>,
     pub subroutines: CBoxedSlice<CallableModuleRef>,
     pub subroutine_ids: CBoxedSlice<u32>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
@@ -1492,7 +1575,6 @@ pub struct KernelModule {
     pub args: CBoxedSlice<NodeRef>,
     pub shared: CBoxedSlice<NodeRef>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
-    pub callables: CBoxedSlice<CallableModuleRef>,
     pub block_size: [u32; 3],
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
@@ -1589,79 +1671,276 @@ impl Module {
         collector.nodes
     }
 }
-// struct ModuleCloner {
-//     node_map: HashMap<NodeRef, NodeRef>,
-// }
 
-// impl ModuleCloner {
-//     fn new() -> Self {
-//         Self {
-//             node_map: HashMap::new(),
-//         }
-//     }
-//     fn clone_node(&mut self, node: NodeRef, builder: &mut IrBuilder) -> NodeRef {
-//         if let Some(&node) = self.node_map.get(&node) {
-//             return node;
-//         }
-//         let new_node = match node.get().instruction.as_ref() {
-//             Instruction::Buffer => node,
-//             Instruction::Bindless => node,
-//             Instruction::Texture2D => node,
-//             Instruction::Texture3D => node,
-//             Instruction::Accel => node,
-//             Instruction::Shared => node,
-//             Instruction::Uniform => node,
-//             Instruction::Local { .. } => todo!(),
-//             Instruction::Argument { .. } => todo!(),
-//             Instruction::UserData(_) => node,
-//             Instruction::Invalid => node,
-//             Instruction::Const(_) => todo!(),
-//             Instruction::Update { var, value } => todo!(),
-//             Instruction::Call(_, _) => todo!(),
-//             Instruction::Phi(_) => todo!(),
-//             Instruction::Loop { body, cond } => todo!(),
-//             Instruction::GenericLoop { .. } => todo!(),
-//             Instruction::Break => builder.break_(),
-//             Instruction::Continue => builder.continue_(),
-//             Instruction::Return(_) => todo!(),
-//             Instruction::If { .. } => todo!(),
-//             Instruction::Switch { .. } => todo!(),
-//             Instruction::AdScope { .. } => todo!(),
-//             Instruction::AdDetach(_) => todo!(),
-//             Instruction::Comment(_) => builder.clone_node(node),
-//             crate::ir::Instruction::Debug { .. } => builder.clone_node(node),
-//         };
-//         self.node_map.insert(node, new_node);
-//         new_node
-//     }
-//     fn clone_block(
-//         &mut self,
-//         block: Pooled<BasicBlock>,
-//         mut builder: IrBuilder,
-//     ) -> Pooled<BasicBlock> {
-//         let mut cur = block.first.get().next;
-//         while cur != block.last {
-//             let _ = self.clone_node(cur, &mut builder);
-//             cur = cur.get().next;
-//         }
-//         builder.finish()
-//     }
-//     fn clone_module(&mut self, module: &Module) -> Module {
-//         Module {
-//             kind: module.kind,
-//             entry: self.clone_block(module.entry, IrBuilder::new()),
-//         }
-//     }
-// }
+struct ModuleDuplicatorCtx {
+    nodes: HashMap<NodeRef, NodeRef>,
+    blocks: HashMap<*const BasicBlock, Pooled<BasicBlock>>,
+}
 
-// impl Clone for Module {
-//     fn clone(&self) -> Self {
-//         Self {
-//             kind: self.kind,
-//             entry: self.entry,
-//         }
-//     }
-// }
+struct ModuleDuplicator {
+    callables: HashMap<*const CallableModule, CArc<CallableModule>>,
+    current: Option<ModuleDuplicatorCtx>,
+}
+
+impl ModuleDuplicator {
+    fn new() -> Self {
+        Self {
+            callables: HashMap::new(),
+            current: None,
+        }
+    }
+
+    fn with_context<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
+        let ctx = ModuleDuplicatorCtx {
+            nodes: HashMap::new(),
+            blocks: HashMap::new(),
+        };
+        let old_ctx = self.current.replace(ctx);
+        let ret = f(self);
+        self.current = old_ctx;
+        ret
+    }
+
+    fn duplicate_callable(&mut self, callable: &CArc<CallableModule>) -> CArc<CallableModule> {
+        if let Some(copy) = self.callables.get(&callable.as_ptr()) {
+            return copy.clone();
+        }
+        let dup_callable = self.with_context(|this| {
+            let dup_args = this.duplicate_args(&callable.pools, &callable.args);
+            let dup_captures = this.duplicate_captures(&callable.pools, &callable.captures);
+            let dup_module = this.duplicate_module(&callable.module);
+            CallableModule {
+                module: dup_module,
+                ret_type: callable.ret_type.clone(),
+                args: dup_args,
+                captures: dup_captures,
+                subroutines: callable.subroutines.clone(),
+                subroutine_ids: callable.subroutine_ids.clone(),
+                cpu_custom_ops: callable.cpu_custom_ops.clone(),
+                pools: callable.pools.clone(),
+            }
+        });
+        let dup_callable = CArc::new(dup_callable);
+        self.callables.insert(callable.as_ptr(), dup_callable.clone());
+        dup_callable
+    }
+
+    fn duplicate_arg(&mut self, pools: &CArc<ModulePools>, node_ref: NodeRef) -> NodeRef {
+        let node = node_ref.get();
+        let instr = &node.instruction;
+        let dup_instr = match instr.as_ref() {
+            Instruction::Buffer => instr.clone(),
+            Instruction::Bindless => instr.clone(),
+            Instruction::Texture2D => instr.clone(),
+            Instruction::Texture3D => instr.clone(),
+            Instruction::Accel => instr.clone(),
+            Instruction::Shared => instr.clone(),
+            Instruction::Uniform => instr.clone(),
+            Instruction::Argument { .. } => CArc::new(instr.as_ref().clone()),
+            _ => unreachable!("invalid argument type")
+        };
+        let dup_node = Node::new(dup_instr, node.type_.clone());
+        let dup_node_ref = new_node(pools, dup_node);
+        // add to node map
+        self.current.as_mut().unwrap().nodes.insert(node_ref, dup_node_ref);
+        dup_node_ref
+    }
+
+    fn duplicate_args(&mut self, pools: &CArc<ModulePools>, args: &CBoxedSlice<NodeRef>) -> CBoxedSlice<NodeRef> {
+        let dup_args: Vec<_> = args.iter().map(|arg| {
+            self.duplicate_arg(pools, arg.clone())
+        }).collect();
+        CBoxedSlice::new(dup_args)
+    }
+
+    fn duplicate_captures(&mut self, pools: &CArc<ModulePools>, captures: &CBoxedSlice<Capture>) -> CBoxedSlice<Capture> {
+        let dup_captures: Vec<_> = captures.iter().map(|capture| {
+            Capture {
+                node: self.duplicate_arg(pools, capture.node.clone()),
+                binding: capture.binding.clone(),
+            }
+        }).collect();
+        CBoxedSlice::new(dup_captures)
+    }
+
+    fn duplicate_shared(&mut self, pools: &CArc<ModulePools>, shared: &CBoxedSlice<NodeRef>) -> CBoxedSlice<NodeRef> {
+        let dup_shared: Vec<_> = shared.iter().map(|node| {
+            self.duplicate_arg(pools, node.clone())
+        }).collect();
+        CBoxedSlice::new(dup_shared)
+    }
+
+    fn duplicate_node(&mut self, builder: &mut IrBuilder, node_ref: NodeRef) -> NodeRef {
+        if !node_ref.valid() { return INVALID_REF; }
+        let node = node_ref.get();
+        assert!(!self.current.as_ref().unwrap().nodes.contains_key(&node_ref),
+                "Node {:?} has already been duplicated", node);
+        let dup_node = match node.instruction.as_ref() {
+            Instruction::Buffer => unreachable!("Buffer should be handled by duplicate_args"),
+            Instruction::Bindless => unreachable!("Bindless should be handled by duplicate_args"),
+            Instruction::Texture2D => unreachable!("Texture2D should be handled by duplicate_args"),
+            Instruction::Texture3D => unreachable!("Texture3D should be handled by duplicate_args"),
+            Instruction::Accel => unreachable!("Accel should be handled by duplicate_args"),
+            Instruction::Shared => unreachable!("Shared should be handled by duplicate_shared"),
+            Instruction::Uniform => unreachable!("Uniform should be handled by duplicate_args"),
+            Instruction::Argument { .. } => unreachable!("Argument should be handled by duplicate_args"),
+            Instruction::Local { init } => {
+                let dup_init = self.find_duplicated_node(*init);
+                builder.local(dup_init)
+            }
+            Instruction::UserData(data) => builder.userdata(data.clone()),
+            Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
+            Instruction::Const(const_) => builder.const_(const_.clone()),
+            Instruction::Update { var, value } => {
+                let dup_var = self.find_duplicated_node(*var);
+                let dup_value = self.find_duplicated_node(*value);
+                builder.update(dup_var, dup_value)
+            }
+            Instruction::Call(func, args) => {
+                let dup_func = match func {
+                    Func::Callable(callable) => {
+                        let dup_callable = self.duplicate_callable(&callable.0);
+                        Func::Callable(CallableModuleRef(dup_callable))
+                    }
+                    _ => func.clone()
+                };
+                let dup_args: Vec<_> = args.iter().map(|arg| self.find_duplicated_node(*arg)).collect();
+                builder.call(dup_func, dup_args.as_slice(), node.type_.clone())
+            }
+            Instruction::Phi(incomings) => {
+                let dup_incomings: Vec<_> = incomings.iter().map(|incoming| {
+                    let dup_block = self.find_duplicated_block(&incoming.block);
+                    let dup_value = self.find_duplicated_node(incoming.value);
+                    PhiIncoming {
+                        value: dup_value,
+                        block: dup_block,
+                    }
+                }).collect();
+                builder.phi(dup_incomings.as_slice(), node.type_.clone())
+            }
+            Instruction::Return(value) => {
+                let dup_value = self.find_duplicated_node(*value);
+                builder.return_(dup_value)
+            }
+            Instruction::Loop { body, cond } => {
+                let dup_body = self.duplicate_block(&builder.pools, body);
+                let dup_cond = self.find_duplicated_node(*cond);
+                builder.loop_(dup_body, dup_cond)
+            }
+            Instruction::GenericLoop { prepare, cond, body, update } => {
+                let dup_prepare = self.duplicate_block(&builder.pools, prepare);
+                let dup_body = self.duplicate_block(&builder.pools, body);
+                let dup_update = self.duplicate_block(&builder.pools, update);
+                let dup_cond = self.find_duplicated_node(*cond);
+                builder.generic_loop(dup_prepare, dup_cond, dup_body, dup_update)
+            }
+            Instruction::Break => builder.break_(),
+            Instruction::Continue => builder.continue_(),
+            Instruction::If { cond, true_branch, false_branch } => {
+                let dup_cond = self.find_duplicated_node(*cond);
+                let dup_true_branch = self.duplicate_block(&builder.pools, true_branch);
+                let dup_false_branch = self.duplicate_block(&builder.pools, false_branch);
+                builder.if_(dup_cond, dup_true_branch, dup_false_branch)
+            }
+            Instruction::Switch { value, cases, default } => {
+                let dup_value = self.find_duplicated_node(*value);
+                let dup_cases: Vec<_> = cases.iter().map(|case| {
+                    let dup_block = self.duplicate_block(&builder.pools, &case.block);
+                    SwitchCase {
+                        value: case.value,
+                        block: dup_block,
+                    }
+                }).collect();
+                let dup_default = self.duplicate_block(&builder.pools, default);
+                builder.switch(dup_value, dup_cases.as_slice(), dup_default)
+            }
+            Instruction::AdScope { body } => {
+                let dup_body = self.duplicate_block(&builder.pools, body);
+                builder.ad_scope(dup_body)
+            }
+            Instruction::RayQuery { ray_query, on_triangle_hit, on_procedural_hit } => {
+                let dup_ray_query = self.find_duplicated_node(*ray_query);
+                let dup_on_triangle_hit = self.duplicate_block(&builder.pools, on_triangle_hit);
+                let dup_on_procedural_hit = self.duplicate_block(&builder.pools, on_procedural_hit);
+                builder.ray_query(dup_ray_query, dup_on_triangle_hit, dup_on_procedural_hit, node.type_.clone())
+            }
+            Instruction::AdDetach(body) => {
+                let dup_body = self.duplicate_block(&builder.pools, body);
+                builder.ad_detach(dup_body)
+            }
+            Instruction::Comment(msg) => builder.comment(msg.clone()),
+            Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
+            Instruction::CoroSuspend { .. }
+            | Instruction::Suspend(..)
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroFrame { .. } => {
+                unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
+            }
+        };
+        // insert the duplicated node into the map
+        self.current.as_mut().unwrap().nodes.insert(node_ref, dup_node);
+        dup_node
+    }
+
+    fn find_duplicated_block(&self, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
+        let ctx = self.current.as_ref().unwrap();
+        ctx.blocks.get(&bb.as_ptr()).unwrap().clone()
+    }
+
+    fn find_duplicated_node(&self, node: NodeRef) -> NodeRef {
+        if !node.valid() { return INVALID_REF; }
+        let ctx = self.current.as_ref().unwrap();
+        ctx.nodes.get(&node).unwrap().clone()
+    }
+
+    fn duplicate_block(&mut self, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
+        assert!(!self.current.as_ref().unwrap().blocks.contains_key(&bb.as_ptr()),
+                "Basic block {:?} has already been duplicated", bb);
+        let mut builder = IrBuilder::new(pools.clone());
+        bb.iter().for_each(|node| { self.duplicate_node(&mut builder, node); });
+        let dup_bb = builder.finish();
+        // insert the duplicated block into the map
+        self.current.as_mut().unwrap().blocks.insert(bb.as_ptr(), dup_bb.clone());
+        dup_bb
+    }
+
+    fn duplicate_kernel(&mut self, kernel: &KernelModule) -> KernelModule {
+        self.with_context(|this| {
+            let dup_args = this.duplicate_args(&kernel.pools, &kernel.args);
+            let dup_captures = this.duplicate_captures(&kernel.pools, &kernel.captures);
+            let dup_shared = this.duplicate_shared(&kernel.pools, &kernel.shared);
+            let dup_module = this.duplicate_module(&kernel.module);
+            KernelModule {
+                module: dup_module,
+                captures: dup_captures,
+                args: dup_args,
+                shared: dup_shared,
+                cpu_custom_ops: kernel.cpu_custom_ops.clone(),
+                block_size: kernel.block_size,
+                pools: kernel.pools.clone(),
+            }
+        })
+    }
+
+    fn duplicate_module(&mut self, module: &Module) -> Module {
+        let dup_entry = self.duplicate_block(&module.pools, &module.entry);
+        Module {
+            kind: module.kind,
+            entry: dup_entry,
+            pools: module.pools.clone(),
+        }
+    }
+}
+
+pub fn duplicate_kernel(kernel: &KernelModule) -> KernelModule {
+    let mut dup = ModuleDuplicator::new();
+    dup.duplicate_kernel(kernel)
+}
+
+pub fn duplicate_callable(callable: &CArc<CallableModule>) -> CArc<CallableModule> {
+    let mut dup = ModuleDuplicator::new();
+    dup.duplicate_callable(callable)
+}
 
 #[repr(C)]
 pub struct IrBuilder {
@@ -1694,6 +1973,22 @@ impl IrBuilder {
         self.bb.merge(block);
         self.insert_point = self.bb.last.get().prev;
     }
+    pub fn comment(&mut self, msg: CBoxedSlice<u8>) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::Comment(msg)), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
+    pub fn userdata(&mut self, data: CArc<UserData>) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::UserData(data)), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
     pub fn break_(&mut self) -> NodeRef {
         let new_node = new_node(
             &self.pools,
@@ -1710,12 +2005,13 @@ impl IrBuilder {
         self.append(new_node);
         new_node
     }
-    pub fn return_(&mut self, node: NodeRef) {
+    pub fn return_(&mut self, node: NodeRef) -> NodeRef {
         let new_node = new_node(
             &self.pools,
             Node::new(CArc::new(Instruction::Return(node)), Type::void()),
         );
         self.append(new_node);
+        new_node
     }
     pub fn zero_initializer(&mut self, ty: CArc<Type>) -> NodeRef {
         self.call(Func::ZeroInitializer, &[], ty)
@@ -1730,10 +2026,21 @@ impl IrBuilder {
         let node = node.get();
         let new_node = new_node(
             &self.pools,
-            Node::new(node.instruction.clone(), node.type_.clone()),
+            Node::new(CArc::new(node.instruction.as_ref().clone()), node.type_.clone()),
         );
         self.append(new_node);
         new_node
+    }
+    pub fn load(&mut self, var: NodeRef) -> NodeRef {
+        assert!(var.is_lvalue());
+        let node = Node::new(
+            CArc::new(Instruction::Call(
+                Func::Load,
+                CBoxedSlice::new(vec![var]))),
+            var.type_().clone());
+        let node = new_node(&self.pools, node);
+        self.append(node.clone());
+        node
     }
     pub fn const_(&mut self, const_: Const) -> NodeRef {
         let t = const_.type_();
@@ -1754,11 +2061,12 @@ impl IrBuilder {
         self.append(node.clone());
         node
     }
-    pub fn store(&mut self, var: NodeRef, value: NodeRef) {
+    pub fn store(&mut self, var: NodeRef, value: NodeRef) -> NodeRef {
         assert!(var.is_lvalue());
         let node = Node::new(CArc::new(Instruction::Update { var, value }), Type::void());
         let node = new_node(&self.pools, node);
         self.append(node);
+        node
     }
     pub fn extract(&mut self, node: NodeRef, index: usize, ret_type: CArc<Type>) -> NodeRef {
         let c = self.const_(Const::Int32(index as i32));
@@ -1779,9 +2087,13 @@ impl IrBuilder {
     pub fn bitcast(&mut self, node: NodeRef, t: CArc<Type>) -> NodeRef {
         self.call(Func::Bitcast, &[node], t)
     }
-    pub fn update(&mut self, var: NodeRef, value: NodeRef) {
+    pub fn update(&mut self, var: NodeRef, value: NodeRef) -> NodeRef {
         match var.get().instruction.as_ref() {
             Instruction::Local { .. } => {}
+            Instruction::Argument { by_value } => {
+                assert!(!*by_value, "updating argument passed by value");
+            }
+            Instruction::Shared { .. } => {}
             Instruction::Call(func, _) => match func {
                 Func::GetElementPtr => {}
                 _ => panic!("not local or getelementptr"),
@@ -1791,6 +2103,13 @@ impl IrBuilder {
         let node = Node::new(CArc::new(Instruction::Update { var, value }), Type::void());
         let node = new_node(&self.pools, node);
         self.append(node);
+        node
+    }
+    pub fn update_unchecked(&mut self, var: NodeRef, value: NodeRef) -> NodeRef {
+        let node = Node::new(CArc::new(Instruction::Update { var, value }), Type::void());
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
     }
     pub fn phi(&mut self, incoming: &[PhiIncoming], t: CArc<Type>) -> NodeRef {
         if t == Type::userdata() {
@@ -1820,7 +2139,12 @@ impl IrBuilder {
         self.append(node.clone());
         node
     }
-    pub fn switch(&mut self, value: NodeRef, cases: &[SwitchCase], default: Pooled<BasicBlock>) {
+    pub fn switch(
+        &mut self,
+        value: NodeRef,
+        cases: &[SwitchCase],
+        default: Pooled<BasicBlock>,
+    ) -> NodeRef {
         let node = Node::new(
             CArc::new(Instruction::Switch {
                 value,
@@ -1831,6 +2155,7 @@ impl IrBuilder {
         );
         let node = new_node(&self.pools, node);
         self.append(node);
+        node
     }
     pub fn if_(
         &mut self,
@@ -1850,8 +2175,20 @@ impl IrBuilder {
         self.append(node);
         node
     }
+    pub fn ad_detach(&mut self, body: Pooled<BasicBlock>) -> NodeRef {
+        let node = Node::new(CArc::new(Instruction::AdDetach(body)), Type::void());
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
+    }
+    pub fn ad_scope(&mut self, body: Pooled<BasicBlock>) -> NodeRef {
+        let node = Node::new(CArc::new(Instruction::AdScope { body }), Type::void());
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
+    }
     pub fn suspend(&mut self, id: NodeRef) -> NodeRef {
-        let node = Node::new(CArc::new(Instruction::Suspend (id)), Type::void());
+        let node = Node::new(CArc::new(Instruction::Suspend(id)), Type::void());
         let node = new_node(&self.pools, node);
         self.append(node);
         node
@@ -1900,6 +2237,30 @@ impl IrBuilder {
         let node = new_node(&self.pools, node);
         self.append(node);
         node
+    }
+    pub fn coro_split_mark(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroSplitMark { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
+    pub fn coro_suspend(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroSuspend { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
+    pub fn coro_resume(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroResume { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
     }
     pub fn finish(self) -> Pooled<BasicBlock> {
         self.bb
@@ -1977,6 +2338,16 @@ pub extern "C" fn luisa_compute_ir_node_usage(kernel: &KernelModule) -> CBoxedSl
 }
 
 #[no_mangle]
+pub extern "C" fn luisa_compute_ir_type_size(ty: &CArc<Type>) -> usize {
+    ty.size()
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_type_alignment(ty: &CArc<Type>) -> usize {
+    ty.alignment()
+}
+
+#[no_mangle]
 pub extern "C" fn luisa_compute_ir_new_node(pools: CArc<ModulePools>, node: Node) -> NodeRef {
     new_node(&pools, node)
 }
@@ -1984,6 +2355,27 @@ pub extern "C" fn luisa_compute_ir_new_node(pools: CArc<ModulePools>, node: Node
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_node_get(node_ref: NodeRef) -> *const Node {
     node_ref.get()
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_node_replace_with(node_ref: NodeRef, new_node: *const Node) {
+    let new_node = unsafe { &*new_node };
+    node_ref.replace_with(new_node);
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_node_insert_before_self(node_ref: NodeRef, new_node: NodeRef) {
+    node_ref.insert_before_self(new_node);
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_node_insert_after_self(node_ref: NodeRef, new_node: NodeRef) {
+    node_ref.insert_after_self(new_node);
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_node_remove(node_ref: NodeRef) {
+    node_ref.remove();
 }
 
 #[no_mangle]
@@ -2013,12 +2405,63 @@ pub extern "C" fn luisa_compute_ir_build_update(
     var: NodeRef,
     value: NodeRef,
 ) {
-    builder.update(var, value)
+    builder.update(var, value);
 }
 
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_build_local(builder: &mut IrBuilder, init: NodeRef) -> NodeRef {
     builder.local(init)
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_if(
+    builder: &mut IrBuilder,
+    cond: NodeRef,
+    true_branch: Pooled<BasicBlock>,
+    false_branch: Pooled<BasicBlock>,
+) -> NodeRef {
+    builder.if_(cond, true_branch, false_branch)
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_phi(
+    builder: &mut IrBuilder,
+    incoming: CSlice<PhiIncoming>,
+    t: CArc<Type>,
+) -> NodeRef {
+    let incoming = incoming.as_ref();
+    builder.phi(incoming, t)
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_switch(
+    builder: &mut IrBuilder,
+    value: NodeRef,
+    cases: CSlice<SwitchCase>,
+    default: Pooled<BasicBlock>,
+) -> NodeRef {
+    let cases = cases.as_ref();
+    builder.switch(value, cases, default)
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_generic_loop(
+    builder: &mut IrBuilder,
+    prepare: Pooled<BasicBlock>,
+    cond: NodeRef,
+    body: Pooled<BasicBlock>,
+    update: Pooled<BasicBlock>,
+) -> NodeRef {
+    builder.generic_loop(prepare, cond, body, update)
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_build_loop(
+    builder: &mut IrBuilder,
+    body: Pooled<BasicBlock>,
+    cond: NodeRef,
+) -> NodeRef {
+    builder.loop_(body, cond)
 }
 
 #[no_mangle]
@@ -2040,6 +2483,14 @@ pub extern "C" fn luisa_compute_ir_new_builder(pools: CArc<ModulePools>) -> IrBu
 }
 
 #[no_mangle]
+pub extern "C" fn luisa_compute_ir_builder_set_insert_point(
+    builder: &mut IrBuilder,
+    node_ref: NodeRef,
+) {
+    builder.set_insert_point(node_ref);
+}
+
+#[no_mangle]
 pub extern "C" fn luisa_compute_ir_build_finish(builder: IrBuilder) -> Pooled<BasicBlock> {
     builder.finish()
 }
@@ -2052,8 +2503,8 @@ pub extern "C" fn luisa_compute_ir_new_instruction(
 }
 
 #[no_mangle]
-pub extern "C" fn luisa_compute_ir_new_callable_module(m: CallableModule) -> CallableModuleRef {
-    CallableModuleRef(CArc::new(m))
+pub extern "C" fn luisa_compute_ir_new_callable_module(m: CallableModule) -> *mut CArcSharedBlock<CallableModule> {
+    CArc::into_raw(CArc::new(m))
 }
 
 #[no_mangle]

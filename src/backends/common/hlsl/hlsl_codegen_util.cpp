@@ -76,10 +76,10 @@ static size_t AddHeader(CallOpSet const &ops, luisa::BinaryIO const *internalDat
     if (ops.test(CallOp::INVERSE)) {
         builder << CodegenUtility::ReadInternalHLSLFile("inverse", internalDataPath);
     }
-    if (ops.test(CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER) || ops.test(CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL)) {
+    if (ops.test(CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER) || ops.test(CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL) || ops.test(CallOp::INDIRECT_SET_DISPATCH_KERNEL)) {
         builder << CodegenUtility::ReadInternalHLSLFile("indirect", internalDataPath);
     }
-    if (ops.test(CallOp::BUFFER_SIZE) || ops.test(CallOp::TEXTURE_SIZE)) {
+    if (ops.test(CallOp::BUFFER_SIZE) || ops.test(CallOp::TEXTURE_SIZE) || ops.test(CallOp::BYTE_BUFFER_SIZE)) {
         builder << CodegenUtility::ReadInternalHLSLFile("resource_size", internalDataPath);
     }
     bool useBindless = false;
@@ -147,7 +147,8 @@ void CodegenUtility::RegistStructType(Type const *type) {
     if (type->is_structure() || type->is_array())
         opt->structTypes.try_emplace(type, opt->count++);
     else if (type->is_buffer()) {
-        RegistStructType(type->element());
+        if (type->element())
+            RegistStructType(type->element());
     }
 }
 
@@ -179,6 +180,20 @@ void CodegenUtility::GetVariableName(Variable::Tag type, uint id, vstd::StringBu
         case Variable::Tag::OBJECT_ID:
             LUISA_ASSERT(opt->isRaster, "object id only allowed in raster shader");
             str << "obj_id"sv;
+            break;
+        case Variable::Tag::WARP_LANE_COUNT:
+            if (opt->funcType == CodegenStackData::FuncType::Callable) {
+                str << "_wrpct"sv;
+            } else {
+                str << "WaveGetLaneCount()"sv;
+            }
+            break;
+        case Variable::Tag::WARP_LANE_ID:
+            if (opt->funcType == CodegenStackData::FuncType::Callable) {
+                str << "_wrpid"sv;
+            } else {
+                str << "WaveGetLaneIndex()"sv;
+            }
             break;
         case Variable::Tag::LOCAL:
             switch (opt->funcType) {
@@ -280,6 +295,9 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
         case Type::Tag::FLOAT16:
             str << "float16_t"sv;
             return;
+        case Type::Tag::FLOAT64:
+            str << "float64_t"sv;
+            return;
         case Type::Tag::INT16:
             str << "int16_t"sv;
             return;
@@ -317,30 +335,36 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
         }
             return;
         case Type::Tag::BUFFER: {
-
             if ((static_cast<uint>(usage) & static_cast<uint>(Usage::WRITE)) != 0)
                 str << "RW"sv;
-            str << "StructuredBuffer<"sv;
             auto ele = type.element();
-            if (ele->is_matrix()) {
-                auto n = vstd::to_string(ele->dimension());
-                str << "_WrappedFloat"sv << n << 'x' << n;
-            } else {
-                vstd::StringBuilder typeName;
-                if (ele->is_vector() && ele->dimension() == 3) {
-                    GetTypeName(*ele->element(), typeName, usage);
-                    typeName << '4';
+            // StructuredBuffer
+            if (ele != nullptr) {
+                str << "StructuredBuffer<"sv;
+                if (ele->is_matrix()) {
+                    auto n = vstd::to_string(ele->dimension());
+                    str << "_WrappedFloat"sv << n << 'x' << n;
                 } else {
-                    GetTypeName(*ele, typeName, usage);
+                    vstd::StringBuilder typeName;
+                    if (ele->is_vector() && ele->dimension() == 3) {
+                        GetTypeName(*ele->element(), typeName, usage);
+                        typeName << '4';
+                    } else {
+                        GetTypeName(*ele, typeName, usage);
+                    }
+                    auto ite = opt->structReplaceName.find(typeName);
+                    if (ite != opt->structReplaceName.end()) {
+                        str << ite->second;
+                    } else {
+                        str << typeName;
+                    }
                 }
-                auto ite = opt->structReplaceName.find(typeName);
-                if (ite != opt->structReplaceName.end()) {
-                    str << ite->second;
-                } else {
-                    str << typeName;
-                }
+                str << '>';
             }
-            str << '>';
+            // ByteAddressBuffer
+            else {
+                str << "ByteAddressBuffer"sv;
+            }
         } break;
         case Type::Tag::TEXTURE: {
             if ((static_cast<uint>(usage) & static_cast<uint>(Usage::WRITE)) != 0)
@@ -356,7 +380,7 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
             break;
         }
         case Type::Tag::BINDLESS_ARRAY: {
-            str << "ByteAddressBuffer"sv;
+            str << "StructuredBuffer<uint>"sv;
         } break;
         case Type::Tag::ACCEL: {
             str << "RaytracingAccelerationStructure"sv;
@@ -509,6 +533,9 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             break;
         case CallOp::STEP:
             str << "step"sv;
+            break;
+        case CallOp::SMOOTHSTEP:
+            str << "smoothstep"sv;
             break;
         case CallOp::ABS:
             str << "abs"sv;
@@ -701,7 +728,10 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         case CallOp::MAKE_USHORT4:
         case CallOp::MAKE_HALF2:
         case CallOp::MAKE_HALF3:
-        case CallOp::MAKE_HALF4: {
+        case CallOp::MAKE_HALF4:
+        case CallOp::MAKE_DOUBLE2:
+        case CallOp::MAKE_DOUBLE3:
+        case CallOp::MAKE_DOUBLE4: {
             if (args.size() == 1 && (args[0]->type() == expr->type())) {
                 args[0]->accept(vis);
             } else {
@@ -749,13 +779,99 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << "_bfwrite"sv;
             auto elem = args[0]->type()->element();
             if (IsNumVec3(*elem)) {
-                str << "Vec3"sv;
+                str << "Vec3("sv;
+                PrintArgs();
+                str << ',';
+                GetTypeName(*elem->element(), str, Usage::NONE);
+                str << ')';
+                return;
             } else if (elem->is_matrix()) {
                 str << "Mat";
             }
         } break;
         case CallOp::BUFFER_SIZE: {
             str << "_bfsize"sv;
+        } break;
+        case CallOp::BYTE_BUFFER_READ: {
+            str << "_bytebfread"sv;
+            auto elem = expr->type();
+            if (IsNumVec3(*elem)) {
+                str << "Vec3("sv;
+                args[0]->accept(vis);
+                str << ',';
+                GetTypeName(*elem->element(), str, Usage::NONE);
+                str << ',';
+                args[1]->accept(vis);
+                str << ')';
+
+            } else if (elem->is_matrix()) {
+                str << "Mat(";
+                args[0]->accept(vis);
+                str << ',';
+                switch (elem->dimension()) {
+                    case 2:
+                        str << "_WrappedFloat2x2"sv;
+                        break;
+                    case 3:
+                        str << "_WrappedFloat3x3"sv;
+                        break;
+                    case 4:
+                        str << "_WrappedFloat4x4"sv;
+                        break;
+                }
+                str << ',';
+                args[1]->accept(vis);
+                str << ')';
+            } else {
+                str << '(';
+                args[0]->accept(vis);
+                str << ',';
+                GetTypeName(*elem, str, Usage::NONE);
+                str << ',';
+                args[1]->accept(vis);
+                str << ')';
+            }
+            return;
+        }
+        case CallOp::BYTE_BUFFER_WRITE: {
+            str << "_bytebfwrite"sv;
+            auto elem = args[2]->type();
+            if (elem == Type::of<float3>()) {
+                str << "Vec3("sv;
+                args[0]->accept(vis);
+                str << ',';
+                GetTypeName(*elem->element(), str, Usage::NONE);
+                str << ',';
+                args[1]->accept(vis);
+                str << ',';
+                args[2]->accept(vis);
+                str << ')';
+                return;
+            } else if (elem->is_matrix()) {
+                str << "Mat(";
+                args[0]->accept(vis);
+                str << ',';
+                switch (elem->dimension()) {
+                    case 2:
+                        str << "_WrappedFloat2x2"sv;
+                        break;
+                    case 3:
+                        str << "_WrappedFloat3x3"sv;
+                        break;
+                    case 4:
+                        str << "_WrappedFloat4x4"sv;
+                        break;
+                }
+                str << ',';
+                args[1]->accept(vis);
+                str << ',';
+                args[2]->accept(vis);
+                str << ')';
+                return;
+            }
+        } break;
+        case CallOp::BYTE_BUFFER_SIZE: {
+            str << "_bytebfsize"sv;
         } break;
         case CallOp::TEXTURE_SIZE: {
             str << "_texsize"sv;
@@ -780,8 +896,7 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
                 i->accept(vis);
                 str << ',';
             }
-            vstd::to_string(expr->type()->size(), str);
-            str << ",bdls)"sv;
+            str << "bdls)"sv;
             return;
         }
         case CallOp::BINDLESS_BUFFER_READ: {
@@ -810,6 +925,7 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << ",bdls)"sv;
             return;
         }
+        case CallOp::ASSERT:
         case CallOp::ASSUME:
         case CallOp::UNREACHABLE: {
             return;
@@ -944,14 +1060,11 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             break;
         case CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL: {
             LUISA_ASSERT(!opt->isRaster, "indirect-operation can only be used in compute shader");
-            auto tp = args[1]->type();
-            if (tp->is_scalar()) {
-                str << "_EmplaceDispInd1D"sv;
-            } else if (tp->dimension() == 2) {
-                str << "_EmplaceDispInd2D"sv;
-            } else {
-                str << "_EmplaceDispInd3D"sv;
-            }
+            str << "_EmplaceDispInd"sv;
+        } break;
+        case CallOp::INDIRECT_SET_DISPATCH_KERNEL: {
+            LUISA_ASSERT(!opt->isRaster, "indirect-operation can only be used in compute shader");
+            str << "_SetDispInd"sv;
         } break;
         case CallOp::RAY_QUERY_WORLD_SPACE_RAY:
             str << "_RayQueryGetWorldRay<"sv;
@@ -1024,8 +1137,66 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         case CallOp::OUTER_PRODUCT: str << "_outer_product"; break;
         case CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION: str << "_mat_comp_mul"; break;
         case CallOp::BINDLESS_BUFFER_TYPE: LUISA_NOT_IMPLEMENTED(); break;
+        case CallOp::WARP_IS_FIRST_ACTIVE_LANE:
+            str << "WaveIsFirstLane"sv;
+            break;
+        case CallOp::WARP_ACTIVE_ALL_EQUAL:
+            str << "WaveActiveAllEqual"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_AND:
+            str << "WaveActiveBitAnd"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_OR:
+            str << "WaveActiveBitOr"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_XOR:
+            str << "WaveActiveBitXor"sv;
+            break;
+        case CallOp::WARP_ACTIVE_COUNT_BITS:
+            str << "WaveActiveCountBits"sv;
+            break;
+        case CallOp::WARP_PREFIX_COUNT_BITS:
+            str << "WavePrefixCountBits"sv;
+            break;
+        case CallOp::WARP_ACTIVE_MAX:
+            str << "WaveActiveMax"sv;
+            break;
+        case CallOp::WARP_ACTIVE_MIN:
+            str << "WaveActiveMin"sv;
+            break;
+        case CallOp::WARP_PREFIX_PRODUCT:
+            str << "WavePrefixProduct"sv;
+            break;
+        case CallOp::WARP_ACTIVE_PRODUCT:
+            str << "WaveActiveProduct"sv;
+            break;
+        case CallOp::WARP_PREFIX_SUM:
+            str << "WavePrefixProduct"sv;
+            break;
+        case CallOp::WARP_ACTIVE_SUM:
+            str << "WaveActiveSum"sv;
+            break;
+        case CallOp::WARP_ACTIVE_ALL:
+            str << "WaveActiveAllTrue"sv;
+            break;
+        case CallOp::WARP_ACTIVE_ANY:
+            str << "WaveActiveAnyTrue"sv;
+            break;
+        case CallOp::WARP_ACTIVE_BIT_MASK:
+            str << "WaveActiveBallot"sv;
+            break;
+        case CallOp::WARP_READ_LANE:
+            str << "WaveReadLaneAt"sv;
+            break;
+        case CallOp::WARP_READ_FIRST_ACTIVE_LANE:
+            str << "WaveReadLaneFirst"sv;
+            break;
         case CallOp::BACKWARD:
             LUISA_ERROR_WITH_LOCATION("`backward()` should not be called directly.");
+            break;
+        case CallOp::PACK:
+        case CallOp::UNPACK:
+            LUISA_ERROR_WITH_LOCATION("Call-Op not implemented.");
             break;
     }
     str << '(';
@@ -1617,6 +1788,7 @@ void CodegenUtility::CodegenProperties(
         return (static_cast<uint>(kernel.variable_usage(v.uid())) & static_cast<uint>(Usage::WRITE)) != 0;
     };
     auto args = kernel.arguments();
+    size_t uavArgCount = 0;
     for (auto &&i : vstd::ptr_range(args.data() + offset, args.size() - offset)) {
         auto print = [&] {
             GetTypeName(*i.type(), varData, kernel.variable_usage(i.uid()));
@@ -1631,7 +1803,10 @@ void CodegenUtility::CodegenProperties(
             GetVariableName(i, varData);
             varData << "Inst"sv;
         };
-        auto genArg = [&]<bool rtBuffer = false, bool writable = false>(RegisterType regisT, ShaderVariableType sT, char v) {
+        auto genArg = [&]<RegisterType regisT, bool rtBuffer = false, bool writable = false>(ShaderVariableType sT, char v) {
+            if constexpr (regisT == RegisterType::UAV) {
+                uavArgCount += 1;
+            }
             auto &&r = registerCount.get((uint8_t)regisT);
             Property prop = {
                 .type = sT,
@@ -1653,36 +1828,41 @@ void CodegenUtility::CodegenProperties(
         switch (i.type()->tag()) {
             case Type::Tag::TEXTURE:
                 if (Writable(i)) {
-                    genArg(RegisterType::UAV, ShaderVariableType::UAVTextureHeap, 'u');
+                    genArg.operator()<RegisterType::UAV>(ShaderVariableType::UAVTextureHeap, 'u');
                 } else {
-                    genArg(RegisterType::SRV, ShaderVariableType::SRVTextureHeap, 't');
+                    genArg.operator()<RegisterType::SRV>(ShaderVariableType::SRVTextureHeap, 't');
                 }
                 break;
             case Type::Tag::BUFFER: {
                 if (Writable(i)) {
-                    genArg(RegisterType::UAV, ShaderVariableType::RWStructuredBuffer, 'u');
+                    genArg.operator()<RegisterType::UAV>(ShaderVariableType::RWStructuredBuffer, 'u');
                 } else {
-                    genArg(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
+                    genArg.operator()<RegisterType::SRV>(ShaderVariableType::StructuredBuffer, 't');
                 }
             } break;
             case Type::Tag::BINDLESS_ARRAY:
-                genArg(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
+                genArg.operator()<RegisterType::SRV>(ShaderVariableType::StructuredBuffer, 't');
                 break;
             case Type::Tag::ACCEL:
                 if (Writable(i)) {
-                    genArg.operator()<true, true>(RegisterType::UAV, ShaderVariableType::RWStructuredBuffer, 'u');
+                    genArg.operator()<RegisterType::UAV, true, true>(ShaderVariableType::RWStructuredBuffer, 'u');
                 } else {
-                    genArg(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
-                    genArg.operator()<true>(RegisterType::SRV, ShaderVariableType::StructuredBuffer, 't');
+                    genArg.operator()<RegisterType::SRV>(ShaderVariableType::StructuredBuffer, 't');
+                    genArg.operator()<RegisterType::SRV, true>(ShaderVariableType::StructuredBuffer, 't');
                 }
                 break;
             case Type::Tag::CUSTOM: {
                 if (i.type()->description() == "LC_IndirectDispatchBuffer"sv) {
-                    genArg(RegisterType::UAV, ShaderVariableType::RWStructuredBuffer, 'u');
+                    genArg.operator()<RegisterType::UAV>(ShaderVariableType::RWStructuredBuffer, 'u');
                 }
             } break;
             default: break;
         }
+    }
+    if (uavArgCount > 64) [[unlikely]] {
+        LUISA_WARNING("Writable resources' count greater than 8 may cause crash.");
+    } else if (uavArgCount > 64) [[unlikely]] {
+        LUISA_ERROR("Writable resources' count must be less than 64.");
     }
 }
 vstd::MD5 CodegenUtility::GetTypeMD5(vstd::span<Type const *const> types) {

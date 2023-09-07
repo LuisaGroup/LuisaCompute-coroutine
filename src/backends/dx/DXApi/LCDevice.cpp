@@ -122,7 +122,7 @@ BufferCreationInfo LCDevice::create_buffer(const Type *element, size_t elem_coun
     return info;
 }
 void LCDevice::destroy_buffer(uint64 handle) noexcept {
-    delete reinterpret_cast<DefaultBuffer *>(handle);
+    delete reinterpret_cast<Buffer *>(handle);
 }
 ResourceCreationInfo LCDevice::create_texture(
     PixelFormat format,
@@ -131,16 +131,7 @@ ResourceCreationInfo LCDevice::create_texture(
     uint height,
     uint depth,
     uint mipmap_levels, bool simultaneous_access) noexcept {
-    bool allowUAV = true;
-    switch (format) {
-        case PixelFormat::BC4UNorm:
-        case PixelFormat::BC5UNorm:
-        case PixelFormat::BC6HUF16:
-        case PixelFormat::BC7UNorm:
-            allowUAV = false;
-            break;
-        default: break;
-    }
+    bool allowUAV = !is_block_compressed(format);
     ResourceCreationInfo info;
     auto res = new RenderTexture(
         &nativeDevice,
@@ -161,7 +152,7 @@ ResourceCreationInfo LCDevice::create_texture(
 //    return Shader::PSOName(&nativeDevice, file_name);
 //}
 void LCDevice::destroy_texture(uint64 handle) noexcept {
-    delete reinterpret_cast<RenderTexture *>(handle);
+    delete reinterpret_cast<TextureBase *>(handle);
 }
 ResourceCreationInfo LCDevice::create_bindless_array(size_t size) noexcept {
     ResourceCreationInfo info;
@@ -242,7 +233,7 @@ ShaderCreationInfo LCDevice::create_shader(const ShaderOption &option, Function 
     }
     // Clock clk;
     auto code = hlsl::CodegenUtility{}.Codegen(kernel, nativeDevice.fileIo, option.native_include, mask, false);
-    // LUISA_INFO("HLSL Codegen: {} ms", clk.toc());
+    // LUISA_VERBOSE("HLSL Codegen: {} ms", clk.toc());
     if (option.compile_only) {
         assert(!option.name.empty());
         ComputeShader::SaveCompute(
@@ -260,7 +251,7 @@ ShaderCreationInfo LCDevice::create_shader(const ShaderOption &option, Function 
         vstd::string_view file_name;
         vstd::string str_cache;
         vstd::MD5 checkMD5({reinterpret_cast<uint8_t const *>(code.result.data() + code.immutableHeaderSize), code.result.size() - code.immutableHeaderSize});
-        CacheType cacheType;
+        CacheType cacheType{};
         if (option.enable_cache) {
             if (option.name.empty()) {
                 str_cache << checkMD5.to_string(false) << ".dxil"sv;
@@ -454,7 +445,7 @@ ResourceCreationInfo DxRasterExt::create_raster_shader(
     } else {
         vstd::string_view file_name;
         vstd::string str_cache;
-        CacheType cacheType;
+        CacheType cacheType{};
         if (option.enable_cache) {
             if (option.name.empty()) {
                 str_cache << checkMD5.to_string(false) << ".dxil"sv;
@@ -530,7 +521,7 @@ ResourceCreationInfo DxRasterExt::create_depth_buffer(DepthFormat format, uint w
     return info;
 }
 void DxRasterExt::destroy_depth_buffer(uint64_t handle) noexcept {
-    delete reinterpret_cast<DepthBuffer *>(handle);
+    delete reinterpret_cast<TextureBase *>(handle);
 }
 DeviceExtension *LCDevice::extension(vstd::string_view name) noexcept {
     auto ite = exts.find(name);
@@ -617,16 +608,7 @@ void LCDevice::set_name(luisa::compute::Resource::Tag resource_tag, uint64_t res
     PixelFormat format, uint dimension,
     uint width, uint height, uint depth,
     uint mipmap_levels, bool simultaneous_access) noexcept {
-    bool allowUAV = true;
-    switch (format) {
-        case PixelFormat::BC4UNorm:
-        case PixelFormat::BC5UNorm:
-        case PixelFormat::BC6HUF16:
-        case PixelFormat::BC7UNorm:
-            allowUAV = false;
-            break;
-        default: break;
-    }
+    bool allowUAV = !is_block_compressed(format);
     SparseTextureCreationInfo info;
     auto res = new SparseTexture(
         &nativeDevice,
@@ -719,7 +701,7 @@ ShaderCreationInfo LCDevice::create_shader(const ShaderOption &option, const ir:
 #ifdef LUISA_ENABLE_IR
     Clock clk;
     auto function = IR2AST::build(kernel);
-    LUISA_INFO("IR2AST done in {} ms.", clk.toc());
+    LUISA_VERBOSE("IR2AST done in {} ms.", clk.toc());
     return create_shader(option, function->function());
 #else
     LUISA_ERROR_WITH_LOCATION("DirectX device does not support creating shader from IR types.");
@@ -739,9 +721,9 @@ void LCDevice::deallocate_sparse_buffer_heap(uint64_t handle) noexcept {
     nativeDevice.defaultAllocator->Release(heap->allocation);
     vengine_free(heap);
 }
-ResourceCreationInfo LCDevice::allocate_sparse_texture_heap(size_t byte_size) noexcept {
+ResourceCreationInfo LCDevice::allocate_sparse_texture_heap(size_t byte_size, bool is_compressed_type) noexcept {
     auto heap = reinterpret_cast<SparseHeap *>(vengine_malloc(sizeof(SparseHeap)));
-    heap->allocation = nativeDevice.defaultAllocator->AllocateTextureHeap(&nativeDevice, byte_size, &heap->heap, &heap->offset, true);
+    heap->allocation = nativeDevice.defaultAllocator->AllocateTextureHeap(&nativeDevice, byte_size, &heap->heap, &heap->offset, !is_compressed_type);
     heap->size_bytes = byte_size;
     ResourceCreationInfo r;
     r.handle = reinterpret_cast<uint64>(heap);
@@ -753,6 +735,9 @@ void LCDevice::deallocate_sparse_texture_heap(uint64_t handle) noexcept {
     auto heap = reinterpret_cast<SparseHeap *>(handle);
     nativeDevice.defaultAllocator->Release(heap->allocation);
     vengine_free(heap);
+}
+uint LCDevice::compute_warp_size() const noexcept {
+    return nativeDevice.waveSize();
 }
 VSTL_EXPORT_C DeviceInterface *create(Context &&c, DeviceConfig const *settings) {
     return new LCDevice(std::move(c), settings);

@@ -3,15 +3,6 @@
 #include <pybind11/stl.h>
 #include <luisa/ast/function.h>
 #include <luisa/core/logging.h>
-#include <luisa/runtime/device.h>
-#include <luisa/runtime/context.h>
-#include <luisa/runtime/stream.h>
-#include <luisa/runtime/rhi/command.h>
-#include <luisa/runtime/image.h>
-#include <luisa/runtime/rtx/accel.h>
-#include <luisa/runtime/rtx/mesh.h>
-#include <luisa/runtime/rtx/hit.h>
-#include <luisa/runtime/rtx/ray.h>
 
 namespace py = pybind11;
 using namespace luisa::compute;
@@ -62,6 +53,7 @@ void export_op(py::module &m) {
         .value("SATURATE", CallOp::SATURATE)
         .value("LERP", CallOp::LERP)
         .value("STEP", CallOp::STEP)
+        .value("SMOOTHSTEP", CallOp::SMOOTHSTEP)
 
         .value("ABS", CallOp::ABS)
         .value("MIN", CallOp::MIN)
@@ -136,9 +128,10 @@ void export_op(py::module &m) {
         .value("ATOMIC_FETCH_MIN", CallOp::ATOMIC_FETCH_MIN)              /// [(atomic_ref, val) -> old]: stores min(old, val), returns old.
         .value("ATOMIC_FETCH_MAX", CallOp::ATOMIC_FETCH_MAX)              /// [(atomic_ref, val) -> old]: stores max(old, val), returns old.
 
-        .value("BUFFER_READ", CallOp::BUFFER_READ)    /// [(buffer, index) -> value]: reads the index-th element in buffer
-        .value("BUFFER_WRITE", CallOp::BUFFER_WRITE)  /// [(buffer, index, value) -> void]: writes value into the index-th element of buffer
-        .value("BUFFER_SIZE", CallOp::BUFFER_SIZE)    /// [(buffer, index) -> UINT]: writes value into the index-th element of buffer
+        .value("BUFFER_READ", CallOp::BUFFER_READ)  /// [(buffer, index) -> value]: reads the index-th element in buffer
+        .value("BUFFER_WRITE", CallOp::BUFFER_WRITE)/// [(buffer, index, value) -> void]: writes value into the index-th element of buffer
+        .value("BYTE_BUFFER_READ", CallOp::BYTE_BUFFER_READ)
+        .value("BYTE_BUFFER_WRITE", CallOp::BYTE_BUFFER_WRITE)
         .value("TEXTURE_READ", CallOp::TEXTURE_READ)  /// [(texture, coord) -> value]
         .value("TEXTURE_WRITE", CallOp::TEXTURE_WRITE)/// [(texture, coord, value) -> void]
         .value("TEXTURE_SIZE", CallOp::TEXTURE_SIZE)
@@ -203,6 +196,7 @@ void export_op(py::module &m) {
         .value("RASTER_DISCARD", CallOp::RASTER_DISCARD)
         .value("INDIRECT_CLEAR_DISPATCH_BUFFER", CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER)
         .value("INDIRECT_EMPLACE_DISPATCH_KERNEL", CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL)
+        .value("INDIRECT_SET_DISPATCH_KERNEL", CallOp::INDIRECT_SET_DISPATCH_KERNEL)
         .value("RAY_QUERY_PROCEDURAL_CANDIDATE_HIT", CallOp::RAY_QUERY_PROCEDURAL_CANDIDATE_HIT)
         .value("RAY_QUERY_WORLD_SPACE_RAY", CallOp::RAY_QUERY_WORLD_SPACE_RAY)
         .value("RAY_QUERY_TRIANGLE_CANDIDATE_HIT", CallOp::RAY_QUERY_TRIANGLE_CANDIDATE_HIT)
@@ -233,5 +227,24 @@ void export_op(py::module &m) {
         .value("REDUCE_MIN", CallOp::REDUCE_MIN)
         .value("REDUCE_MAX", CallOp::REDUCE_MAX)
         .value("OUTER_PRODUCT", CallOp::OUTER_PRODUCT)
-        .value("MATRIX_COMPONENT_WISE_MULTIPLICATION", CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION);
+        .value("MATRIX_COMPONENT_WISE_MULTIPLICATION", CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION)
+    
+        .value("WARP_IS_FIRST_ACTIVE_LANE", CallOp::WARP_IS_FIRST_ACTIVE_LANE)
+        .value("WARP_ACTIVE_ALL_EQUAL", CallOp::WARP_ACTIVE_ALL_EQUAL)
+        .value("WARP_ACTIVE_BIT_AND", CallOp::WARP_ACTIVE_BIT_AND)
+        .value("WARP_ACTIVE_BIT_OR", CallOp::WARP_ACTIVE_BIT_OR)
+        .value("WARP_ACTIVE_BIT_XOR", CallOp::WARP_ACTIVE_BIT_XOR)
+        .value("WARP_ACTIVE_COUNT_BITS", CallOp::WARP_ACTIVE_COUNT_BITS)
+        .value("WARP_ACTIVE_MAX", CallOp::WARP_ACTIVE_MAX)
+        .value("WARP_ACTIVE_MIN", CallOp::WARP_ACTIVE_MIN)
+        .value("WARP_ACTIVE_PRODUCT", CallOp::WARP_ACTIVE_PRODUCT)
+        .value("WARP_ACTIVE_SUM", CallOp::WARP_ACTIVE_SUM)
+        .value("WARP_ACTIVE_ALL", CallOp::WARP_ACTIVE_ALL)
+        .value("WARP_ACTIVE_ANY", CallOp::WARP_ACTIVE_ANY)
+        .value("WARP_ACTIVE_BIT_MASK", CallOp::WARP_ACTIVE_BIT_MASK)
+        .value("WARP_PREFIX_COUNT_BITS", CallOp::WARP_PREFIX_COUNT_BITS)
+        .value("WARP_PREFIX_SUM", CallOp::WARP_PREFIX_SUM)
+        .value("WARP_PREFIX_PRODUCT", CallOp::WARP_PREFIX_PRODUCT)
+        .value("WARP_READ_LANE", CallOp::WARP_READ_LANE)
+        .value("WARP_READ_FIRST_ACTIVE_LANE", CallOp::WARP_READ_FIRST_ACTIVE_LANE);
 }

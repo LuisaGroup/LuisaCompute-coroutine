@@ -4,6 +4,7 @@
 #include <luisa/runtime/shader.h>
 #include <luisa/runtime/raster/raster_shader.h>
 #include <luisa/ast/ast_evaluator.h>
+#include <luisa/core/binary_file_stream.h>
 #include <luisa/vstl/common.h>
 #include <luisa/ast/function.h>
 #include <luisa/ast/function_builder.h>
@@ -16,7 +17,7 @@
 #include <luisa/core/logging.h>
 #include <luisa/runtime/context.h>
 #include <luisa/runtime/dispatch_buffer.h>
-
+#include <luisa/ast/callable_library.h>
 namespace py = pybind11;
 using namespace luisa;
 using namespace luisa::compute;
@@ -438,6 +439,28 @@ void export_runtime(py::module &m) {
     py::class_<IntEval>(m, "IntEval")
         .def("value", [](IntEval &self) { return self.value; })
         .def("exist", [](IntEval &self) { return self.exist; });
+    py::class_<CallableLibrary>(m, "CallableLibrary")
+        .def(py::init<>())
+        .def("add_callable", &CallableLibrary::add_callable)
+        .def("serialize", [](CallableLibrary &self, luisa::string_view path) {
+            auto vec = self.serialize();
+            luisa::string path_str{path};
+            auto f = fopen(path_str.c_str(), "wb");
+            if (f) {
+                fwrite(vec.data(), vec.size(), 1, f);
+                LUISA_INFO("Save serialized callable with size: {} bytes.", vec.size());
+                fclose(f);
+            }
+        })
+        .def("load", [](CallableLibrary &self, luisa::string_view path) {
+            BinaryFileStream file_stream{luisa::string{path}};
+            luisa::vector<std::byte> vec;
+            if (file_stream.valid()) {
+                vec.push_back_uninitialized(file_stream.length());
+                file_stream.read(vec);
+            }
+            self.load(vec);
+        });
     py::class_<FunctionBuilder, luisa::shared_ptr<FunctionBuilder>>(m, "FunctionBuilder")
         .def("define_kernel", &FunctionBuilder::define_kernel<const luisa::function<void()> &>)
         .def("define_callable", &FunctionBuilder::define_callable<const luisa::function<void()> &>)
@@ -470,6 +493,8 @@ void export_runtime(py::module &m) {
         .def("block_id", &FunctionBuilder::block_id, pyref)
         .def("dispatch_id", &FunctionBuilder::dispatch_id, pyref)
         .def("kernel_id", &FunctionBuilder::kernel_id, pyref)
+        .def("warp_lane_count", &FunctionBuilder::warp_lane_count, pyref)
+        .def("warp_lane_id", &FunctionBuilder::warp_lane_id, pyref)
         .def("object_id", &FunctionBuilder::object_id, pyref)
         .def("dispatch_size", &FunctionBuilder::dispatch_size, pyref)
 
@@ -491,7 +516,42 @@ void export_runtime(py::module &m) {
 
         .def(
             "literal", [](FunctionBuilder &self, const Type *type, LiteralExpr::Value value) {
-                return self.literal(type, std::move(value));
+                return luisa::visit(
+                    [&self, type]<typename T>(T v) {
+                        // we do not allow conversion between vector/matrix/bool types
+                        if (type->is_vector() || type->is_matrix() ||
+                            type == Type::of<bool>() || type == Type::of<T>()) {
+                            return self.literal(type, v);
+                        }
+                        if constexpr (is_scalar_v<T>) {
+                            // we are less strict here to allow implicit conversion
+                            // between integral or between floating-point types,
+                            // since python does not distinguish them
+                            auto safe_convert = [v]<typename U>(U /* for tagged dispatch */) noexcept {
+                                auto u = static_cast<U>(v);
+                                LUISA_ASSERT(static_cast<T>(u) == v,
+                                             "Cannot convert literal value {} to type {}.",
+                                             v, Type::of<U>()->description());
+                                return u;
+                            };
+                            switch (type->tag()) {
+                                case Type::Tag::INT16: return self.literal(type, safe_convert(short{}));
+                                case Type::Tag::UINT16: return self.literal(type, safe_convert(ushort{}));
+                                case Type::Tag::INT32: return self.literal(type, safe_convert(int{}));
+                                case Type::Tag::UINT32: return self.literal(type, safe_convert(uint{}));
+                                case Type::Tag::INT64: return self.literal(type, safe_convert(slong{}));
+                                case Type::Tag::UINT64: return self.literal(type, safe_convert(ulong{}));
+                                case Type::Tag::FLOAT16: return self.literal(type, static_cast<half>(v));
+                                case Type::Tag::FLOAT32: return self.literal(type, static_cast<float>(v));
+                                case Type::Tag::FLOAT64: return self.literal(type, static_cast<double>(v));
+                                default: break;
+                            }
+                        }
+                        LUISA_ERROR_WITH_LOCATION(
+                            "Cannot convert literal value {} to type {}.",
+                            v, type->description());
+                    },
+                    value);
             },
             pyref)
         .def("unary", &FunctionBuilder::unary, pyref)

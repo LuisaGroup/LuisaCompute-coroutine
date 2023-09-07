@@ -1,9 +1,7 @@
-use crate::{
-    context::is_type_equal,
-    ir::{Instruction, Module, NodeRef, SwitchCase, Type},
-};
+use crate::{context::is_type_equal, ir::{Instruction, Module, NodeRef, SwitchCase, Type}, Pooled};
 use std::collections::HashMap;
 use std::ffi::CString;
+use crate::ir::BasicBlock;
 
 pub struct DisplayIR {
     output: String,
@@ -20,12 +18,19 @@ impl DisplayIR {
         }
     }
 
-    pub fn display_ir(&mut self, module: &Module) -> String {
+    pub fn clear(&mut self) {
         self.map.clear();
         self.cnt = 0;
+    }
 
-        for node in module.entry.nodes().iter() {
-            self.display(*node, 0, false);
+    pub fn display_ir(&mut self, module: &Module) -> String {
+        self.clear();
+        self.display_ir_bb(&module.entry, 0, false)
+    }
+
+    pub fn display_ir_bb(&mut self, bb: &Pooled<BasicBlock>, ident: usize, no_new_line: bool) -> String {
+        for node in bb.nodes().iter() {
+            self.display(*node, ident, no_new_line);
         }
         self.output.clone()
     }
@@ -168,10 +173,6 @@ impl DisplayIR {
                 self.output += "}";
             }
             Instruction::RayQuery { .. } => todo!(),
-            Instruction::Suspend (suspend_id ) => {
-                let temp = format!("suspend ${}\n", self.get(suspend_id));
-                self.output += temp.as_str();
-            }
             Instruction::Loop { body, cond } => {
                 let temp = format!("while ${} {{\n", self.get(cond));
                 self.output += temp.as_str();
@@ -227,7 +228,26 @@ impl DisplayIR {
                 self.output += "}";
             }
             Instruction::Comment(_) => {}
-            Instruction::Return(_) => {self.output += "return\n";}
+            Instruction::Return(_) => {self.output += "return\n";},
+            Instruction::CoroSplitMark { token } => {
+                self.output += format!("CoroSplitMark({})", token).as_str();
+            }
+            Instruction::CoroSuspend { token } => {
+                self.output += format!("CoroSuspend({})", token).as_str();
+            }
+            Instruction::Suspend (suspend_id ) => {
+                let temp = format!("suspend ${}\n", self.get(suspend_id));
+                self.output += temp.as_str();
+            }
+            | Instruction::CoroResume { token } => {
+                self.output += format!("CoroResume({})", token).as_str();
+            }
+            | Instruction::CoroFrame { token, body } => {
+                self.output += format!("CoroFrame({}): {{\n", token).as_str();
+                self.display_ir_bb(body, ident + 1, no_new_line);
+                self.add_ident(ident);
+                self.output += "}";
+            }
         }
         if !no_new_line {
             self.output += "\n";

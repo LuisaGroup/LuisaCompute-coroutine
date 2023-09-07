@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/3/13.
-//
-
 #include <luisa/core/logging.h>
 #include <luisa/ast/variable.h>
 #include <luisa/ast/expression.h>
@@ -44,6 +40,7 @@ void CallExpr::_mark() const noexcept {
     if (is_builtin()) {
         switch (_op) {
             case CallOp::BUFFER_WRITE:
+            case CallOp::BYTE_BUFFER_WRITE:
             case CallOp::TEXTURE_WRITE:
             case CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM:
             case CallOp::RAY_TRACING_SET_INSTANCE_VISIBILITY:
@@ -63,6 +60,7 @@ void CallExpr::_mark() const noexcept {
             case CallOp::ATOMIC_FETCH_MIN:
             case CallOp::ATOMIC_FETCH_MAX:
             case CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER:
+            case CallOp::INDIRECT_SET_DISPATCH_KERNEL:
             case CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL:
                 _arguments[0]->mark(Usage::WRITE);
                 for (auto i = 1u; i < _arguments.size(); i++) {
@@ -203,6 +201,10 @@ uint64_t LiteralExpr::_compute_hash() const noexcept {
 
 uint64_t ConstantExpr::_compute_hash() const noexcept {
     return hash_value(_data);
+}
+
+uint64_t TypeIDExpr::_compute_hash() const noexcept {
+    return _data_type->hash();
 }
 
 void ExprVisitor::visit(const CpuCustomOpExpr *) {

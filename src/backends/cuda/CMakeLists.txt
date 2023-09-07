@@ -4,11 +4,6 @@ if (CUDAToolkit_FOUND)
     message(STATUS "Build with CUDA backend: ${CUDAToolkit_VERSION}")
 
     set(LUISA_COMPUTE_CUDA_SOURCES
-
-            ../common/default_binary_io.cpp ../common/default_binary_io.h
-            ../common/resource_tracker.h
-            ../common/string_scratch.cpp ../common/string_scratch.h
-
             cuda_error.h
             cuda_bindless_array.cpp cuda_bindless_array.h
             cuda_buffer.cpp cuda_buffer.h
@@ -33,12 +28,16 @@ if (CUDAToolkit_FOUND)
             cuda_swapchain.cpp cuda_swapchain.h
             cuda_callback_context.h
             cuda_builtin_embedded.cpp cuda_builtin_embedded.h
-            optix_api.cpp optix_api.h)
+            optix_api.cpp optix_api.h
+            default_binary_io.cpp
+            string_scratch.cpp)
 
     luisa_compute_add_backend(cuda SOURCES ${LUISA_COMPUTE_CUDA_SOURCES})
+
     target_link_libraries(luisa-compute-backend-cuda PRIVATE
             CUDA::cuda_driver
             luisa-compute-vulkan-swapchain)
+    target_precompile_headers(luisa-compute-backend-cuda PRIVATE pch.h)
 
     find_library(CUDA_DEVICE_RUNTIME_LIBRARY cudadevrt ${CUDAToolkit_LIBRARY_DIR})
     add_custom_command(TARGET luisa-compute-backend-cuda POST_BUILD
@@ -100,6 +99,11 @@ if (CUDAToolkit_FOUND)
             install(FILES $<TARGET_FILE:${target}> DESTINATION ${CMAKE_INSTALL_BINDIR})
         endforeach ()
     endif ()
+
+    # CUB LuisaCompute integration
+    if (LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
+        add_subdirectory(lcub)
+    endif()
 
 elseif (NOT LUISA_COMPUTE_CHECK_BACKEND_DEPENDENCIES)
     message(FATAL_ERROR "CUDA not found. The CUDA backend will not be built.")

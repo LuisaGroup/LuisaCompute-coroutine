@@ -1,7 +1,3 @@
-//
-// Created by Mike on 3/18/2023.
-//
-
 #include <luisa/core/spin_mutex.h>
 #include <luisa/core/stl/string.h>
 #include <luisa/core/stl/unordered_map.h>
@@ -25,11 +21,7 @@ private:
     size_t _argument_buffer_size{};
     optix::Module _module{};
     optix::ProgramGroup _program_group_rg{};
-    optix::ProgramGroup _program_group_ch_closest{};
-    optix::ProgramGroup _program_group_ch_query{};
-    optix::ProgramGroup _program_group_miss_closest{};
-    optix::ProgramGroup _program_group_miss_any{};
-    optix::ProgramGroup _program_group_miss_query{};
+    optix::ProgramGroup _program_group_ray_query{};
     optix::Pipeline _pipeline{};
     luisa::vector<ShaderDispatchCommand::Argument> _bound_arguments;
     CUdeviceptr _sbt_buffer{};

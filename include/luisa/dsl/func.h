@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/2/28.
-//
-
 #pragma once
 
 #include "luisa/core/logging.h"
@@ -257,7 +253,8 @@ public                                                           \
     Kernel<N, Args...> {                                         \
         using Kernel<N, Args...>::Kernel;                        \
         Kernel##N##D(Kernel<N, Args...> k) noexcept              \
-            : Kernel<N, Args...>{std::move(k._builder)} {}       \
+            : Kernel<N, Args...> { std::move(k._builder) }       \
+        {}                                                       \
         Kernel##N##D &operator=(Kernel<N, Args...> k) noexcept { \
             this->_builder = std::move(k._builder);              \
             return *this;                                        \
@@ -291,9 +288,9 @@ struct Kernel3D<void(Args...)> : LUISA_KERNEL_BASE(3);
 #undef LUISA_KERNEL_BASE
 
 namespace detail {
+
 /// Callable invoke
 class CallableInvoke {
-    friend class ExternalCallableInvoke;
 
 public:
     static constexpr auto max_argument_count = 64u;
@@ -310,10 +307,16 @@ public:
     /// Add an argument.
     template<typename T>
     CallableInvoke &operator<<(Expr<T> arg) noexcept {
-        if (_arg_count == max_argument_count) [[unlikely]] {
-            _error_too_many_arguments();
+        if constexpr (requires { typename Expr<T>::is_binding_group; }) {
+            callable_encode_binding_group(*this, arg);
+        } else if constexpr (is_soa_expr_v<T>) {
+            callable_encode_soa(*this, arg);
+        } else {
+            if (_arg_count == max_argument_count) [[unlikely]] {
+                _error_too_many_arguments();
+            }
+            _args[_arg_count++] = arg.expression();
         }
-        _args[_arg_count++] = arg.expression();
         return *this;
     }
     /// Add an argument.
@@ -321,7 +324,9 @@ public:
     decltype(auto) operator<<(Ref<T> arg) noexcept {
         return (*this << Expr{arg});
     }
-    [[nodiscard]] auto args() const noexcept { return luisa::span{_args.data(), _arg_count}; }
+    [[nodiscard]] auto args() const noexcept {
+        return luisa::span{_args.data(), _arg_count};
+    }
 };
 
 }// namespace detail
@@ -338,7 +343,7 @@ struct is_callable<Callable<T>> : std::true_type {};
 /// Callable class with a function type as template parameter.
 template<typename Ret, typename... Args>
 class Callable<Ret(Args...)> {
-
+    friend class CallableLibrary;
     static_assert(
         std::negation_v<std::disjunction<
             is_buffer_or_view<Ret>,
@@ -350,7 +355,7 @@ class Callable<Ret(Args...)> {
 
 private:
     luisa::shared_ptr<const detail::FunctionBuilder> _builder;
-
+    explicit Callable(luisa::shared_ptr<const detail::FunctionBuilder> builder) noexcept : _builder{std::move(builder)} {}
 public:
     /**
      * @brief Construct a Callable object.

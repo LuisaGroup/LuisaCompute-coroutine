@@ -1,9 +1,6 @@
-//
-// Created by Mike on 8/1/2021.
-//
-
 #include <luisa/core/magic_enum.h>
 #include <luisa/runtime/command_list.h>
+#include <luisa/backends/ext/cuda/lcub/cuda_lcub_command.h>
 
 #include "cuda_error.h"
 #include "cuda_buffer.h"
@@ -260,6 +257,12 @@ void CUDACommandEncoder::visit(CustomCommand *command) noexcept {
             visit(ds_command);
             break;
         }
+        case to_underlying(CustomCommandUUID::CUDA_LCUB_COMMAND): {
+            auto lcub_command = dynamic_cast<CudaLCubCommand *>(command);
+            LUISA_ASSERT(lcub_command != nullptr, "Invalid CudaLCuBCommand.");
+            lcub_command->func(_stream->handle());
+            break;
+        }
         default:
             LUISA_ERROR_WITH_LOCATION("Custom command (UUID = 0x{:04x}) "
                                       "is not supported on CUDA.",
@@ -343,7 +346,7 @@ static void dstorage_decompress(DStorageCompression algorithm,
         auto config = manager->configure_decompression(reinterpret_cast<const uint8_t *>(in_ptr));
         auto temp_buffer = static_cast<CUdeviceptr>(0u);
         if (auto temp_buffer_size = manager->get_required_scratch_buffer_size()) {
-            LUISA_INFO("nvcomp gdeflate decompression temp buffer size = {} bytes.", temp_buffer_size);
+            LUISA_VERBOSE("nvcomp gdeflate decompression temp buffer size = {} bytes.", temp_buffer_size);
             LUISA_CHECK_CUDA(cuMemAllocAsync(&temp_buffer, temp_buffer_size, stream));
             manager->set_scratch_buffer(reinterpret_cast<uint8_t *>(temp_buffer));
         }

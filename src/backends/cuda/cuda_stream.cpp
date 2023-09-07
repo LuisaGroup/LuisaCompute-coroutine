@@ -1,7 +1,3 @@
-//
-// Created by Mike on 8/1/2021.
-//
-
 #include <cstdlib>
 #include <mutex>
 

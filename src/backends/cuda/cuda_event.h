@@ -1,7 +1,3 @@
-//
-// Created by Mike on 7/2/2023.
-//
-
 #pragma once
 
 #include <cuda.h>
@@ -61,6 +57,6 @@ public:
 
 #else
 
-#error TODO
+#error You cannot use CUDA backend without Vulkan. 😢😢😢. For Windows users, get Vulkan SDK from https://www.lunarg.com/vulkan-sdk/
 
 #endif

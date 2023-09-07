@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/6/25.
-//
-
 #include <atomic>
 #include <numbers>
 #include <numeric>
@@ -19,6 +15,7 @@
 #include <luisa/runtime/swapchain.h>
 #include <luisa/dsl/sugar.h>
 #include <luisa/ir/ast2ir.h>
+#include <luisa/ir/ir.h>
 
 using namespace luisa;
 using namespace luisa::compute;
@@ -48,7 +45,7 @@ int main(int argc, char *argv[]) {
 
     Clock clock;
 
-    auto intersect_light = [](Float3 pos, Float3 d) noexcept {
+    Callable intersect_light = [](Float3 pos, Float3 d) noexcept {
         auto cos_w = dot(-d, light_normal);
         auto dist = dot(d, light_pos - pos);
         auto D = dist / cos_w;
@@ -57,7 +54,7 @@ int main(int argc, char *argv[]) {
         return ite(valid, D, inf);
     };
 
-    auto tea = [](UInt v0, UInt v1) noexcept {
+    Callable tea = [](UInt v0, UInt v1) noexcept {
         Var s0 = 0u;
         for (auto n = 0u; n < 4u; n++) {
             s0 += 0x9e3779b9u;
@@ -67,14 +64,14 @@ int main(int argc, char *argv[]) {
         return v0;
     };
 
-    auto rand = [](UInt &state) noexcept {
+    Callable rand = [](UInt &state) noexcept {
         constexpr auto lcg_a = 1664525u;
         constexpr auto lcg_c = 1013904223u;
         state = lcg_a * state + lcg_c;
         return cast<float>(state & 0x00ffffffu) * (1.0f / static_cast<float>(0x01000000u));
     };
 
-    auto out_dir = [&rand](Float3 n, UInt &seed) noexcept {
+    Callable out_dir = [&rand](Float3 n, UInt &seed) noexcept {
         auto u = ite(
             abs(n.y) < 1.0f - eps,
             normalize(cross(n, make_float3(0.0f, 1.0f, 0.0f))),
@@ -86,14 +83,14 @@ int main(int argc, char *argv[]) {
         return ax * (cos(phi) * u + sin(phi) * v) + ay * n;
     };
 
-    auto make_nested = [](Float f) noexcept {
+    Callable make_nested = [](Float f) noexcept {
         static constexpr auto freq = 40.0f;
         f *= freq;
         f = ite(f < 0.f, ite(cast<int>(f) % 2 == 0, 1.f - fract(f), fract(f)), f);
         return (f - 0.2f) * (1.0f / freq);
     };
 
-    auto sdf = [&make_nested](Float3 o) noexcept {
+    Callable sdf = [&make_nested](Float3 o) noexcept {
         auto wall = min(o.y + 0.1f, o.z + 0.4f);
         auto sphere = distance(o, make_float3(0.0f, 0.35f, 0.0f)) - 0.36f;
         auto q = abs(o - make_float3(0.8f, 0.3f, 0.0f)) - 0.3f;
@@ -106,7 +103,7 @@ int main(int argc, char *argv[]) {
         return min(wall, g);
     };
 
-    auto ray_march = [&sdf](Float3 p, Float3 d) noexcept {
+    Callable ray_march = [&sdf](Float3 p, Float3 d) noexcept {
         auto dist = def(0.0f);
         $for(j, 100) {
             auto s = sdf(p + dist * d);
@@ -116,7 +113,7 @@ int main(int argc, char *argv[]) {
         return min(dist, inf);
     };
 
-    auto sdf_normal = [&sdf](Float3 p) noexcept {
+    Callable sdf_normal = [&sdf](Float3 p) noexcept {
         static constexpr auto d = 1e-3f;
         auto n = def(make_float3());
         auto sdf_center = sdf(p);
@@ -128,7 +125,7 @@ int main(int argc, char *argv[]) {
         return normalize(n);
     };
 
-    auto next_hit = [&ray_march, &sdf_normal](Float &closest, Float3 &normal, Float3 &c, Float3 pos, Float3 d) noexcept {
+    Callable next_hit = [&ray_march, &sdf_normal](Float &closest, Float3 &normal, Float3 &c, Float3 pos, Float3 d) noexcept {
         closest = inf;
         normal = make_float3();
         c = make_float3();
@@ -188,12 +185,16 @@ int main(int argc, char *argv[]) {
 
     Context context{argv[0]};
     if (argc <= 1) {
-        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, ispc, metal", argv[0]);
+        LUISA_INFO("Usage: {} <backend>. <backend>: cuda, dx, cpu, metal", argv[0]);
         exit(1);
     }
     Device device = context.create_device(argv[1]);
     //    auto render = device.compile(render_kernel);
     auto render_kernel_ir = AST2IR::build_kernel(render_kernel.function()->function());
+    auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
+    ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "ref2ret");
+    auto m = ir::luisa_compute_ir_transform_pipeline_transform(ppl, render_kernel_ir->get()->module);
+    render_kernel_ir->get()->module = m;
     auto render = device.compile<2, Image<uint>, Image<float>, uint>(render_kernel_ir->get());
 
     static constexpr auto width = 1280u;

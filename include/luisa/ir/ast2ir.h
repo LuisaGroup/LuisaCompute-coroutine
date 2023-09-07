@@ -1,13 +1,10 @@
-//
-// Created by Mike Smith on 2022/10/17.
-//
-
 #pragma once
 
 #include <luisa/ast/variable.h>
 #include <luisa/ast/expression.h>
 #include <luisa/ast/statement.h>
 #include <luisa/ast/function.h>
+#include <luisa/core/stl/unordered_map.h>
 
 #include <luisa/rust/ir.hpp>
 
@@ -42,10 +39,13 @@ private:
 
 private:
     template<typename T>
-    [[nodiscard]] auto _boxed_slice(size_t n) noexcept -> ir::CBoxedSlice<T>;
+    [[nodiscard]] auto _boxed_slice(size_t n) const noexcept -> ir::CBoxedSlice<T>;
 
     template<typename Fn>
     auto _with_builder(Fn &&fn) noexcept;
+
+private:
+    AST2IR() noexcept;
 
 private:
     [[nodiscard]] ir::IrBuilder *_current_builder() noexcept;
@@ -64,6 +64,7 @@ private:
     [[nodiscard]] ir::NodeRef _convert(const ConstantExpr *expr) noexcept;
     [[nodiscard]] ir::NodeRef _convert(const CallExpr *expr) noexcept;
     [[nodiscard]] ir::NodeRef _convert(const CastExpr *expr) noexcept;
+    [[nodiscard]] ir::NodeRef _convert(const TypeIDExpr *expr) noexcept;
     [[nodiscard]] ir::NodeRef _convert(const CpuCustomOpExpr *expr) noexcept;
     [[nodiscard]] ir::NodeRef _convert(const GpuCustomOpExpr *expr) noexcept;
     [[nodiscard]] ir::NodeRef _convert_expr(const Expression *expr, bool is_lvalue) noexcept;

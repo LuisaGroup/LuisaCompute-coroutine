@@ -1,7 +1,3 @@
-//
-// Created by Mike on 4/4/2023.
-//
-
 #include <cstdlib>
 #include <nvtx3/nvToolsExtCuda.h>
 

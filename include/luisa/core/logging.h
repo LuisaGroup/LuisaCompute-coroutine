@@ -1,10 +1,4 @@
-//
-// Created by Mike Smith on 2021/2/2.
-//
-
 #pragma once
-
-#include <string_view>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/base_sink.h>

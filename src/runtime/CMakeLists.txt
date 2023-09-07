@@ -16,6 +16,7 @@ set(LUISA_COMPUTE_RUNTIME_RHI_SOURCES
 set(LUISA_COMPUTE_RUNTIME_SOURCES
         bindless_array.cpp
         buffer.cpp
+        byte_buffer.cpp
         command_list.cpp
         context.cpp
         device.cpp
@@ -30,12 +31,14 @@ set(LUISA_COMPUTE_RUNTIME_SOURCES
         stream.cpp
         swapchain.cpp
         volume.cpp
+        command_buffer.cpp
         ${LUISA_COMPUTE_RUNTIME_RTX_SOURCES}
         ${LUISA_COMPUTE_RUNTIME_RASTER_SOURCES}
         ${LUISA_COMPUTE_RUNTIME_RHI_SOURCES})
 
 add_library(luisa-compute-runtime SHARED ${LUISA_COMPUTE_RUNTIME_SOURCES})
 target_link_libraries(luisa-compute-runtime PUBLIC luisa-compute-ast luisa-compute-ir)
+target_precompile_headers(luisa-compute-runtime PRIVATE pch.h)
 
 target_compile_definitions(luisa-compute-runtime PRIVATE LC_RUNTIME_EXPORT_DLL=1)
 set_target_properties(luisa-compute-runtime PROPERTIES

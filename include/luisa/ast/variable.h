@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2020/12/2.
-//
-
 #pragma once
 
 #include <luisa/ast/type.h>
@@ -10,6 +6,7 @@
 namespace luisa {
 
 namespace compute {
+class CallableLibrary;
 namespace detail {
 class FunctionBuilder;
 class SSABuilder;
@@ -41,6 +38,8 @@ public:
         DISPATCH_ID,
         DISPATCH_SIZE,
         KERNEL_ID,
+        WARP_LANE_COUNT,
+        WARP_LANE_ID,
         OBJECT_ID
     };
 
@@ -52,8 +51,9 @@ private:
 private:
     friend class detail::FunctionBuilder;
     friend class detail::SSABuilder;
+    friend class CallableLibrary;
     Variable(const Type *type, Tag tag, uint32_t uid) noexcept
-        : _type{type}, _uid{uid}, _tag{tag}{}
+        : _type{type}, _uid{uid}, _tag{tag} {}
 
 public:
     Variable() noexcept = default;
@@ -77,6 +77,8 @@ public:
                _tag == Tag::DISPATCH_ID ||
                _tag == Tag::DISPATCH_SIZE ||
                _tag == Tag::KERNEL_ID ||
+               _tag == Tag::WARP_LANE_COUNT ||
+               _tag == Tag::WARP_LANE_ID ||
                _tag == Tag::OBJECT_ID;
     }
 };

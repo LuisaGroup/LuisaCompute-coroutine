@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/7/4.
-//
-
 #pragma once
 
 #ifdef LUISA_ENABLE_IR
@@ -21,6 +17,12 @@ namespace luisa::compute {
 class Accel;
 class BindlessArray;
 class IndirectDispatchBuffer;
+
+template<typename>
+class SOA;
+
+template<typename T>
+class SOAView;
 
 namespace detail {
 
@@ -52,6 +54,11 @@ struct prototype_to_shader_invocation<Image<T>> {
 template<typename T>
 struct prototype_to_shader_invocation<Volume<T>> {
     using type = VolumeView<T>;
+};
+
+template<typename T>
+struct prototype_to_shader_invocation<SOA<T>> {
+    using type = SOAView<T>;
 };
 
 template<typename T>
@@ -95,6 +102,8 @@ public:
         return *this << buffer.view();
     }
 
+    ShaderInvokeBase &operator<<(const ByteBuffer &buffer) noexcept;
+
     template<typename T>
     ShaderInvokeBase &operator<<(const Image<T> &image) noexcept {
         image._check_is_valid();
@@ -106,6 +115,12 @@ public:
         volume._check_is_valid();
         return *this << volume.view();
     }
+
+    template<typename T>
+    ShaderInvokeBase &operator<<(const SOA<T> &soa) noexcept;
+
+    template<typename T>
+    ShaderInvokeBase &operator<<(SOAView<T> soa) noexcept;
 
     template<typename T>
     ShaderInvokeBase &operator<<(T data) noexcept {
@@ -180,6 +195,11 @@ struct ShaderInvoke<3> : public ShaderInvokeBase {
     }
 };
 
+template<typename T>
+struct shader_argument_encode_count {
+    static constexpr uint value = 1u;
+};
+
 }// namespace detail
 
 template<size_t dimension, typename... Args>
@@ -189,7 +209,7 @@ class Shader final : public Resource {
 
 private:
     friend class Device;
-    uint3 _block_size{};
+    uint _block_size[3];
     size_t _uniform_size{};
 
 private:
@@ -198,9 +218,8 @@ private:
            const ShaderCreationInfo &info,
            size_t uniform_size) noexcept
         : Resource{device, Tag::SHADER, info},
-          _block_size{info.block_size},
-          _uniform_size{uniform_size} {
-    }
+          _block_size{info.block_size.x, info.block_size.y, info.block_size.z},
+          _uniform_size{uniform_size} {}
 
 private:
     // JIT shader
@@ -208,24 +227,14 @@ private:
            Function kernel,
            const ShaderOption &option) noexcept
         : Shader{device, device->create_shader(option, kernel),
-                 ShaderDispatchCmdEncoder::compute_uniform_size(kernel.arguments())} {}
+                 ShaderDispatchCmdEncoder::compute_uniform_size(kernel.unbound_arguments())} {}
 
 #ifdef LUISA_ENABLE_IR
     // JIT shader from IR module
     Shader(DeviceInterface *device,
            const ir::KernelModule *const module,
            const ShaderOption &option) noexcept
-        : Shader{device, device->create_shader(option, module),
-                 [module] {
-                     luisa::vector<const Type *> arg_types;
-                     arg_types.reserve(module->args.len);
-                     for (auto i = 0u; i < module->args.len; i++) {
-                         auto type = IR2AST::get_type(module->args.ptr[i]);
-                         assert(type != nullptr && "Failed to get argument type.");
-                         arg_types.emplace_back(type);
-                     }
-                     return ShaderDispatchCmdEncoder::compute_uniform_size(arg_types);
-                 }()} {}
+        : Shader{device, IR2AST::build(module)->function(), option} {}
 #endif
 
     // AOT shader
@@ -247,16 +256,17 @@ public:
     }
     Shader &operator=(Shader const &) noexcept = delete;
     using Resource::operator bool;
+
     [[nodiscard]] auto operator()(detail::prototype_to_shader_invocation_t<Args>... args) const noexcept {
         _check_is_valid();
         using invoke_type = detail::ShaderInvoke<dimension>;
-        auto arg_count = sizeof...(Args);
+        auto arg_count = (0u + ... + detail::shader_argument_encode_count<Args>::value);
         invoke_type invoke{handle(), arg_count, _uniform_size};
         return static_cast<invoke_type &&>((invoke << ... << args));
     }
     [[nodiscard]] uint3 block_size() const noexcept {
         _check_is_valid();
-        return _block_size;
+        return make_uint3(_block_size[0], _block_size[1], _block_size[2]);
     }
 };
 

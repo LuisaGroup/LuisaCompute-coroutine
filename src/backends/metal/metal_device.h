@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/8.
-//
-
 #pragma once
 
 #include <luisa/runtime/rhi/device_interface.h>
@@ -12,6 +8,8 @@ namespace luisa::compute::metal {
 
 class MetalCompiler;
 class MetalDStorageExt;
+class MetalDebugCaptureExt;
+class MetalPinnedMemoryExt;
 
 class MetalDevice : public DeviceInterface {
 
@@ -35,6 +33,8 @@ private:
 private:
     std::mutex _ext_mutex;
     luisa::unique_ptr<MetalDStorageExt> _dstorage_ext;
+    luisa::unique_ptr<MetalPinnedMemoryExt> _pinned_memory_ext;
+    luisa::unique_ptr<MetalDebugCaptureExt> _debug_capture_ext;
 
 public:
     [[nodiscard]] auto handle() const noexcept { return _handle; }
@@ -49,6 +49,7 @@ public:
     MetalDevice(Context &&ctx, const DeviceConfig *config) noexcept;
     ~MetalDevice() noexcept override;
     void *native_handle() const noexcept override;
+    uint compute_warp_size() const noexcept override;
     BufferCreationInfo create_buffer(const Type *element, size_t elem_count) noexcept override;
     BufferCreationInfo create_buffer(const ir::CArc<ir::Type> *element, size_t elem_count) noexcept override;
     void destroy_buffer(uint64_t handle) noexcept override;

@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/15.
-//
-
 #include <luisa/core/logging.h>
 #include "metal_event.h"
 #include "metal_texture.h"
@@ -130,6 +126,9 @@ void MetalStream::submit(MTL::CommandBuffer *command_buffer,
         if (auto error = cb->error()) {
             LUISA_WARNING("CommandBuffer execution error: {}.",
                           error->localizedDescription()->utf8String());
+        }
+        if (auto logs = cb->logs()) {
+            luisa_compute_metal_stream_print_function_logs(logs);
         }
     });
 #endif

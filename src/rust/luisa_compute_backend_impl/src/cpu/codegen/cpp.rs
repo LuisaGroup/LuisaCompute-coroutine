@@ -13,7 +13,7 @@ use luisa_compute_ir::{
     CArc, CBoxedSlice, Pooled,
 };
 
-use super::sha256;
+use super::sha256_short;
 
 use super::decode_const_data;
 use std::fmt::Write;
@@ -40,6 +40,7 @@ impl TypeGenInner {
                 ir::Primitive::Uint32 => "uint32_t".to_string(),
                 ir::Primitive::Int64 => "int64_t".to_string(),
                 ir::Primitive::Uint64 => "uint64_t".to_string(),
+                ir::Primitive::Float16 => "half".to_string(),
                 ir::Primitive::Float32 => "float".to_string(),
                 ir::Primitive::Float64 => "double".to_string(),
                 // crate::ir::Primitive::USize => format!("i{}", std::mem::size_of::<usize>() * 8),
@@ -54,7 +55,7 @@ impl TypeGenInner {
                     .map(|f| self.to_c_type(f))
                     .collect();
                 let field_types_str = field_types.join(", ");
-                let hash = sha256(&format!("{}_alignas({})", field_types_str, st.alignment));
+                let hash = sha256_short(&format!("{}_alignas({})", field_types_str, st.alignment));
                 let hash = hash.replace("-", "x_");
                 let name = format!("s_{}", hash);
 
@@ -117,6 +118,7 @@ impl TypeGenInner {
                         Primitive::Uint32 => format!("lc_uint{}", n),
                         Primitive::Int64 => format!("lc_long{}", n),
                         Primitive::Uint64 => format!("lc_ulong{}", n),
+                        Primitive::Float16 => format!("lc_half{}", n),
                         Primitive::Float32 => format!("lc_float{}", n),
                         Primitive::Float64 => format!("lc_double{}", n),
                     },
@@ -159,6 +161,7 @@ impl TypeGenInner {
         }
     }
 }
+
 struct TypeGen {
     inner: RefCell<TypeGenInner>,
 }
@@ -176,6 +179,7 @@ impl TypeGen {
         self.inner.borrow().struct_typedefs.clone()
     }
 }
+
 pub struct PhiCollector {
     phis: IndexSet<NodeRef>,
     phis_per_block: IndexMap<*const BasicBlock, Vec<NodeRef>>,
@@ -242,6 +246,7 @@ impl PhiCollector {
         }
     }
 }
+
 struct GlobalEmitter {
     message: Vec<String>,
     global_vars: HashMap<NodeRef, String>,
@@ -252,6 +257,7 @@ struct GlobalEmitter {
     args: IndexMap<NodeRef, usize>,
     cpu_custom_ops: IndexMap<usize, usize>,
 }
+
 struct FunctionEmitter<'a> {
     type_gen: &'a TypeGen,
     node_to_var: HashMap<NodeRef, String>,
@@ -316,6 +322,53 @@ impl<'a> FunctionEmitter<'a> {
             self.node_to_var.insert(node, var.clone());
             return var;
         }
+    }
+    fn access_chain(&mut self, mut var: String, node: NodeRef, indices: &[NodeRef]) -> String {
+        let mut ty = node.type_().clone();
+        for (i, index) in indices.iter().enumerate() {
+            if ty.is_vector() || ty.is_matrix() {
+                var = format!("{}[{}]", var, self.gen_node(*index));
+                assert_eq!(i, indices.len() - 1);
+                break;
+            } else if ty.is_array() {
+                var = format!("{}[{}]", var, self.gen_node(*index));
+                ty = ty.extract(0)
+            } else {
+                assert!(ty.is_struct());
+                let idx = node.get_i32() as usize;
+                var = format!("{}.f{}", var, idx);
+                ty = ty.extract(idx);
+            }
+        }
+        var
+    }
+    fn atomic_chain_op(
+        &mut self,
+        var: &str,
+        node_ty_s: &String,
+        args: &[NodeRef],
+        args_v: &[String],
+        op: &str,
+        noperand: usize,
+    ) {
+        let n = args.len();
+        let buffer_ty = self.type_gen.gen_c_type(args[0].type_());
+        let indices = &args[2..n - noperand];
+        let buffer_ref = format!(
+            "(*lc_buffer_ref<{0}>(k_args, {1}, {2}))",
+            buffer_ty, args_v[0], args_v[1]
+        );
+        let access_chain = self.access_chain(buffer_ref, args[0], indices);
+        writeln!(
+            self.body,
+            "const {} {} = {}(&{}, {});",
+            node_ty_s,
+            var,
+            op,
+            access_chain,
+            args_v[n - noperand..].join(", ")
+        )
+        .unwrap();
     }
     fn gep_field_name(node: NodeRef, i: i32) -> String {
         let node_ty = node.type_();
@@ -545,6 +598,8 @@ impl<'a> FunctionEmitter<'a> {
             Func::Clamp => Some("lc_clamp"),
             Func::Saturate => Some("lc_saturate"),
             Func::Lerp => Some("lc_lerp"),
+            Func::Step => Some("lc_step"),
+            Func::SmoothStep => Some("lc_smoothstep"),
             _ => None,
         };
         if let Some(func) = func {
@@ -610,12 +665,11 @@ impl<'a> FunctionEmitter<'a> {
                 .unwrap();
                 true
             }
-            Func::BindlessBufferSize(t) => {
-                let buffer_ty = self.type_gen.gen_c_type(t);
+            Func::BindlessBufferSize => {
                 writeln!(
                     &mut self.body,
-                    "const {} {} = lc_bindless_buffer_size<{}>(k_args, {}, {});",
-                    node_ty_s, var, buffer_ty, args_v[0], args_v[1]
+                    "const {} {} = lc_bindless_buffer_size(k_args, {}, {}, {});",
+                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
                 )
                 .unwrap();
                 true
@@ -653,7 +707,7 @@ impl<'a> FunctionEmitter<'a> {
                     "const lc_float4 {} = lc_bindless_texture2d_read_level(k_args, {}, {}, {}, {});",
                     var, args_v[0], args_v[1], args_v[2], args_v[3]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::BindlessTexture3dReadLevel => {
@@ -662,7 +716,7 @@ impl<'a> FunctionEmitter<'a> {
                     "const lc_float4 {} = lc_bindless_texture3d_read_level(k_args, {}, {}, {}, {});",
                     var, args_v[0], args_v[1], args_v[2], args_v[3]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::BindlessTexture2dSample => {
@@ -689,7 +743,7 @@ impl<'a> FunctionEmitter<'a> {
                     "const lc_float4 {} = lc_bindless_texture2d_sample_level(k_args, {}, {}, {}, {});",
                     var, args_v[0], args_v[1], args_v[2], args_v[3]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::BindlessTexture3dSampleLevel => {
@@ -698,7 +752,7 @@ impl<'a> FunctionEmitter<'a> {
                     "const lc_float4 {} = lc_bindless_texture3d_sample_level(k_args, {}, {}, {}, {});",
                     var, args_v[0], args_v[1], args_v[2], args_v[3]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::BindlessTexture2dSampleGrad => {
@@ -707,7 +761,7 @@ impl<'a> FunctionEmitter<'a> {
                     "const lc_float4 {} = lc_bindless_texture2d_sample_grad(k_args, {}, {}, {}, {}, {});",
                     var, args_v[0], args_v[1], args_v[2], args_v[3], args_v[4]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::BindlessTexture3dSampleGrad => {
@@ -716,7 +770,7 @@ impl<'a> FunctionEmitter<'a> {
                     "const lc_float4 {} = lc_bindless_texture3d_sample_grad(k_args, {}, {}, {}, {}, {});",
                     var, args_v[0], args_v[1], args_v[2], args_v[3], args_v[4]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::BindlessTexture2dSize => {
@@ -815,6 +869,10 @@ impl<'a> FunctionEmitter<'a> {
                 let id = self.globals.message.len();
                 self.globals.message.push(msg);
                 writeln!(&mut self.body, "lc_assert({}, {});", args_v.join(", "), id).unwrap();
+                true
+            }
+            Func::ShaderExecutionReorder=> {
+                writeln!(&mut self.body, "lc_shader_execution_reorder({});", args_v.join(", ")).unwrap();
                 true
             }
             Func::Unreachable(msg) => {
@@ -1083,6 +1141,24 @@ impl<'a> FunctionEmitter<'a> {
                 }
                 true
             }
+            Func::Pack => {
+                writeln!(
+                    self.body,
+                    "lc_pack_to({}, {}, {});",
+                    args_v[0], args_v[1], args_v[2]
+                )
+                .unwrap();
+                true
+            }
+            Func::Unpack => {
+                writeln!(
+                    self.body,
+                    "const {} {} = lc_unpack_from({}, {});",
+                    node_ty_s, var, args_v[0], args_v[1]
+                )
+                .unwrap();
+                true
+            }
             Func::Permute => {
                 let indices: Vec<_> = args[1..].iter().map(|a| a.get_i32()).collect();
                 let indices_s: Vec<_> = indices
@@ -1101,83 +1177,46 @@ impl<'a> FunctionEmitter<'a> {
                 true
             }
             Func::AtomicExchange => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_exchange(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_exchange", 1);
                 true
             }
             Func::AtomicCompareExchange => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_compare_exchange(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4}, {5});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2], args_v[3]
-                ).unwrap();
+                self.atomic_chain_op(
+                    var,
+                    node_ty_s,
+                    args,
+                    args_v,
+                    "lc_atomic_compare_exchange",
+                    2,
+                );
                 true
             }
             Func::AtomicFetchAdd => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_fetch_add(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_fetch_add", 1);
                 true
             }
             Func::AtomicFetchSub => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_fetch_sub(lc_buffer_ref<{0}>({2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_fetch_sub", 1);
                 true
             }
             Func::AtomicFetchMin => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_fetch_min(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_fetch_min", 1);
                 true
             }
             Func::AtomicFetchMax => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_fetch_max(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_fetch_max", 1);
                 true
             }
             Func::AtomicFetchAnd => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_fetch_and(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_fetch_and", 1);
                 true
             }
             Func::AtomicFetchOr => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_fetch_or(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_fetch_or", 1);
                 true
             }
             Func::AtomicFetchXor => {
-                writeln!(
-                    self.body,
-                    "const {0} {1} = lc_atomic_fetch_xor(lc_buffer_ref<{0}>(k_args, {2}, {3}), {4});",
-                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
-                )
-                .unwrap();
+                self.atomic_chain_op(var, node_ty_s, args, args_v, "lc_atomic_fetch_xor", 1);
                 true
             }
             Func::CpuCustomOp(op) => {
@@ -1245,7 +1284,7 @@ impl<'a> FunctionEmitter<'a> {
                     "LC_RayQueryAll _{0} = lc_ray_query_all({1}, lc_bit_cast<Ray>({2}), {3});auto& {0} = _{0};",
                     var, args_v[0], args_v[1], args_v[2]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::RayTracingQueryAny => {
@@ -1254,7 +1293,7 @@ impl<'a> FunctionEmitter<'a> {
                     "LC_RayQueryAny _{0} = lc_ray_query_any({1}, lc_bit_cast<Ray>({2}), {3});auto& {0} = _{0};",
                     var, args_v[0], args_v[1], args_v[2]
                 )
-                .unwrap();
+                    .unwrap();
                 true
             }
             Func::RayQueryWorldSpaceRay => {
@@ -1334,6 +1373,12 @@ impl<'a> FunctionEmitter<'a> {
             Const::Bool(v) => {
                 writeln!(&mut self.body, "const bool {} = {};", var, *v).unwrap();
             }
+            Const::Int16(v) => {
+                writeln!(&mut self.body, "const int16_t {} = {};", var, *v).unwrap();
+            }
+            Const::Uint16(v) => {
+                writeln!(&mut self.body, "const uint16_t {} = {};", var, *v).unwrap();
+            }
             Const::Int32(v) => {
                 writeln!(&mut self.body, "const int32_t {} = {};", var, *v).unwrap();
             }
@@ -1345,6 +1390,15 @@ impl<'a> FunctionEmitter<'a> {
             }
             Const::Uint64(v) => {
                 writeln!(&mut self.body, "const uint64_t {} = {}ull;", var, *v).unwrap();
+            }
+            Const::Float16(v) => {
+                let bits = v.to_bits();
+                writeln!(
+                    &mut self.body,
+                    "const lc_half {} = lc_bit_cast<half>(uint16_t(0x{:04x})); // {}",
+                    var, bits, v
+                )
+                .unwrap();
             }
             Const::Float32(v) => {
                 writeln!(
@@ -1796,10 +1850,12 @@ impl<'a> FunctionEmitter<'a> {
 }
 
 pub struct CpuCodeGen;
+
 pub struct Generated {
     pub source: String,
     pub messages: Vec<String>,
 }
+
 impl CpuCodeGen {
     pub(crate) fn run(module: &ir::KernelModule) -> Generated {
         let mut globals = GlobalEmitter {

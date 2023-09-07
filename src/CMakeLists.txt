@@ -7,7 +7,7 @@ if (WIN32)
             WIN32_LEAN_AND_MEAN=1)
     set(CMAKE_SHARED_MODULE_PREFIX "") # for MinGW/Cygwin etc.
     if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-        add_compile_options(/wd4005)
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/wd4005>)
     endif ()
 endif ()
 
@@ -23,12 +23,12 @@ add_subdirectory(ext)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     target_compile_options(luisa-compute-include INTERFACE
-            /wd4068 # Maxwell loves custom pragmas
-            /wd5105 # winbase.h: macro expansion producing 'defined' has undefined behavior
+            $<$<COMPILE_LANGUAGE:C,CXX>:/wd4068> # Maxwell loves custom pragmas
+            $<$<COMPILE_LANGUAGE:C,CXX>:/wd5105> # winbase.h: macro expansion producing 'defined' has undefined behavior
             /Zc:preprocessor
             /Zc:__cplusplus)
 elseif (MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(luisa-compute-include INTERFACE /EHsc)
+    target_compile_options(luisa-compute-include INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:/EHsc>)
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     target_compile_options(luisa-compute-include INTERFACE
             -Wno-invalid-offsetof
@@ -43,8 +43,11 @@ add_subdirectory(rust)
 add_subdirectory(runtime)
 add_subdirectory(ir)
 add_subdirectory(dsl)
+add_subdirectory(tensor)
+add_subdirectory(osl)
 add_subdirectory(gui)
 add_subdirectory(backends)
+add_subdirectory(coro)
 
 add_library(compute INTERFACE)
 
@@ -53,11 +56,17 @@ target_link_libraries(compute INTERFACE
         luisa-compute-vstl
         luisa-compute-ast
         luisa-compute-dsl
+        luisa-compute-osl
         luisa-compute-runtime
         luisa-compute-gui
         luisa-compute-api
         luisa-compute-backends
-        luisa-compute-ir)
+        luisa-compute-ir
+        luisa-compute-coro)
+
+if (LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
+    target_link_libraries(compute INTERFACE luisa-compute-cuda-ext-lcub)
+endif ()
 
 add_library(luisa::compute ALIAS compute)
 

@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/6/30.
-//
-
 #pragma once
 
 #include <bitset>
@@ -88,10 +84,12 @@ enum struct CallOp : uint32_t {
     ANY,// (boolN)
 
     SELECT,  // (vecN, vecN, boolN)
-    CLAMP,   // (vecN, vecN,vecN)
+    CLAMP,   // (vecN, vecN, vecN)
     SATURATE,// (vecN)
-    LERP,    // (vecN, vecN,vecN)
-    STEP,    // (x, y): (x >= y) ? 1 : 0
+    LERP,    // (vecN, vecN, vecN)
+
+    SMOOTHSTEP,// (vecN, vecN, vecN)
+    STEP,      // (x, y): (x >= y) ? 1 : 0
 
     ABS,// (vecN)
     MIN,// (vecN)
@@ -171,9 +169,14 @@ enum struct CallOp : uint32_t {
     ATOMIC_FETCH_MIN,       /// [(atomic_ref, val) -> old]: stores min(old, val), returns old.
     ATOMIC_FETCH_MAX,       /// [(atomic_ref, val) -> old]: stores max(old, val), returns old.
 
-    BUFFER_READ,  /// [(buffer, index) -> value]: reads the index-th element in buffer
-    BUFFER_WRITE, /// [(buffer, index, value) -> void]: writes value into the index-th element of buffer
-    BUFFER_SIZE,  /// [(buffer) -> size]
+    BUFFER_READ, /// [(buffer, index) -> value]: reads the index-th element in buffer
+    BUFFER_WRITE,/// [(buffer, index, value) -> void]: writes value into the index-th element of buffer
+    BUFFER_SIZE, /// [(buffer) -> size]
+
+    BYTE_BUFFER_READ, /// [(buffer, byte_index) -> value]: reads the index-th element in buffer
+    BYTE_BUFFER_WRITE,/// [(buffer, byte_index, value) -> void]: writes value into the index-th element of buffer
+    BYTE_BUFFER_SIZE, /// [(buffer) -> size_bytes]
+
     TEXTURE_READ, /// [(texture, coord) -> value]
     TEXTURE_WRITE,/// [(texture, coord, value) -> void]
     TEXTURE_SIZE, /// [(texture) -> Vector<uint, dim>]
@@ -197,8 +200,9 @@ enum struct CallOp : uint32_t {
 
     BINDLESS_BUFFER_READ,             // (bindless_array, index: uint, elem_index: uint): expr->type()
     BINDLESS_BYTE_ADDRESS_BUFFER_READ,// (bindless_array, index: uint, offset_bytes: uint): expr->type()
-    BINDLESS_BUFFER_SIZE,             // (bindless_array, index: uint) -> size
-    BINDLESS_BUFFER_TYPE,             // (bindless_array, index: uint) -> type
+    BINDLESS_BUFFER_SIZE,             // (bindless_array, index: uint, stride: uint) -> size
+    BINDLESS_BUFFER_TYPE,             // (bindless_array, index: uint) -> uint64 (type id of the element); the returned value
+                                      // could be compared with the value of a TypeIDExpr to examine the type of the buffer
 
     MAKE_BOOL2, // (bool, bool2)
     MAKE_BOOL3, // (bool, bool3)
@@ -228,10 +232,16 @@ enum struct CallOp : uint32_t {
     MAKE_HALF2,  // (scalar, vec2)
     MAKE_HALF3,  // (scalar, vec3)
     MAKE_HALF4,  // (scalar, vec4)
+    MAKE_DOUBLE2,// (scalar, vec2)
+    MAKE_DOUBLE3,// (scalar, vec3)
+    MAKE_DOUBLE4,// (scalar, vec4)
 
     MAKE_FLOAT2X2,// (float2x2) / (float3x3) / (float4x4)
     MAKE_FLOAT3X3,// (float2x2) / (float3x3) / (float4x4)
     MAKE_FLOAT4X4,// (float2x2) / (float3x3) / (float4x4)
+
+    // debugging
+    ASSERT,// (bool) -> void
 
     // optimization hints
     ASSUME,     // ()
@@ -240,6 +250,10 @@ enum struct CallOp : uint32_t {
     // used by the IR module
     ZERO,
     ONE,
+
+    // Pack/unpack to array<uint, ceil(sizeof(T)/4))
+    PACK,  // (T) -> array<uint, ceil(sizeof(T)/4))
+    UNPACK,// (array<uint, ceil(sizeof(T)/4)) -> T
 
     // autodiff ops
     REQUIRES_GRADIENT,  // (expr) -> void
@@ -279,26 +293,50 @@ enum struct CallOp : uint32_t {
     DDX,// (arg: float vector): float vector
     DDY,// (arg: float vector): float vector
 
+    // Wave:
+    WARP_IS_FIRST_ACTIVE_LANE,  // (): bool
+    WARP_FIRST_ACTIVE_LANE,     // (): uint
+    WARP_ACTIVE_ALL_EQUAL,      // (scalar/vector): boolN
+    WARP_ACTIVE_BIT_AND,        // (intN): intN
+    WARP_ACTIVE_BIT_OR,         // (intN): intN
+    WARP_ACTIVE_BIT_XOR,        // (intN): intN
+    WARP_ACTIVE_COUNT_BITS,     // (bool): uint
+    WARP_ACTIVE_MAX,            // (type: scalar/vector): type
+    WARP_ACTIVE_MIN,            // (type: scalar/vector): type
+    WARP_ACTIVE_PRODUCT,        // (type: scalar/vector): type
+    WARP_ACTIVE_SUM,            // (type: scalar/vector): type
+    WARP_ACTIVE_ALL,            // (bool): bool
+    WARP_ACTIVE_ANY,            // (bool): bool
+    WARP_ACTIVE_BIT_MASK,       // (bool): uint4 (uint4 contained 128-bit)
+    WARP_PREFIX_COUNT_BITS,     // (bool): uint (count bits before this lane)
+    WARP_PREFIX_SUM,            // (type: scalar/vector): type (sum lanes before this lane)
+    WARP_PREFIX_PRODUCT,        // (type: scalar/vector): type (multiply lanes before this lane)
+    WARP_READ_LANE,             // (type: scalar/vector/matrix, index: uint): type (read this variable's value at this lane)
+    WARP_READ_FIRST_ACTIVE_LANE,// (type: scalar/vector/matrix, index: uint): type (read this variable's value at the first lane)
+
     // indirect
     INDIRECT_CLEAR_DISPATCH_BUFFER,  // (Buffer): void
+    INDIRECT_SET_DISPATCH_KERNEL,    // (Buffer, uint offset, uint3 block_size, uint3 dispatch_size, uint kernel_id)
     INDIRECT_EMPLACE_DISPATCH_KERNEL,// (Buffer, uint3 block_size, uint3 dispatch_size, uint kernel_id)
 
+    // SER
+    SHADER_EXECUTION_REORDER,// (uint hint, uint hint_bits): void
 };
 
-static constexpr size_t call_op_count = to_underlying(CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL) + 1u;
+static constexpr size_t call_op_count = to_underlying(CallOp::SHADER_EXECUTION_REORDER) + 1u;
 
 [[nodiscard]] constexpr auto is_atomic_operation(CallOp op) noexcept {
-    auto op_value = luisa::to_underlying(op) ;
+    auto op_value = luisa::to_underlying(op);
     return op_value >= luisa::to_underlying(CallOp::ATOMIC_EXCHANGE) && op_value <= luisa::to_underlying(CallOp::ATOMIC_FETCH_MAX);
 }
 
 [[nodiscard]] constexpr auto is_autodiff_operation(CallOp op) noexcept {
-    auto op_value = luisa::to_underlying(op) ;
+    auto op_value = luisa::to_underlying(op);
     return op_value >= luisa::to_underlying(CallOp::REQUIRES_GRADIENT) && op_value <= luisa::to_underlying(CallOp::DETACH);
 }
 
 [[nodiscard]] constexpr auto is_vector_maker(CallOp op) noexcept {
-    auto op_value = luisa::to_underlying(op) ;
+    auto op_value = luisa::to_underlying(op);
     return op_value >= luisa::to_underlying(CallOp::MAKE_BOOL2) && op_value <= luisa::to_underlying(CallOp::MAKE_FLOAT4);
 }
 
@@ -311,8 +349,9 @@ static constexpr size_t call_op_count = to_underlying(CallOp::INDIRECT_EMPLACE_D
  * @brief Set of call operations.
  * 
  */
+class CallableLibrary;
 class LC_AST_API CallOpSet {
-
+    friend class CallableLibrary;
 public:
     using Bitset = std::bitset<call_op_count>;
 

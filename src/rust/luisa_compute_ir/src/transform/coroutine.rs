@@ -355,6 +355,12 @@ impl CoroutineImpl {
                 //builder.suspend(suspend_id)
                 
             }
+            Instruction::CoroSplitMark { .. }
+            | Instruction::CoroSuspend { .. }
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroFrame { .. } => {
+                todo!()
+            }
         }
     }
     fn promote_bb(

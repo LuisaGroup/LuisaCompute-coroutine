@@ -1,4 +1,3 @@
-
 #include <Resource/RenderTexture.h>
 #include <Resource/DescriptorHeap.h>
 namespace lc::dx {
@@ -37,7 +36,7 @@ RenderTexture::RenderTexture(
             byteSize,
             &heap,
             &offset,
-            true);
+            allowUav);
         ThrowIfFailed(device->device->CreatePlacedResource(
             heap,
             offset,

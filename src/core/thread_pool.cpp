@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/12/23.
-//
-
 #include <version>
 #include <sstream>
 #include <thread>
@@ -168,6 +164,11 @@ uint ThreadPool::worker_thread_index() noexcept {
                  "ThreadPool::worker_thread_index() "
                  "called in non-worker thread.");
     return detail::worker_thread_index();
+}
+
+ThreadPool &global_thread_pool() noexcept {
+    static ThreadPool pool{std::thread::hardware_concurrency()};
+    return pool;
 }
 
 }// namespace luisa

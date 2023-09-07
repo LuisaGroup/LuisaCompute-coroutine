@@ -1,7 +1,3 @@
-//
-// Created by Mike on 2021/11/8.
-//
-
 #pragma once
 
 #include <luisa/ast/function.h>
@@ -50,6 +46,7 @@ private:
     void visit(const RefExpr *expr) override;
     void visit(const CallExpr *expr) override;
     void visit(const CastExpr *expr) override;
+    void visit(const TypeIDExpr *expr) override;
     void visit(const BreakStmt *stmt) override;
     void visit(const ContinueStmt *stmt) override;
     void visit(const ReturnStmt *stmt) override;

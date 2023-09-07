@@ -21,6 +21,7 @@ use crate::{
 use crate::{CArc, Pooled};
 
 use super::Transform;
+
 // Simple backward autodiff
 // Loop is not supported since users would use path replay[https://rgl.epfl.ch/publications/Vicini2021PathReplay] anyway
 struct GradTypeRecord {
@@ -81,6 +82,7 @@ fn _grad_type_of(type_: CArc<Type>) -> Option<GradTypeRecord> {
             crate::ir::Primitive::Uint32 => None,
             crate::ir::Primitive::Int64 => None,
             crate::ir::Primitive::Uint64 => None,
+            crate::ir::Primitive::Float16 => todo!(),
             crate::ir::Primitive::Float32 => Some(GradTypeRecord {
                 grad_type: context::register_type(Type::Primitive(crate::ir::Primitive::Float32)),
                 primal_field_to_grad_field: HashMap::new(),
@@ -915,6 +917,7 @@ impl Backward {
     fn fp_constant(&mut self, t: CArc<Type>, x: f64, builder: &mut IrBuilder) -> NodeRef {
         return match t.deref() {
             Type::Primitive(p) => match p {
+                Primitive::Float16 => todo!(),
                 Primitive::Float32 => builder.const_(Const::Float32(x as f32)),
                 Primitive::Float64 => builder.const_(Const::Float64(x)),
                 _ => panic!("fp_constant: invalid type: {:?}", t),
@@ -1732,6 +1735,10 @@ impl Backward {
             crate::ir::Instruction::Return(_) => {
                 panic!("should not have return in autodiff section")
             }
+            Instruction::CoroSplitMark { .. }
+            | Instruction::CoroSuspend { .. }
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroFrame { .. } => {}
         }
     }
     fn backward_block(&mut self, block: &BasicBlock, mut builder: IrBuilder) -> Pooled<BasicBlock> {
@@ -1761,13 +1768,14 @@ impl Backward {
             if grad.is_local() {
                 grad = builder.call(Func::Load, &[grad], grad.type_().clone());
             }
-            builder.call(Func::GradientMarker, &[n, grad], n.type_().clone());
+            builder.call(Func::GradientMarker, &[n, grad], Type::void());
         }
         builder.finish()
     }
 }
 
 pub struct Autodiff;
+
 fn ad_transform_block(module: crate::ir::Module) -> crate::ir::Module {
     assert!(
         module.kind == crate::ir::ModuleKind::Block,
@@ -1810,6 +1818,7 @@ fn ad_transform_block(module: crate::ir::Module) -> crate::ir::Module {
         pools: module.pools,
     }
 }
+
 fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) {
     for node in block.iter() {
         match node.get().instruction.as_ref() {
@@ -1879,6 +1888,7 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
         }
     }
 }
+
 impl Transform for Autodiff {
     fn transform_module(&self, module: crate::ir::Module) -> crate::ir::Module {
         ad_transform_recursive(module.entry, &module.pools);

@@ -1,12 +1,6 @@
-//
-// Created by Mike Smith on 2021/12/23.
-//
-
 #pragma once
 
-#include <mutex>
 #include <future>
-#include <concepts>
 
 #include <luisa/core/stl/functional.h>
 #include <luisa/core/stl/memory.h>
@@ -106,6 +100,8 @@ public:
         });
     }
 };
+
+LC_CORE_API ThreadPool &global_thread_pool() noexcept;
 
 }// namespace luisa
 

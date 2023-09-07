@@ -78,10 +78,13 @@ impl Validator {
                     Const::Zero(t) => t.clone(),
                     Const::One(t) => t.clone(),
                     Const::Bool(_) => <bool as TypeOf>::type_(),
+                    Const::Int16(_) => <i16 as TypeOf>::type_(),
+                    Const::Uint16(_) => <u16 as TypeOf>::type_(),
                     Const::Int32(_) => <i32 as TypeOf>::type_(),
                     Const::Uint32(_) => <u32 as TypeOf>::type_(),
                     Const::Int64(_) => <i64 as TypeOf>::type_(),
                     Const::Uint64(_) => <u64 as TypeOf>::type_(),
+                    Const::Float16(_) => <f16 as TypeOf>::type_(),
                     Const::Float32(_) => <f32 as TypeOf>::type_(),
                     Const::Float64(_) => <f64 as TypeOf>::type_(),
                     Const::Generic(_, t) => t.clone(),
@@ -526,6 +529,12 @@ impl Validator {
                 assert!(is_type_equal(&type_, &Type::void()));
             }
             crate::ir::Instruction::AssertWithBacktrace { .. } => {}
+            Instruction::CoroSplitMark { token, .. }
+            | Instruction::CoroSuspend { token, .. }
+            | Instruction::CoroResume { token, .. }
+            | Instruction::CoroFrame { token, .. } => {
+                assert!(token < &u32::MAX, "Invalid frame token");
+            }
         }
     }
     fn validate(&mut self, module: &Module) {

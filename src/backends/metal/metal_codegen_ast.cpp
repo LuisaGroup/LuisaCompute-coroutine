@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/4/15.
-//
-
 #include <luisa/core/logging.h>
 #include <luisa/core/magic_enum.h>
 #include <luisa/runtime/rtx/ray.h>
@@ -31,12 +27,29 @@ public:
             _s << v << "f";
         }
     }
+    void operator()(double v) const noexcept {
+        if (std::isnan(v)) [[unlikely]] { LUISA_ERROR_WITH_LOCATION("Encountered with NaN."); }
+        if (std::isinf(v)) {
+            _s << (v < 0.0 ? "double(-INFINITY)" : "double(+INFINITY)");
+        } else {
+            _s << v;
+        }
+        LUISA_ERROR_WITH_LOCATION("Double literals are not supported.");
+    }
     void operator()(half v) const noexcept {
         if (luisa::isnan(v)) [[unlikely]] { LUISA_ERROR_WITH_LOCATION("Encountered with NaN."); }
-        _s << luisa::format("as_type<half>(ushort({}))", luisa::bit_cast<ushort>(v));
+        if (luisa::isinf(v)) {
+            _s << (v < 0.0f ? "half(-INFINITY)" : "half(+INFINITY)");
+        } else {
+            _s << static_cast<float>(v) << "h";
+        }
     }
     void operator()(int v) const noexcept { _s << v; }
     void operator()(uint v) const noexcept { _s << v << "u"; }
+    void operator()(short v) const noexcept { _s << luisa::format("ushort({})", v); }
+    void operator()(ushort v) const noexcept { _s << luisa::format("short({})", v); }
+    void operator()(slong v) const noexcept { _s << luisa::format("{}ll", v); }
+    void operator()(ulong v) const noexcept { _s << luisa::format("{}ull", v); }
 
     template<typename T, size_t N>
     void operator()(Vector<T, N> v) const noexcept {
@@ -246,6 +259,7 @@ void MetalCodegenAST::_emit_type_name(const Type *type, Usage usage) noexcept {
         case Type::Tag::BOOL: _scratch << "bool"; break;
         case Type::Tag::FLOAT16: _scratch << "half"; break;
         case Type::Tag::FLOAT32: _scratch << "float"; break;
+        case Type::Tag::FLOAT64: _scratch << "double"; break;
         case Type::Tag::INT16: _scratch << "short"; break;
         case Type::Tag::UINT16: _scratch << "ushort"; break;
         case Type::Tag::INT32: _scratch << "int"; break;
@@ -285,7 +299,11 @@ void MetalCodegenAST::_emit_type_name(const Type *type, Usage usage) noexcept {
         case Type::Tag::BUFFER:
             _scratch << "LCBuffer<";
             if (usage == Usage::NONE || usage == Usage::READ) { _scratch << "const "; }
-            _emit_type_name(type->element());
+            if (auto elem = type->element()) {
+                _emit_type_name(type->element());
+            } else {
+                _scratch << "lc_byte";
+            }
             _scratch << ">";
             break;
         case Type::Tag::TEXTURE: {
@@ -341,7 +359,9 @@ void MetalCodegenAST::_emit_variable_name(Variable v) noexcept {
         case Variable::Tag::DISPATCH_ID: _scratch << "did"; break;
         case Variable::Tag::DISPATCH_SIZE: _scratch << "ds"; break;
         case Variable::Tag::KERNEL_ID: _scratch << "kid"; break;
-        default: LUISA_ERROR_WITH_LOCATION("Not implemented.");
+        case Variable::Tag::WARP_LANE_COUNT: _scratch << "ws"; break;
+        case Variable::Tag::WARP_LANE_ID: _scratch << "lid"; break;
+        case Variable::Tag::OBJECT_ID: LUISA_NOT_IMPLEMENTED();
     }
 }
 
@@ -558,17 +578,24 @@ protected:
     void _decode_uint(uint x) noexcept override { _codegen->_scratch << luisa::format("uint({})", x); }
     void _decode_long(slong x) noexcept override { _codegen->_scratch << luisa::format("long({})", x); }
     void _decode_ulong(ulong x) noexcept override { _codegen->_scratch << luisa::format("ulong({})", x); }
-    void _decode_half(half x) noexcept override {
-        detail::LiteralPrinter p{_codegen->_scratch};
-        p(x);
-    }
     void _decode_float(float x) noexcept override {
         _codegen->_scratch << "float(";
         detail::LiteralPrinter p{_codegen->_scratch};
         p(x);
         _codegen->_scratch << ")";
     }
-    void _decode_double(double x) noexcept override { _codegen->_scratch << luisa::format("double({})", x); }
+    void _decode_half(half x) noexcept override {
+        _codegen->_scratch << "half(";
+        detail::LiteralPrinter p{_codegen->_scratch};
+        p(x);
+        _codegen->_scratch << ")";
+    }
+    void _decode_double(double x) noexcept override {
+        _codegen->_scratch << "double(";
+        detail::LiteralPrinter p{_codegen->_scratch};
+        p(x);
+        _codegen->_scratch << ")";
+    }
     void _vector_separator(const Type *type, uint index) noexcept override {
         auto n = type->dimension();
         if (index == 0u) {
@@ -832,6 +859,7 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::SATURATE: _scratch << "saturate"; break;
         case CallOp::LERP: _scratch << "mix"; break;
         case CallOp::STEP: _scratch << "step"; break;
+        case CallOp::SMOOTHSTEP: _scratch << "smoothstep"; break;
         case CallOp::ABS: _scratch << "abs"; break;
         case CallOp::MIN: _scratch << "min"; break;
         case CallOp::MAX: _scratch << "max"; break;
@@ -893,6 +921,9 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::BUFFER_READ: _scratch << "buffer_read"; break;
         case CallOp::BUFFER_WRITE: _scratch << "buffer_write"; break;
         case CallOp::BUFFER_SIZE: _scratch << "buffer_size"; break;
+        case CallOp::BYTE_BUFFER_READ: _scratch << "byte_buffer_read"; break;
+        case CallOp::BYTE_BUFFER_WRITE: _scratch << "byte_buffer_write"; break;
+        case CallOp::BYTE_BUFFER_SIZE: _scratch << "byte_buffer_size"; break;
         case CallOp::TEXTURE_READ: _scratch << "texture_read"; break;
         case CallOp::TEXTURE_WRITE: _scratch << "texture_write"; break;
         case CallOp::TEXTURE_SIZE: _scratch << "texture_size"; break;
@@ -919,16 +950,13 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
             break;
         }
         case CallOp::BINDLESS_BYTE_ADDRESS_BUFFER_READ: {
-            LUISA_ERROR("Not Implemented.");
-            break;
-        }
-        case CallOp::BINDLESS_BUFFER_SIZE: {
-            _scratch << "bindless_buffer_size<";
+            _scratch << "bindless_byte_address_buffer_read<";
             _emit_type_name(expr->type());
             _scratch << ">";
             break;
         }
-        case CallOp::BINDLESS_BUFFER_TYPE: LUISA_ERROR_WITH_LOCATION("Not implemented."); break;
+        case CallOp::BINDLESS_BUFFER_SIZE: _scratch << "bindless_buffer_size"; break;
+        case CallOp::BINDLESS_BUFFER_TYPE: _scratch << "bindless_buffer_type"; break;
 #define LUISA_CUDA_CODEGEN_MAKE_VECTOR_CALL(type, tag)        \
     case CallOp::MAKE_##tag##2: _scratch << #type "2"; break; \
     case CallOp::MAKE_##tag##3: _scratch << #type "3"; break; \
@@ -942,10 +970,12 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
             LUISA_CUDA_CODEGEN_MAKE_VECTOR_CALL(ulong, ULONG)
             LUISA_CUDA_CODEGEN_MAKE_VECTOR_CALL(float, FLOAT)
             LUISA_CUDA_CODEGEN_MAKE_VECTOR_CALL(half, HALF)
+            LUISA_CUDA_CODEGEN_MAKE_VECTOR_CALL(double, DOUBLE)
 #undef LUISA_CUDA_CODEGEN_MAKE_VECTOR_CALL
         case CallOp::MAKE_FLOAT2X2: _scratch << "float2x2"; break;
         case CallOp::MAKE_FLOAT3X3: _scratch << "float3x3"; break;
         case CallOp::MAKE_FLOAT4X4: _scratch << "float4x4"; break;
+        case CallOp::ASSERT: _scratch << "lc_assert"; break;
         case CallOp::ASSUME: _scratch << "lc_assume"; break;
         case CallOp::UNREACHABLE: {
             _scratch << "lc_unreachable";
@@ -964,6 +994,13 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         }
         case CallOp::ONE: {
             _scratch << "lc_one<";
+            _emit_type_name(expr->type());
+            _scratch << ">";
+            break;
+        }
+        case CallOp::PACK: _scratch << "lc_pack"; break;
+        case CallOp::UNPACK: {
+            _scratch << "lc_unpack<";
             _emit_type_name(expr->type());
             _scratch << ">";
             break;
@@ -993,18 +1030,40 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::GRADIENT: _scratch << "LC_GRAD"; break;
         case CallOp::GRADIENT_MARKER: _scratch << "LC_MARK_GRAD"; break;
         case CallOp::ACCUMULATE_GRADIENT: _scratch << "LC_ACCUM_GRAD"; break;
-        case CallOp::BACKWARD: LUISA_ERROR_WITH_LOCATION("Not implemented."); break;
+        case CallOp::BACKWARD: LUISA_NOT_IMPLEMENTED(); break;
         case CallOp::DETACH: {
             _scratch << "static_cast<";
             _emit_type_name(expr->type());
             _scratch << ">";
             break;
         }
-        case CallOp::RASTER_DISCARD: LUISA_ERROR_WITH_LOCATION("Not implemented."); break;
+        case CallOp::RASTER_DISCARD: LUISA_NOT_IMPLEMENTED(); break;
         case CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER: _scratch << "lc_indirect_dispatch_clear"; break;
         case CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL: _scratch << "lc_indirect_dispatch_emplace"; break;
-        case CallOp::DDX: LUISA_ERROR_WITH_LOCATION("Not implemented."); break;
-        case CallOp::DDY: LUISA_ERROR_WITH_LOCATION("Not implemented."); break;
+        case CallOp::INDIRECT_SET_DISPATCH_KERNEL: LUISA_NOT_IMPLEMENTED(); break;
+        case CallOp::DDX: LUISA_NOT_IMPLEMENTED(); break;
+        case CallOp::DDY: LUISA_NOT_IMPLEMENTED(); break;
+
+        case CallOp::WARP_IS_FIRST_ACTIVE_LANE: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_ALL_EQUAL: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_BIT_AND: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_BIT_OR: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_BIT_XOR: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_COUNT_BITS: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_MAX: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_MIN: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_PRODUCT: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_SUM: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_ALL: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_ANY: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_ACTIVE_BIT_MASK: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_PREFIX_COUNT_BITS: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_PREFIX_SUM: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_PREFIX_PRODUCT: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_READ_LANE: LUISA_NOT_IMPLEMENTED();
+        case CallOp::WARP_READ_FIRST_ACTIVE_LANE: LUISA_NOT_IMPLEMENTED();
+
+        case CallOp::SHADER_EXECUTION_REORDER: _scratch << "lc_shader_execution_reorder"; break;
     }
     _scratch << "(";
     if (auto op = expr->op(); is_atomic_operation(op)) {
@@ -1036,6 +1095,13 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         }
     }
     _scratch << ")";
+}
+
+void MetalCodegenAST::visit(const TypeIDExpr *expr) noexcept {
+    _scratch << "static_cast<";
+    _emit_type_name(expr->type());
+    _scratch << ">(0ull)";
+    // TODO: use expr->data_type() to generate correct type
 }
 
 void MetalCodegenAST::visit(const CastExpr *expr) noexcept {

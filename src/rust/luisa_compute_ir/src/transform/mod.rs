@@ -1,24 +1,30 @@
 pub mod autodiff;
+pub mod canonicalize_control_flow;
 pub mod coroutine;
-pub mod lower_control_flow;
 pub mod ssa;
 // pub mod validate;
 pub mod vectorize;
 pub mod eval;
+
+pub mod ref2ret;
+pub mod reg2mem;
+
+pub mod split;
+
 use crate::ir::{self, CallableModule, Module, KernelModule};
 
 pub trait Transform {
-    fn transform_module(&self, module: Module)-> Module{
+    fn transform_module(&self, module: Module) -> Module {
         panic!("transform module not implemented")
     }
-    fn transform_callable(&self, module: CallableModule)->CallableModule{
-        CallableModule{
+    fn transform_callable(&self, module: CallableModule) -> CallableModule {
+        CallableModule {
             module: self.transform_module(module.module),
             ..module
         }
     }
-    fn transform_kernel(&self, kernel: KernelModule)->KernelModule{
-        KernelModule{
+    fn transform_kernel(&self, kernel: KernelModule) -> KernelModule {
+        KernelModule {
             module: self.transform_module(kernel.module),
             ..kernel
         }
@@ -28,6 +34,7 @@ pub trait Transform {
 pub struct TransformPipeline {
     transforms: Vec<Box<dyn Transform>>,
 }
+
 impl TransformPipeline {
     pub fn new() -> Self {
         Self {
@@ -38,6 +45,7 @@ impl TransformPipeline {
         self.transforms.push(transform);
     }
 }
+
 impl Transform for TransformPipeline {
     fn transform_module(&self, module: Module) -> Module {
         let mut module = module;
@@ -81,10 +89,10 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = ssa::ToSSA;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
-        // "lower_control_flow"=>{
-        //     let transform = lower_control_flow::LowerControlFlow::new();
-        //     unsafe { (*pipeline).add_transform(Box::new(transform)) };
-        // }
+        "canonicalize_control_flow" => {
+            let transform = canonicalize_control_flow::CanonicalizeControlFlow;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
         // "vectorize"=>{
         //     let transform = vectorize::Vectorize::new();
         //     unsafe { (*pipeline).add_transform(Box::new(transform)) };
@@ -93,7 +101,15 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = autodiff::Autodiff;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
-        "coroutine"=>{
+        "ref2ret" => {
+            let transform = ref2ret::Ref2Ret;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "reg2mem" => {
+            let transform = reg2mem::Reg2Mem;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "coroutine" => {
             let transform = coroutine::Coroutine;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
@@ -108,6 +124,7 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_module(
 ) -> Module {
     unsafe { (*pipeline).transform_module(module) }
 }
+
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_callable(
     pipeline: *mut TransformPipeline,
@@ -115,6 +132,7 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_callable(
 ) -> CallableModule {
     unsafe { (*pipeline).transform_callable(module) }
 }
+
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_kernel(
     pipeline: *mut TransformPipeline,

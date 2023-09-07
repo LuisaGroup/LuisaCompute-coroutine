@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2020/12/2.
-//
-
 #pragma once
 
 #ifdef LUISA_ENABLE_IR
@@ -9,6 +5,7 @@
 #endif
 #include <luisa/ast/type_registry.h>
 #include <luisa/runtime/rhi/device_interface.h>
+#include <luisa/core/thread_pool.h>
 
 namespace luisa {
 class BinaryIO;
@@ -29,6 +26,10 @@ class BindlessArray;
 class IndirectDispatchBuffer;
 class SparseBufferHeap;
 class SparseTextureHeap;
+class ByteBuffer;
+
+template<typename T>
+class SOA;
 
 template<typename T>
 class Buffer;
@@ -122,6 +123,7 @@ public:
     [[nodiscard]] auto backend_name() const noexcept { return _impl->backend_name(); }
     // The backend implementation, can be used by other frontend language
     [[nodiscard]] auto impl() const noexcept { return _impl.get(); }
+    [[nodiscard]] auto compute_warp_size() const noexcept {return _impl->compute_warp_size(); }
     // Is device initialized
     [[nodiscard]] explicit operator bool() const noexcept { return static_cast<bool>(_impl); }
     // backend native plugins & extensions interface
@@ -144,6 +146,12 @@ public:
     // see definition in rtx/mesh.h
     template<typename VBuffer, typename TBuffer>
     [[nodiscard]] Mesh create_mesh(VBuffer &&vertices,
+                                   TBuffer &&triangles,
+                                   const AccelOption &option = {}) noexcept;
+
+    template<typename VBuffer, typename TBuffer>
+    [[nodiscard]] Mesh create_mesh(VBuffer &&vertices,
+                                   size_t vertex_stride,
                                    TBuffer &&triangles,
                                    const AccelOption &option = {}) noexcept;
     // see definition in rtx/procedural_primitive.h
@@ -197,14 +205,22 @@ public:
         return _create<SparseVolume<T>>(pixel, size, mip_levels, simultaneous_access);
     }
 
-    [[nodiscard]] SparseBufferHeap allocate_sparse_buffer_heap(size_t byte_size);
+    [[nodiscard]] SparseBufferHeap allocate_sparse_buffer_heap(size_t byte_size) noexcept;
 
-    [[nodiscard]] SparseTextureHeap allocate_sparse_texture_heap(size_t byte_size);
+    [[nodiscard]] SparseTextureHeap allocate_sparse_texture_heap(size_t byte_size, bool is_compressed_type) noexcept;
+
+    [[nodiscard]] ByteBuffer create_byte_buffer(size_t byte_size) noexcept;
 
     template<typename T>
         requires(!is_internal_custom_struct_v<T>)//backend-specific type not allowed
     [[nodiscard]] auto create_buffer(size_t size) noexcept {
         return _create<Buffer<T>>(size);
+    }
+
+    template<typename T>
+        requires(!is_internal_custom_struct_v<T>)//backend-specific type not allowed
+    [[nodiscard]] auto create_soa(size_t size) noexcept {
+        return SOA<T>{*this, size};
     }
 
     template<typename T>
@@ -243,6 +259,24 @@ public:
         } else {
             return compile(Kernel3D{std::forward<Func>(f)}, option);
         }
+    }
+
+    template<uint dim, typename Func>
+    [[nodiscard]] auto compile_async(Func &&f) noexcept {
+        auto kernel = [&] {
+            if constexpr (dim == 1u) {
+                return Kernel1D{f};
+            } else if constexpr (dim == 2u) {
+                return Kernel2D{f};
+            } else if constexpr (dim == 3u) {
+                return Kernel3D{f};
+            } else {
+                static_assert(always_false_v<Func>, "Invalid dimension.");
+            }
+        }();
+        return global_thread_pool().async([&] {
+            return compile(kernel);
+        });
     }
 
     template<size_t N, typename Kernel>

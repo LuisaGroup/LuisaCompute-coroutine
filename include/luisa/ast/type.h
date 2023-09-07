@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/2/6.
-//
-
 #pragma once
 
 #include <luisa/core/stl/vector.h>
@@ -137,6 +133,16 @@ struct canonical_layout<float> {
 };
 
 template<>
+struct canonical_layout<half> {
+    using type = std::tuple<half>;
+};
+
+template<>
+struct canonical_layout<double> {
+    using type = std::tuple<double>;
+};
+
+template<>
 struct canonical_layout<bool> {
     using type = std::tuple<bool>;
 };
@@ -149,6 +155,26 @@ struct canonical_layout<int> {
 template<>
 struct canonical_layout<uint> {
     using type = std::tuple<uint>;
+};
+
+template<>
+struct canonical_layout<short> {
+    using type = std::tuple<short>;
+};
+
+template<>
+struct canonical_layout<ushort> {
+    using type = std::tuple<ushort>;
+};
+
+template<>
+struct canonical_layout<slong> {
+    using type = std::tuple<slong>;
+};
+
+template<>
+struct canonical_layout<ulong> {
+    using type = std::tuple<ulong>;
 };
 
 template<typename T>
@@ -256,14 +282,15 @@ public:
     /// Type tags
     enum struct Tag : uint32_t {
         BOOL,
-        FLOAT32,
+        INT16,
+        UINT16,
         INT32,
         UINT32,
         INT64,
         UINT64,
         FLOAT16,
-        INT16,
-        UINT16,
+        FLOAT32,
+        FLOAT64,
 
         VECTOR,
         MATRIX,
@@ -418,8 +445,8 @@ public:
     [[nodiscard]] bool is_texture() const noexcept;
     [[nodiscard]] bool is_bindless_array() const noexcept;
     [[nodiscard]] bool is_accel() const noexcept;
-    [[nodiscard]] bool is_custom() const noexcept;
     [[nodiscard]] bool is_resource() const noexcept;
+    [[nodiscard]] bool is_custom() const noexcept;
 };
 
 }// namespace luisa::compute

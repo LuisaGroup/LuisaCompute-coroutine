@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2023/6/22.
-//
-
 #pragma once
 
 #include <luisa/runtime/rhi/resource.h>
@@ -15,6 +11,9 @@ struct PinnedMemoryOption {
 };
 
 class PinnedMemoryExt : public DeviceExtension {
+
+public:
+    static constexpr luisa::string_view name = "PinnedMemoryExt";
 
 protected:
     [[nodiscard]] virtual BufferCreationInfo _pin_host_memory(

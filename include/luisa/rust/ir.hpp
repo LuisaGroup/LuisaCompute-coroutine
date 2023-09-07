@@ -27,6 +27,7 @@ enum class Primitive {
     Uint32,
     Int64,
     Uint64,
+    Float16,
     Float32,
     Float64,
 };
@@ -59,6 +60,12 @@ struct CBoxedSlice {
     T *ptr;
     size_t len;
     void (*destructor)(T*, size_t);
+};
+
+struct Module {
+    ModuleKind kind;
+    Pooled<BasicBlock> entry;
+    CArc<ModulePools> pools;
 };
 
 struct VectorElementType {
@@ -150,12 +157,6 @@ struct Type {
     };
 };
 
-struct Module {
-    ModuleKind kind;
-    Pooled<BasicBlock> entry;
-    CArc<ModulePools> pools;
-};
-
 struct BufferBinding {
     uint64_t handle;
     uint64_t offset;
@@ -226,7 +227,6 @@ struct CallableModule {
     CArc<Type> ret_type;
     CBoxedSlice<NodeRef> args;
     CBoxedSlice<Capture> captures;
-    CBoxedSlice<CallableModuleRef> callables;
     CBoxedSlice<CallableModuleRef> subroutines;
     CBoxedSlice<uint32_t> subroutine_ids;
     CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
@@ -276,6 +276,8 @@ struct Func {
         Load,
         Cast,
         Bitcast,
+        Pack,
+        Unpack,
         Add,
         Sub,
         Mul,
@@ -304,6 +306,7 @@ struct Func {
         Clamp,
         Lerp,
         Step,
+        SmoothStep,
         Saturate,
         Abs,
         Min,
@@ -360,23 +363,23 @@ struct Func {
         Transpose,
         Inverse,
         SynchronizeBlock,
-        /// (buffer/smem, index, desired) -> old: stores desired, returns old.
+        /// (buffer/smem, indices..., desired) -> old: stores desired, returns old.
         AtomicExchange,
-        /// (buffer/smem, index, expected, desired) -> old: stores (old == expected ? desired : old), returns old.
+        /// (buffer/smem, indices..., expected, desired) -> old: stores (old == expected ? desired : old), returns old.
         AtomicCompareExchange,
-        /// (buffer/smem, index, val) -> old: stores (old + val), returns old.
+        /// (buffer/smem, indices..., val) -> old: stores (old + val), returns old.
         AtomicFetchAdd,
-        /// (buffer/smem, index, val) -> old: stores (old - val), returns old.
+        /// (buffer/smem, indices..., val) -> old: stores (old - val), returns old.
         AtomicFetchSub,
-        /// (buffer/smem, index, val) -> old: stores (old & val), returns old.
+        /// (buffer/smem, indices..., val) -> old: stores (old & val), returns old.
         AtomicFetchAnd,
-        /// (buffer/smem, index, val) -> old: stores (old | val), returns old.
+        /// (buffer/smem, indices..., val) -> old: stores (old | val), returns old.
         AtomicFetchOr,
-        /// (buffer/smem, index, val) -> old: stores (old ^ val), returns old.
+        /// (buffer/smem, indices..., val) -> old: stores (old ^ val), returns old.
         AtomicFetchXor,
-        /// (buffer/smem, index, val) -> old: stores min(old, val), returns old.
+        /// (buffer/smem, indices..., val) -> old: stores min(old, val), returns old.
         AtomicFetchMin,
-        /// (buffer/smem, index, val) -> old: stores max(old, val), returns old.
+        /// (buffer/smem, indices..., val) -> old: stores max(old, val), returns old.
         AtomicFetchMax,
         /// (buffer, index) -> value: reads the index-th element in buffer
         BufferRead,
@@ -426,7 +429,7 @@ struct Func {
         BindlessTexture3dSizeLevel,
         /// (bindless_array, index: uint, element: uint) -> T
         BindlessBufferRead,
-        /// (bindless_array, index: uint) -> uint: returns the size of the buffer in *elements*
+        /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
         BindlessBufferSize,
         BindlessBufferType,
         Vec,
@@ -445,6 +448,9 @@ struct Func {
         Mat4,
         Callable,
         CpuCustomOp,
+        ShaderExecutionReorder,
+        Unknown0,
+        Unknown1,
     };
 
     struct Unreachable_Body {
@@ -453,10 +459,6 @@ struct Func {
 
     struct Assert_Body {
         CBoxedSlice<uint8_t> _0;
-    };
-
-    struct BindlessBufferSize_Body {
-        CArc<Type> _0;
     };
 
     struct Callable_Body {
@@ -471,7 +473,6 @@ struct Func {
     union {
         Unreachable_Body unreachable;
         Assert_Body assert;
-        BindlessBufferSize_Body bindless_buffer_size;
         Callable_Body callable;
         CpuCustomOp_Body cpu_custom_op;
     };
@@ -488,10 +489,13 @@ struct Const {
         Zero,
         One,
         Bool,
+        Int16,
+        Uint16,
         Int32,
         Uint32,
         Int64,
         Uint64,
+        Float16,
         Float32,
         Float64,
         Generic,
@@ -509,6 +513,14 @@ struct Const {
         bool _0;
     };
 
+    struct Int16_Body {
+        int16_t _0;
+    };
+
+    struct Uint16_Body {
+        uint16_t _0;
+    };
+
     struct Int32_Body {
         int32_t _0;
     };
@@ -523,6 +535,10 @@ struct Const {
 
     struct Uint64_Body {
         uint64_t _0;
+    };
+
+    struct Float16_Body {
+        c_half _0;
     };
 
     struct Float32_Body {
@@ -543,24 +559,17 @@ struct Const {
         Zero_Body zero;
         One_Body one;
         Bool_Body bool_;
+        Int16_Body int16;
+        Uint16_Body uint16;
         Int32_Body int32;
         Uint32_Body uint32;
         Int64_Body int64;
         Uint64_Body uint64;
+        Float16_Body float16;
         Float32_Body float32;
         Float64_Body float64;
         Generic_Body generic;
     };
-};
-
-struct BlockModule {
-    Module module;
-};
-
-struct UserData {
-    uint64_t tag;
-    const uint8_t *data;
-    bool (*eq)(const uint8_t*, const uint8_t*);
 };
 
 struct PhiIncoming {
@@ -571,6 +580,16 @@ struct PhiIncoming {
 struct SwitchCase {
     int32_t value;
     Pooled<BasicBlock> block;
+};
+
+struct BlockModule {
+    Module module;
+};
+
+struct UserData {
+    uint64_t tag;
+    const uint8_t *data;
+    bool (*eq)(const uint8_t*, const uint8_t*);
 };
 
 struct Instruction {
@@ -599,9 +618,13 @@ struct Instruction {
         Switch,
         AdScope,
         RayQuery,
-        Suspend,
         AdDetach,
         Comment,
+        CoroSplitMark,
+        CoroSuspend,
+        Suspend,
+        CoroResume,
+        CoroFrame,
     };
 
     struct Local_Body {
@@ -672,16 +695,33 @@ struct Instruction {
         Pooled<BasicBlock> on_procedural_hit;
     };
 
-    struct Suspend_Body {
-        NodeRef _0;
-    };
-
     struct AdDetach_Body {
         Pooled<BasicBlock> _0;
     };
 
     struct Comment_Body {
         CBoxedSlice<uint8_t> _0;
+    };
+
+    struct CoroSplitMark_Body {
+        uint32_t token;
+    };
+
+    struct CoroSuspend_Body {
+        uint32_t token;
+    };
+
+    struct Suspend_Body {
+        NodeRef _0;
+    };
+
+    struct CoroResume_Body {
+        uint32_t token;
+    };
+
+    struct CoroFrame_Body {
+        uint32_t token;
+        Pooled<BasicBlock> body;
     };
 
     Tag tag;
@@ -700,9 +740,13 @@ struct Instruction {
         Switch_Body switch_;
         AdScope_Body ad_scope;
         RayQuery_Body ray_query;
-        Suspend_Body suspend;
         AdDetach_Body ad_detach;
         Comment_Body comment;
+        CoroSplitMark_Body coro_split_mark;
+        CoroSuspend_Body coro_suspend;
+        Suspend_Body suspend;
+        CoroResume_Body coro_resume;
+        CoroFrame_Body coro_frame;
     };
 };
 
@@ -712,7 +756,6 @@ struct KernelModule {
     CBoxedSlice<NodeRef> args;
     CBoxedSlice<NodeRef> shared;
     CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
-    CBoxedSlice<CallableModuleRef> callables;
     uint32_t block_size[3];
     CArc<ModulePools> pools;
 };
@@ -748,11 +791,33 @@ NodeRef luisa_compute_ir_build_const(IrBuilder *builder, Const const_);
 
 Pooled<BasicBlock> luisa_compute_ir_build_finish(IrBuilder builder);
 
+NodeRef luisa_compute_ir_build_generic_loop(IrBuilder *builder,
+                                            Pooled<BasicBlock> prepare,
+                                            NodeRef cond,
+                                            Pooled<BasicBlock> body,
+                                            Pooled<BasicBlock> update);
+
+NodeRef luisa_compute_ir_build_if(IrBuilder *builder,
+                                  NodeRef cond,
+                                  Pooled<BasicBlock> true_branch,
+                                  Pooled<BasicBlock> false_branch);
+
 NodeRef luisa_compute_ir_build_local(IrBuilder *builder, NodeRef init);
 
 NodeRef luisa_compute_ir_build_local_zero_init(IrBuilder *builder, CArc<Type> ty);
 
+NodeRef luisa_compute_ir_build_loop(IrBuilder *builder, Pooled<BasicBlock> body, NodeRef cond);
+
+NodeRef luisa_compute_ir_build_phi(IrBuilder *builder, CSlice<PhiIncoming> incoming, CArc<Type> t);
+
+NodeRef luisa_compute_ir_build_switch(IrBuilder *builder,
+                                      NodeRef value,
+                                      CSlice<SwitchCase> cases,
+                                      Pooled<BasicBlock> default_);
+
 void luisa_compute_ir_build_update(IrBuilder *builder, NodeRef var, NodeRef value);
+
+void luisa_compute_ir_builder_set_insert_point(IrBuilder *builder, NodeRef node_ref);
 
 CBoxedSlice<uint8_t> luisa_compute_ir_dump_binary(const Module *module);
 
@@ -764,7 +829,7 @@ CArcSharedBlock<BlockModule> *luisa_compute_ir_new_block_module(BlockModule m);
 
 IrBuilder luisa_compute_ir_new_builder(CArc<ModulePools> pools);
 
-CallableModuleRef luisa_compute_ir_new_callable_module(CallableModule m);
+CArcSharedBlock<CallableModule> *luisa_compute_ir_new_callable_module(CallableModule m);
 
 CArcSharedBlock<Instruction> *luisa_compute_ir_new_instruction(Instruction inst);
 
@@ -775,6 +840,14 @@ CArcSharedBlock<ModulePools> *luisa_compute_ir_new_module_pools();
 NodeRef luisa_compute_ir_new_node(CArc<ModulePools> pools, Node node);
 
 const Node *luisa_compute_ir_node_get(NodeRef node_ref);
+
+void luisa_compute_ir_node_insert_after_self(NodeRef node_ref, NodeRef new_node);
+
+void luisa_compute_ir_node_insert_before_self(NodeRef node_ref, NodeRef new_node);
+
+void luisa_compute_ir_node_remove(NodeRef node_ref);
+
+void luisa_compute_ir_node_replace_with(NodeRef node_ref, const Node *new_node);
 
 CBoxedSlice<uint8_t> luisa_compute_ir_node_usage(const KernelModule *kernel);
 
@@ -795,6 +868,10 @@ KernelModule luisa_compute_ir_transform_pipeline_transform_kernel(TransformPipel
 
 Module luisa_compute_ir_transform_pipeline_transform_module(TransformPipeline *pipeline,
                                                             Module module);
+
+size_t luisa_compute_ir_type_alignment(const CArc<Type> *ty);
+
+size_t luisa_compute_ir_type_size(const CArc<Type> *ty);
 
 } // extern "C"
 

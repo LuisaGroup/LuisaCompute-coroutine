@@ -42,6 +42,7 @@
 #ifdef LUISA_ENABLE_DSL
 #include <luisa/dsl/arg.h>
 #include <luisa/dsl/atomic.h>
+#include <luisa/dsl/binding_group.h>
 #include <luisa/dsl/builtin.h>
 #include <luisa/dsl/constant.h>
 #include <luisa/dsl/dispatch_indirect.h>
@@ -63,6 +64,7 @@
 #include <luisa/dsl/rtx/ray_query.h>
 #include <luisa/dsl/rtx/triangle.h>
 #include <luisa/dsl/shared.h>
+#include <luisa/dsl/soa.h>
 #include <luisa/dsl/stmt.h>
 #include <luisa/dsl/struct.h>
 #include <luisa/dsl/sugar.h>
@@ -78,12 +80,23 @@
 
 #ifdef LUISA_ENABLE_IR
 #include <luisa/ir/ast2ir.h>
+#include <luisa/ir/fwd.h>
+#include <luisa/ir/ir.h>
 #include <luisa/ir/ir2ast.h>
 #endif
+
+#include <luisa/osl/hint.h>
+#include <luisa/osl/instruction.h>
+#include <luisa/osl/literal.h>
+#include <luisa/osl/oso_parser.h>
+#include <luisa/osl/shader.h>
+#include <luisa/osl/symbol.h>
+#include <luisa/osl/type.h>
 
 #include <luisa/runtime/bindless_array.h>
 #include <luisa/runtime/buffer.h>
 #include <luisa/runtime/buffer_arena.h>
+#include <luisa/runtime/byte_buffer.h>
 #include <luisa/runtime/command_list.h>
 #include <luisa/runtime/context.h>
 #include <luisa/runtime/depth_format.h>
@@ -134,7 +147,13 @@
 #include <luisa/rust/ir_common.h>
 #endif
 
+#ifdef LUISA_ENABLE_TENSOR
+#include <luisa/tensor/scope.h>
+#include <luisa/tensor/tensor.h>
+#endif
+
 #include <luisa/vstl/allocate_type.h>
+#include <luisa/vstl/arena_hash_map.h>
 #include <luisa/vstl/common.h>
 #include <luisa/vstl/compare.h>
 #include <luisa/vstl/config.h>

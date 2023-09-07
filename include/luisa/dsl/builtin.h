@@ -1,7 +1,3 @@
-//
-// Created by Mike Smith on 2021/4/13.
-//
-
 #pragma once
 
 #include <luisa/core/constants.h>
@@ -106,6 +102,12 @@ inline void unreachable() noexcept {
 }
 [[nodiscard]] inline auto kernel_id() noexcept {
     return def<uint>(detail::FunctionBuilder::current()->kernel_id());
+}
+[[nodiscard]] inline auto warp_lane_count() noexcept {
+    return def<uint>(detail::FunctionBuilder::current()->warp_lane_count());
+}
+[[nodiscard]] inline auto warp_lane_id() noexcept {
+    return def<uint>(detail::FunctionBuilder::current()->warp_lane_id());
 }
 /// Get dispatch_id.x
 [[nodiscard]] inline auto dispatch_x() noexcept {
@@ -606,32 +608,32 @@ using luisa::make_bool2;
 using luisa::make_bool3;
 using luisa::make_bool4;
 using luisa::make_float2;
+using luisa::make_float2x2;
 using luisa::make_float3;
+using luisa::make_float3x3;
 using luisa::make_float4;
-using luisa::make_int2;
-using luisa::make_int3;
-using luisa::make_int4;
-using luisa::make_uint2;
-using luisa::make_uint3;
-using luisa::make_uint4;
-using luisa::make_short2;
-using luisa::make_short3;
-using luisa::make_short4;
-using luisa::make_ushort2;
-using luisa::make_ushort3;
-using luisa::make_ushort4;
-using luisa::make_slong2;
-using luisa::make_slong3;
-using luisa::make_slong4;
-using luisa::make_ulong2;
-using luisa::make_ulong3;
-using luisa::make_ulong4;
+using luisa::make_float4x4;
 using luisa::make_half2;
 using luisa::make_half3;
 using luisa::make_half4;
-using luisa::make_float2x2;
-using luisa::make_float3x3;
-using luisa::make_float4x4;
+using luisa::make_int2;
+using luisa::make_int3;
+using luisa::make_int4;
+using luisa::make_short2;
+using luisa::make_short3;
+using luisa::make_short4;
+using luisa::make_slong2;
+using luisa::make_slong3;
+using luisa::make_slong4;
+using luisa::make_uint2;
+using luisa::make_uint3;
+using luisa::make_uint4;
+using luisa::make_ulong2;
+using luisa::make_ulong3;
+using luisa::make_ulong4;
+using luisa::make_ushort2;
+using luisa::make_ushort3;
+using luisa::make_ushort4;
 
 #define LUISA_MAKE_VECTOR(type)                                  \
     template<typename S>                                         \
@@ -1111,10 +1113,11 @@ template<typename E, typename X>
 template<typename L, typename R, typename T>
     requires any_dsl_v<L, R, T> && is_float_or_vector_expr_v<L> && is_float_or_vector_expr_v<R> && is_float_or_vector_expr_v<T>
 [[nodiscard]] inline auto smoothstep(L &&left, R &&right, T &&x) noexcept {
-    auto edge0 = def(std::forward<L>(left));
-    auto edge1 = def(std::forward<R>(right));
-    auto t = saturate((std::forward<T>(x) - edge0) / (edge1 - edge0));
-    return t * t * fma(t, -2.0f, 3.0f);
+    return detail::make_vector_call<float>(
+        CallOp::SMOOTHSTEP,
+        std::forward<L>(left),
+        std::forward<R>(right),
+        std::forward<T>(x));
 }
 
 /// Abs of float or vector.
@@ -1713,6 +1716,205 @@ template<typename T>
 inline void sync_block() noexcept {
     detail::FunctionBuilder::current()->call(
         CallOp::SYNCHRONIZE_BLOCK, {});
+}
+
+// warp intrinsics
+[[nodiscard]] inline auto warp_is_first_active_lane() noexcept {
+    return def<bool>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<bool>(), CallOp::WARP_IS_FIRST_ACTIVE_LANE,
+            {}));
+}
+
+[[nodiscard]] inline auto warp_first_active_lane() noexcept {
+    return def<uint>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint>(), CallOp::WARP_FIRST_ACTIVE_LANE,
+            {}));
+}
+
+template<typename X>
+    requires is_scalar_expr_v<X> || is_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_all_equal(X &&value) noexcept {
+    using T = expr_value_t<X>;
+    if constexpr (vector_dimension_v<T> == 1) {
+        return def<bool>(
+            detail::FunctionBuilder::current()->call(
+                Type::of<bool>(), CallOp::WARP_ACTIVE_ALL_EQUAL,
+                {LUISA_EXPR(value)}));
+    } else {
+        using Ret = Vector<bool, vector_dimension_v<T>>;
+        return def<Ret>(
+            detail::FunctionBuilder::current()->call(
+                Type::of<Ret>(), CallOp::WARP_ACTIVE_ALL_EQUAL,
+                {LUISA_EXPR(value)}));
+    }
+}
+
+template<typename X>
+    requires is_int_or_vector_expr_v<X> ||
+             is_uint_or_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_bit_and(X &&value) noexcept {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_BIT_AND,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires is_int_or_vector_expr_v<X> ||
+             is_uint_or_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_bit_or(X &&value) noexcept {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_BIT_OR,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires is_int_or_vector_expr_v<X> ||
+             is_uint_or_vector_expr_v<X>
+[[nodiscard]] inline auto warp_active_bit_xor(X &&value) noexcept {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_BIT_XOR,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_count_bits(Expr<bool> value) noexcept {
+    return def<uint>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint>(), CallOp::WARP_ACTIVE_COUNT_BITS,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_prefix_count_bits(Expr<bool> value) noexcept {
+    return def<uint>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint>(), CallOp::WARP_PREFIX_COUNT_BITS,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_all(Expr<bool> value) noexcept {
+    return def<bool>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<bool>(), CallOp::WARP_ACTIVE_ALL,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_any(Expr<bool> value) noexcept {
+    return def<bool>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<bool>(), CallOp::WARP_ACTIVE_ANY,
+            {LUISA_EXPR(value)}));
+}
+
+[[nodiscard]] inline auto warp_active_bit_mask(Expr<bool> value) noexcept {
+    return def<uint4>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<uint4>(), CallOp::WARP_ACTIVE_BIT_MASK,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>) &&
+            (!is_bool_or_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_min(X &&value) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_MIN,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>) &&
+            (!is_bool_or_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_max(X &&value) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_MAX,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>) &&
+            (!is_bool_or_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_product(X &&value) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_PRODUCT,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>) &&
+            (!is_bool_or_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_active_sum(X &&value) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_ACTIVE_SUM,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>) &&
+            (!is_bool_or_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_prefix_product(X &&value) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_PREFIX_PRODUCT,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X>) &&
+            (!is_bool_or_vector_expr_v<X>)
+[[nodiscard]] inline auto warp_prefix_sum(X &&value) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_PREFIX_SUM,
+            {LUISA_EXPR(value)}));
+}
+
+template<typename X, typename Y>
+    requires(is_scalar_expr_v<X> || is_vector_expr_v<X> || is_matrix_expr_v<X>) &&
+            is_integral_expr_v<Y>
+[[nodiscard]] inline auto warp_read_lane(X &&value, Y &&index) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_READ_LANE,
+            {LUISA_EXPR(value), LUISA_EXPR(index)}));
+}
+
+template<typename X>
+    requires is_scalar_expr_v<X> || is_vector_expr_v<X> || is_matrix_expr_v<X>
+[[nodiscard]] inline auto warp_read_first_active_lane(X &&value) {
+    using T = expr_value_t<X>;
+    return def<T>(
+        detail::FunctionBuilder::current()->call(
+            Type::of<T>(), CallOp::WARP_READ_FIRST_ACTIVE_LANE,
+            {LUISA_EXPR(value)}));
+}
+
+// shader execution reordering
+inline void reorder_shader_execution(Expr<uint> hint, Expr<uint> hint_bits) noexcept {
+    detail::FunctionBuilder::current()->call(
+        CallOp::SHADER_EXECUTION_REORDER,
+        {LUISA_EXPR(hint), LUISA_EXPR(hint_bits)});
+}
+
+inline void reorder_shader_execution() noexcept {
+    reorder_shader_execution(0u, 0u);
 }
 
 #undef LUISA_EXPR

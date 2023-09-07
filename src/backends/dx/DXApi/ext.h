@@ -58,6 +58,8 @@ public:
         uint height,
         // D3D12_RESOURCE_STATES const*
         void *custom_data) noexcept override;
+    uint64_t get_native_resource_device_address(
+        void *native_handle) noexcept override;
     static PixelFormat ToPixelFormat(GFXFormat f) {
         switch (f) {
             case GFXFormat_R8_SInt:
@@ -175,6 +177,7 @@ class DStorageExtImpl final : public DStorageExt, public vstd::IOperatorNewBase 
     ComPtr<IDStorageCompressionCodec> compression_codec;
     vstd::spin_mutex spin_mtx;
     std::mutex mtx;
+    std::atomic_size_t staging_size;
     LCDevice *mdevice;
     bool is_hdd = false;
     void init_factory();
@@ -182,6 +185,7 @@ class DStorageExtImpl final : public DStorageExt, public vstd::IOperatorNewBase 
     void set_config(bool hdd) noexcept;
 
 public:
+    auto Factory() const { return factory.Get(); }
     DeviceInterface *device() const noexcept override;
     DStorageExtImpl(std::filesystem::path const &runtime_dir, LCDevice *device) noexcept;
     ResourceCreationInfo create_stream_handle(const DStorageStreamOption &option) noexcept override;

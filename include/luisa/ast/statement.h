@@ -1,16 +1,11 @@
-//
-// Created by Mike Smith on 2020/12/2.
-//
-
 #pragma once
 
 #include <luisa/core/concepts.h>
-#include <luisa/core/stl.h>
 #include <luisa/ast/variable.h>
 #include <luisa/ast/expression.h>
 
 namespace luisa::compute {
-
+class CallableLibrary;
 struct StmtVisitor;
 
 /**
@@ -18,6 +13,7 @@ struct StmtVisitor;
  * 
  */
 class LC_AST_API Statement : public concepts::Noncopyable {
+    friend class CallableLibrary;
 
 public:
     /// Statement types
@@ -44,6 +40,8 @@ private:
     mutable uint64_t _hash{0u};
     mutable bool _hash_computed{false};
     Tag _tag;
+protected:
+    Statement() noexcept = default;
 
 private:
     [[nodiscard]] virtual uint64_t _compute_hash() const noexcept = 0;
@@ -122,9 +120,11 @@ public:
 
 /// Return statement
 class ReturnStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const Expression *_expr;
+    ReturnStmt() noexcept = default;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -145,6 +145,7 @@ public:
 
 /// Scope statement
 class ScopeStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     vector<const Statement *> _statements;
@@ -162,6 +163,7 @@ public:
 
 /// Assign statement
 class AssignStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const Expression *_lhs;
@@ -169,6 +171,7 @@ private:
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+    AssignStmt() noexcept = default;
 
 public:
     /**
@@ -190,11 +193,13 @@ public:
 
 /// If statement
 class IfStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const Expression *_condition;
     ScopeStmt _true_branch;
     ScopeStmt _false_branch;
+    IfStmt() noexcept = default;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -220,6 +225,7 @@ public:
 
 /// Loop statement
 class LoopStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     ScopeStmt _body;
@@ -236,12 +242,14 @@ public:
 
 /// Expression statement
 class ExprStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const Expression *_expr;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+    ExprStmt() noexcept = default;
 
 public:
     /**
@@ -259,10 +267,12 @@ public:
 
 /// Switch statement
 class SwitchStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const Expression *_expr;
     ScopeStmt _body;
+    SwitchStmt() noexcept = default;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -285,10 +295,12 @@ public:
 
 /// Case statement of switch
 class SwitchCaseStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const Expression *_expr;
     ScopeStmt _body;
+    SwitchCaseStmt() noexcept = default;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -311,6 +323,7 @@ public:
 
 /// Default statement of switch
 class SwitchDefaultStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     ScopeStmt _body;
@@ -327,6 +340,7 @@ public:
 
 /// For statement
 class ForStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const Expression *_var;
@@ -336,6 +350,7 @@ private:
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+    ForStmt() noexcept = default;
 
 public:
     /**
@@ -364,9 +379,11 @@ public:
 
 /// Comment statement
 class CommentStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     luisa::string _comment;
+    CommentStmt() noexcept = default;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -433,6 +450,7 @@ public:
 // }
 
 class RayQueryStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     const RefExpr *_query;
@@ -441,6 +459,7 @@ private:
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+    RayQueryStmt() noexcept = default;
 
 public:
     explicit RayQueryStmt(const RefExpr *query) noexcept
@@ -456,6 +475,7 @@ public:
 };
 
 class AutoDiffStmt : public Statement {
+    friend class CallableLibrary;
 
 private:
     ScopeStmt _body;
@@ -510,7 +530,7 @@ void traverse_expressions(
 
     enter_stmt(stmt);
     switch (stmt->tag()) {
-        case Statement::Tag::BREAK: break;
+        case Statement::Tag::BREAK:
         case Statement::Tag::CONTINUE: break;
         case Statement::Tag::RETURN: {
             auto return_stmt = static_cast<const ReturnStmt *>(stmt);
@@ -605,4 +625,3 @@ void traverse_expressions(
 }
 
 }// namespace luisa::compute
-

@@ -276,9 +276,6 @@
 #if HALF_ENABLE_CPP11_CFENV
 	#include <cfenv>
 #endif
-#if HALF_ENABLE_CPP11_HASH
-	#include <functional>
-#endif
 
 
 #ifndef HALF_ENABLE_F16C_INTRINSICS
@@ -290,8 +287,20 @@
 	/// Unless predefined it will be enabled automatically when the `__F16C__` symbol is defined, which some compilers do on supporting platforms.
 	#define HALF_ENABLE_F16C_INTRINSICS __F16C__
 #endif
+#ifndef HALF_ENABLE_NEON_INTRINSICS
+    /// Enable NEON intruction set intrinsics.
+    /// Defining this to 1 enables the use of [NEON compiler intrinsics](https://en.wikipedia.org/wiki/ARM_architecture#Advanced_SIMD_.28NEON.29)
+    /// for converting between half-precision and single-precision values which may result in improved performance. This will not perform
+    /// additional checks for support of the NEON instruction set, so an appropriate target platform is required when enabling this feature.
+    ///
+    /// Unless predefined it will be enabled automatically when the `__ARM_NEON__` symbol is defined, which some compilers do on supporting platforms.
+    #define HALF_ENABLE_NEON_INTRINSICS __ARM_NEON__
+#endif
 #if HALF_ENABLE_F16C_INTRINSICS
 	#include <immintrin.h>
+#endif
+#if HALF_ENABLE_NEON_INTRINSICS
+    #include <arm_neon.h>
 #endif
 
 #ifdef HALF_DOXYGEN_ONLY
@@ -931,7 +940,13 @@ namespace half_float
 				(R==std::round_toward_infinity) ? _MM_FROUND_TO_POS_INF :
 				(R==std::round_toward_neg_infinity) ? _MM_FROUND_TO_NEG_INF :
 				_MM_FROUND_CUR_DIRECTION));
-		#else
+        #elif HALF_ENABLE_NEON_INTRINSICS
+            // TODO: consider rounding?
+            auto h = static_cast<float16_t>(value);
+            uint16_t hbits;
+            std::memcpy(&hbits, &h, sizeof(float16_t));
+            return hbits;
+        #else
 			bits<float>::type fbits;
 			std::memcpy(&fbits, &value, sizeof(float));
 		#if 1
@@ -1015,6 +1030,12 @@ namespace half_float
 		#if HALF_ENABLE_F16C_INTRINSICS
 			if(R == std::round_indeterminate)
 				return _mm_cvtsi128_si32(_mm_cvtps_ph(_mm_cvtpd_ps(_mm_set_sd(value)), _MM_FROUND_CUR_DIRECTION));
+        #elif HALF_ENABLE_NEON_INTRINSICS
+            // TODO: consider rounding?
+            auto h = static_cast<float16_t>(value);
+            uint16_t hbits;
+            std::memcpy(&hbits, &h, sizeof(hbits));
+            return hbits;
 		#endif
 			bits<double>::type dbits;
 			std::memcpy(&dbits, &value, sizeof(double));
@@ -1115,7 +1136,12 @@ namespace half_float
 		{
 		#if HALF_ENABLE_F16C_INTRINSICS
 			return _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128(value)));
-		#else
+        #elif HALF_ENABLE_NEON_INTRINSICS
+            auto hbits = static_cast<uint16_t>(value);
+            float16_t h;
+            memcpy(&h, &hbits, sizeof(h));
+            return static_cast<float>(h);
+        #else
 		#if 0
 			bits<float>::type fbits = static_cast<bits<float>::type>(value&0x8000) << 16;
 			int abs = value & 0x7FFF;
@@ -1278,6 +1304,11 @@ namespace half_float
 		{
 		#if HALF_ENABLE_F16C_INTRINSICS
 			return _mm_cvtsd_f64(_mm_cvtps_pd(_mm_cvtph_ps(_mm_cvtsi32_si128(value))));
+        #elif HALF_ENABLE_NEON_INTRINSICS
+            auto hbits = static_cast<uint16_t>(value);
+            float16_t h;
+            std::memcpy(&h, &hbits, sizeof(float16_t));
+            return static_cast<double>(h);
 		#else
 			uint32 hi = static_cast<uint32>(value&0x8000) << 16;
 			unsigned int abs = value & 0x7FFF;
@@ -2084,11 +2115,11 @@ namespace half_float
 		/// Conversion constructor.
 		/// \param rhs float to convert
 		/// \exception FE_OVERFLOW, ...UNDERFLOW, ...INEXACT according to rounding
-		explicit half(float rhs) : data_(static_cast<detail::uint16>(detail::float2half<round_style>(rhs))) {}
+        explicit half(float rhs) : data_(static_cast<detail::uint16>(detail::float2half<round_style>(rhs))) {}
 	
 		/// Conversion to single-precision.
 		/// \return single precision value representing expression value
-		operator float() const { return detail::half2float<float>(data_); }
+        operator float() const { return detail::half2float<float>(data_); }
 
 		/// Assignment operator.
 		/// \param rhs single-precision value to copy from
@@ -2275,9 +2306,6 @@ namespace half_float
 		friend HALF_CONSTEXPR bool islessgreater(half, half);
 		template<typename,typename,std::float_round_style> friend struct detail::half_caster;
 		friend class std::numeric_limits<half>;
-	#if HALF_ENABLE_CPP11_HASH
-		friend struct std::hash<half>;
-	#endif
 	#if HALF_ENABLE_CPP11_USER_LITERALS
 		friend half literal::operator "" _h(long double);
 	#endif
@@ -2448,25 +2476,19 @@ namespace std
 		static HALF_CONSTEXPR half_float::half denorm_min() HALF_NOTHROW { return half_float::half(half_float::detail::binary, 0x0001); }
 	};
 
-#if HALF_ENABLE_CPP11_HASH
-	/// Hash function for half-precision floats.
-	/// This is only defined if C++11 `std::hash` is supported and enabled.
-	///
-	/// **See also:** Documentation for [std::hash](https://en.cppreference.com/w/cpp/utility/hash)
-	template<> struct hash<half_float::half>
-	{
-		/// Type of function argument.
-		typedef half_float::half argument_type;
-
-		/// Function return type.
-		typedef size_t result_type;
-
-		/// Compute hash function.
-		/// \param arg half to hash
-		/// \return hash value
-		result_type operator()(argument_type arg) const { return hash<half_float::detail::uint16>()(arg.data_&-static_cast<unsigned>(arg.data_!=0x8000)); }
-	};
+#if HALF_ENABLE_CPP11_TYPE_TRAITS
+#ifdef _MSVC_STL_VERSION
+    // FIXME: MSVC STL uses `bool_constant<is_foo_v<T>>` to define `is_foo<T>`.
+    // Well done, MSVC.
+    template<> inline constexpr auto is_floating_point_v<half_float::half> = true;
+    template<> inline constexpr auto is_arithmetic_v<half_float::half> = true;
+    template<> inline constexpr auto is_signed_v<half_float::half> = true;
 #endif
+    template<> struct is_floating_point<half_float::half> : std::true_type {};
+    template<> struct is_arithmetic<half_float::half> : std::true_type {};
+    template<> struct is_signed<half_float::half> : std::true_type {};
+#endif
+
 }
 
 namespace half_float

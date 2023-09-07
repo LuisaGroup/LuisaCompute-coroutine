@@ -8,6 +8,14 @@
 namespace luisa::compute {
 
 class LC_RUNTIME_API ShaderDispatchCmdEncoder {
+    enum class ArgType : uint {
+        UNIFORM,
+        BUFFER,
+        TEXTURE,
+        BINDLESS_ARRAY,
+        ACCEL,
+        BINDING
+    };
 
 public:
     using Argument = ShaderDispatchCommandBase::Argument;

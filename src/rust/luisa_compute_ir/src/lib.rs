@@ -2,12 +2,13 @@ pub mod ffi;
 pub mod ir;
 pub use ffi::*;
 use serde::Serialize;
+use half::f16;
 use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc};
 pub mod context;
 mod display;
 pub mod serialize;
 pub mod transform;
-mod usage_detect;
+pub mod analysis;
 
 use ir::{ArrayType, Primitive, Type};
 
@@ -38,6 +39,11 @@ impl TypeOf for u32 {
 impl TypeOf for i32 {
     fn type_() -> CArc<Type> {
         context::register_type(Type::Primitive(Primitive::Int32))
+    }
+}
+impl TypeOf for f16 {
+    fn type_() -> CArc<Type> {
+        context::register_type(Type::Primitive(Primitive::Float16))
     }
 }
 impl TypeOf for f32 {
@@ -180,6 +186,9 @@ impl<T> Pooled<T> {
         unsafe { &mut *self.ptr }
     }
     pub fn into_raw(self) -> *mut T {
+        self.ptr
+    }
+    pub fn as_ptr(&self) -> *const T {
         self.ptr
     }
 }

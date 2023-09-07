@@ -76,7 +76,7 @@ static size_t AddHeader(CallOpSet const &ops, luisa::BinaryIO const *internalDat
     if (ops.test(CallOp::INVERSE)) {
         builder << CodegenUtility::ReadInternalHLSLFile("inverse", internalDataPath);
     }
-    if (ops.test(CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER) || ops.test(CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL) || ops.test(CallOp::INDIRECT_SET_DISPATCH_KERNEL)) {
+    if (ops.test(CallOp::INDIRECT_SET_DISPATCH_KERNEL) || ops.test(CallOp::INDIRECT_SET_DISPATCH_COUNT)) {
         builder << CodegenUtility::ReadInternalHLSLFile("indirect", internalDataPath);
     }
     if (ops.test(CallOp::BUFFER_SIZE) || ops.test(CallOp::TEXTURE_SIZE) || ops.test(CallOp::BYTE_BUFFER_SIZE)) {
@@ -699,7 +699,6 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << "_Smptx";
             break;
         case CallOp::TEXTURE_WRITE:
-            LUISA_ASSERT(!opt->isRaster, "texture-write can only be used in compute shader");
             str << "_Writetx";
             break;
         case CallOp::MAKE_LONG2:
@@ -775,7 +774,6 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             }
         } break;
         case CallOp::BUFFER_WRITE: {
-            LUISA_ASSERT(!opt->isRaster, "buffer-write can only be used in compute shader");
             str << "_bfwrite"sv;
             auto elem = args[0]->type()->element();
             if (IsNumVec3(*elem)) {
@@ -913,7 +911,7 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << ",bdls)"sv;
             return;
         }
-        case CallOp::BINDLESS_BYTE_ADDRESS_BUFFER_READ: {
+        case CallOp::BINDLESS_BYTE_BUFFER_READ: {
             str << "_READ_BUFFER_BYTES"sv;
             opt->useBufferBindless = true;
             str << '(';
@@ -927,7 +925,11 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         }
         case CallOp::ASSERT:
         case CallOp::ASSUME:
+            return;
         case CallOp::UNREACHABLE: {
+            str << "("sv;
+            GetTypeName(*expr->type(), str, Usage::READ, true);
+            str << ")0"sv;
             return;
         }
         case CallOp::BINDLESS_TEXTURE2D_SAMPLE:
@@ -1054,16 +1056,10 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << ')';
             return;
         }
-        case CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER:
-            LUISA_ASSERT(!opt->isRaster, "indirect-operation can only be used in compute shader");
-            str << "_ClearDispInd"sv;
-            break;
-        case CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL: {
-            LUISA_ASSERT(!opt->isRaster, "indirect-operation can only be used in compute shader");
-            str << "_EmplaceDispInd"sv;
+        case CallOp::INDIRECT_SET_DISPATCH_COUNT: {
+            str << "_SetDispCount"sv;
         } break;
         case CallOp::INDIRECT_SET_DISPATCH_KERNEL: {
-            LUISA_ASSERT(!opt->isRaster, "indirect-operation can only be used in compute shader");
             str << "_SetDispInd"sv;
         } break;
         case CallOp::RAY_QUERY_WORLD_SPACE_RAY:
@@ -1087,11 +1083,8 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << ".CommitNonOpaqueTriangleHit()"sv;
             return;
         case CallOp::RAY_QUERY_COMMIT_PROCEDURAL:
-            args[0]->accept(vis);
-            str << ".CommitProceduralPrimitiveHit("sv;
-            args[1]->accept(vis);
-            str << ')';
-            return;
+            str << "_CommitProcedural"sv;
+            break;
         case CallOp::RAY_QUERY_TERMINATE:
             args[0]->accept(vis);
             str << ".Abort()"sv;
@@ -1514,8 +1507,10 @@ v2p o;
         result << retName
                << " r=vert(vt);\n"sv;
         for (auto i : vstd::range(retType->members().size())) {
+            auto member = retType->members()[i];
             auto num = vstd::to_string(i);
-            result << "o.v"sv << num << "=r.v"sv << num << ";\n"sv;
+            result << "o.v"sv << num << "=r.v"sv << num;
+            result << ";\n"sv;
         }
     }
     if (isDX) {
@@ -1980,7 +1975,7 @@ CodegenResult CodegenUtility::RasterCodegen(
     if (v2pType->is_structure()) {
         size_t memberIdx = 0;
         for (auto &&i : v2pType->members()) {
-            GetTypeName(*i, codegenData, Usage::READ);
+            GetTypeName(*i, codegenData, Usage::READ, false);
             codegenData << " v"sv << vstd::to_string(memberIdx);
             if (memberIdx == 0) {
                 codegenData << ":SV_POSITION;\n"sv;
@@ -2045,8 +2040,8 @@ uint obj_id:register(b0);
                 if (idx >= 4) {
                     d << "vv.v4.v["sv << vstd::to_string(idx - 4) << "]=vt."sv << name << ";\n"sv;
                 } else {
-                    d << "vv.v"sv << vstd::to_string(i);
-                    if (i < 2) {
+                    d << "vv.v"sv << vstd::to_string(idx);
+                    if (idx < 2) {
                         d << ".v"sv;
                     }
                     d << "=vt."sv << name << ";\n"sv;

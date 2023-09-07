@@ -8,7 +8,7 @@
 #include <new>
 #include "ir_common.h"
 namespace luisa::compute::ir {
-struct CallableModuleRef;
+struct CallableModuleRef;struct CallableModule;
 }
 
 namespace luisa::compute::ir {
@@ -55,13 +55,6 @@ struct IrBuilder {
     NodeRef insert_point;
 };
 
-template<typename T>
-struct CBoxedSlice {
-    T *ptr;
-    size_t len;
-    void (*destructor)(T*, size_t);
-};
-
 struct Module {
     ModuleKind kind;
     Pooled<BasicBlock> entry;
@@ -97,6 +90,13 @@ struct VectorType {
 struct MatrixType {
     VectorElementType element;
     uint32_t dimension;
+};
+
+template<typename T>
+struct CBoxedSlice {
+    T *ptr;
+    size_t len;
+    void (*destructor)(T*, size_t);
 };
 
 struct StructType {
@@ -214,6 +214,10 @@ struct Capture {
     Binding binding;
 };
 
+struct CallableModuleRef {
+    CArc<CallableModule> _0;
+};
+
 struct CpuCustomOp {
     uint8_t *data;
     /// func(data, args); func should modify args in place
@@ -233,8 +237,14 @@ struct CallableModule {
     CArc<ModulePools> pools;
 };
 
-struct CallableModuleRef {
-    CArc<CallableModule> _0;
+struct KernelModule {
+    Module module;
+    CBoxedSlice<Capture> captures;
+    CBoxedSlice<NodeRef> args;
+    CBoxedSlice<NodeRef> shared;
+    CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
+    uint32_t block_size[3];
+    CArc<ModulePools> pools;
 };
 
 struct Func {
@@ -245,6 +255,8 @@ struct Func {
         Assert,
         ThreadId,
         BlockId,
+        WarpSize,
+        WarpLaneId,
         DispatchId,
         DispatchSize,
         RequiresGradient,
@@ -269,8 +281,8 @@ struct Func {
         RayQueryCommitProcedural,
         RayQueryTerminate,
         RasterDiscard,
-        IndirectClearDispatchBuffer,
-        IndirectEmplaceDispatchKernel,
+        IndirectDispatchSetCount,
+        IndirectDispatchSetKernel,
         /// When referencing a Local in Call, it is always interpreted as a load
         /// However, there are cases you want to do this explicitly
         Load,
@@ -362,7 +374,28 @@ struct Func {
         Determinant,
         Transpose,
         Inverse,
+        WarpIsFirstActiveLane,
+        WarpFirstActiveLane,
+        WarpActiveAllEqual,
+        WarpActiveBitAnd,
+        WarpActiveBitOr,
+        WarpActiveBitXor,
+        WarpActiveCountBits,
+        WarpActiveMax,
+        WarpActiveMin,
+        WarpActiveProduct,
+        WarpActiveSum,
+        WarpActiveAll,
+        WarpActiveAny,
+        WarpActiveBitMask,
+        WarpPrefixCountBits,
+        WarpPrefixSum,
+        WarpPrefixProduct,
+        WarpReadLaneAt,
+        WarpReadFirstLane,
         SynchronizeBlock,
+        /// (buffer/smem, indices...): do not appear in the final IR, but will be lowered to an Atomic* instruction
+        AtomicRef,
         /// (buffer/smem, indices..., desired) -> old: stores desired, returns old.
         AtomicExchange,
         /// (buffer/smem, indices..., expected, desired) -> old: stores (old == expected ? desired : old), returns old.
@@ -387,6 +420,12 @@ struct Func {
         BufferWrite,
         /// buffer -> uint: returns buffer size in *elements*
         BufferSize,
+        /// (buffer, index_bytes) -> value
+        ByteBufferRead,
+        /// (buffer, index_bytes, value) -> void
+        ByteBufferWrite,
+        /// buffer -> size in bytes
+        ByteBufferSize,
         /// (texture, coord) -> value
         Texture2dRead,
         /// (texture, coord, value) -> void
@@ -432,6 +471,7 @@ struct Func {
         /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
         BindlessBufferSize,
         BindlessBufferType,
+        BindlessByteAdressBufferRead,
         Vec,
         Vec2,
         Vec3,
@@ -750,16 +790,6 @@ struct Instruction {
     };
 };
 
-struct KernelModule {
-    Module module;
-    CBoxedSlice<Capture> captures;
-    CBoxedSlice<NodeRef> args;
-    CBoxedSlice<NodeRef> shared;
-    CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
-    uint32_t block_size[3];
-    CArc<ModulePools> pools;
-};
-
 struct Node {
     CArc<Type> type_;
     NodeRef next;
@@ -781,6 +811,10 @@ static const NodeRef INVALID_REF = NodeRef{ /* ._0 = */ 0 };
 extern "C" {
 
 void luisa_compute_ir_append_node(IrBuilder *builder, NodeRef node_ref);
+
+CArcSharedBlock<CallableModule> *luisa_compute_ir_ast_json_to_ir_callable(CBoxedSlice<uint8_t> j);
+
+CArcSharedBlock<KernelModule> *luisa_compute_ir_ast_json_to_ir_kernel(CBoxedSlice<uint8_t> j);
 
 NodeRef luisa_compute_ir_build_call(IrBuilder *builder,
                                     Func func,

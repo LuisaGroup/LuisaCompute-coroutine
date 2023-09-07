@@ -15,6 +15,7 @@ use std::{
     ffi::{CStr, CString},
     path::Path,
 };
+use std::ptr::null;
 
 enum LLVMContext {}
 
@@ -64,7 +65,7 @@ type LLVMOrcExecutorAddress = u64;
 type LLVMOrcDumpObjectsRef = *mut LLVMOrcOpaqueDumpObjects;
 type LLVMOrcObjectTransformLayerRef = *mut LLVMOrcOpaqueObjectTransformLayer;
 type LLVMOrcObjectTransformLayerTransformFunction =
-    extern "C" fn(Ctx: *mut c_void, ObjInOut: *mut LLVMMemoryBufferRef) -> LLVMErrorRef;
+extern "C" fn(Ctx: *mut c_void, ObjInOut: *mut LLVMMemoryBufferRef) -> LLVMErrorRef;
 type LLVMPassManagerRef = *mut LLVMPassManager;
 type LLVMPassBuilderOptionsRef = *mut LLVMOpaquePassBuilderOptions;
 type LLVMTargetMachineRef = *mut LLVMOpaqueTargetMachine;
@@ -208,9 +209,9 @@ struct LibLLVM {
     LLVMDisposeModule: Symbol<'static, unsafe extern "C" fn(M: LLVMModuleRef)>,
     LLVMDisposeMemoryBuffer: Symbol<'static, unsafe extern "C" fn(MemBuf: LLVMMemoryBufferRef)>,
     LLVMOrcCreateNewThreadSafeContext:
-        Symbol<'static, unsafe extern "C" fn() -> LLVMOrcThreadSafeContextRef>,
+    Symbol<'static, unsafe extern "C" fn() -> LLVMOrcThreadSafeContextRef>,
     LLVMOrcThreadSafeContextGetContext:
-        Symbol<'static, unsafe extern "C" fn(TSCtx: LLVMOrcThreadSafeContextRef) -> LLVMContextRef>,
+    Symbol<'static, unsafe extern "C" fn(TSCtx: LLVMOrcThreadSafeContextRef) -> LLVMContextRef>,
     LLVMOrcCreateNewThreadSafeModule: Symbol<
         'static,
         unsafe extern "C" fn(
@@ -219,9 +220,9 @@ struct LibLLVM {
         ) -> LLVMOrcThreadSafeModuleRef,
     >,
     LLVMOrcDisposeThreadSafeModule:
-        Symbol<'static, unsafe extern "C" fn(TSM: LLVMOrcThreadSafeModuleRef)>,
+    Symbol<'static, unsafe extern "C" fn(TSM: LLVMOrcThreadSafeModuleRef)>,
     LLVMOrcDisposeThreadSafeContext:
-        Symbol<'static, unsafe extern "C" fn(TSCtx: LLVMOrcThreadSafeContextRef)>,
+    Symbol<'static, unsafe extern "C" fn(TSCtx: LLVMOrcThreadSafeContextRef)>,
     LLVMOrcCreateLLJIT: Symbol<
         'static,
         unsafe extern "C" fn(
@@ -231,7 +232,7 @@ struct LibLLVM {
     >,
     LLVMOrcDisposeLLJIT: Symbol<'static, unsafe extern "C" fn(J: LLVMOrcLLJITRef) -> LLVMErrorRef>,
     LLVMOrcLLJITGetMainJITDylib:
-        Symbol<'static, unsafe extern "C" fn(J: LLVMOrcLLJITRef) -> LLVMOrcJITDylibRef>,
+    Symbol<'static, unsafe extern "C" fn(J: LLVMOrcLLJITRef) -> LLVMOrcJITDylibRef>,
     LLVMOrcLLJITAddLLVMIRModule: Symbol<
         'static,
         unsafe extern "C" fn(
@@ -266,7 +267,7 @@ struct LibLLVM {
         ),
     >,
     LLVMOrcLLJITGetObjTransformLayer:
-        Symbol<'static, unsafe extern "C" fn(J: LLVMOrcLLJITRef) -> LLVMOrcObjectTransformLayerRef>,
+    Symbol<'static, unsafe extern "C" fn(J: LLVMOrcLLJITRef) -> LLVMOrcObjectTransformLayerRef>,
     LLVMOrcDumpObjects_CallOperator: Symbol<
         'static,
         unsafe extern "C" fn(
@@ -276,7 +277,7 @@ struct LibLLVM {
     >,
 
     LLVMGetTargetFromName:
-        Symbol<'static, unsafe extern "C" fn(Name: *const c_char) -> LLVMTargetRef>,
+    Symbol<'static, unsafe extern "C" fn(Name: *const c_char) -> LLVMTargetRef>,
     LLVMCreateTargetMachine: Symbol<
         'static,
         unsafe extern "C" fn(
@@ -299,9 +300,9 @@ struct LibLLVM {
         ) -> LLVMErrorRef,
     >,
     LLVMCreatePassBuilderOptions:
-        Symbol<'static, unsafe extern "C" fn() -> LLVMPassBuilderOptionsRef>,
+    Symbol<'static, unsafe extern "C" fn() -> LLVMPassBuilderOptionsRef>,
     LLVMDisposePassBuilderOptions:
-        Symbol<'static, unsafe extern "C" fn(Options: LLVMPassBuilderOptionsRef)>,
+    Symbol<'static, unsafe extern "C" fn(Options: LLVMPassBuilderOptionsRef)>,
     // LLVMCreatePassBuilderOptions:
     //     Symbol<'static, unsafe extern "C" fn() -> LLVMPassBuilderOptionsRef>,
 }
@@ -423,6 +424,8 @@ fn find_clang() -> Option<String> {
             }
         }
         None
+    } else if cfg!(target_os = "macos") {
+        try_exists("/opt/homebrew/opt/llvm/bin/clang")
     } else {
         None
     }
@@ -439,6 +442,8 @@ fn find_llvm() -> Option<String> {
             }
         }
         None
+    } else if cfg!(target_os = "macos") {
+        try_exists("/opt/homebrew/opt/llvm/lib/libLLVM-C.dylib")
     } else {
         None
     }
@@ -495,7 +500,7 @@ impl LibLLVM {
                 } else {
                     unreachable!()
                 })
-                .unwrap(),
+                    .unwrap(),
             );
 
             let LLVMInitializeNativeTargetInfo = lift(
@@ -506,7 +511,7 @@ impl LibLLVM {
                 } else {
                     unreachable!()
                 })
-                .unwrap(),
+                    .unwrap(),
             );
 
             let LLVMInitializeNativeTargetMC = lift(
@@ -517,7 +522,7 @@ impl LibLLVM {
                 } else {
                     unreachable!()
                 })
-                .unwrap(),
+                    .unwrap(),
             );
 
             let LLVMInitializeNativeTargetMCA = lift(
@@ -528,7 +533,7 @@ impl LibLLVM {
                 } else {
                     unreachable!()
                 })
-                .unwrap(),
+                    .unwrap(),
             );
 
             let LLVMInitializeNativeAsmPrinter = lift(
@@ -539,7 +544,7 @@ impl LibLLVM {
                 } else {
                     unreachable!()
                 })
-                .unwrap(),
+                    .unwrap(),
             );
 
             let LLVMContextDispose = load!(b"LLVMContextDispose");
@@ -629,6 +634,32 @@ impl LibLLVM {
         let paths = LLVM_PATH.deref();
         eprintln!("clang++: {}, llvm: {}", paths.clang, paths.llvm);
     }
+}
+
+#[repr(C)]
+struct LLVMExecutorAddr {
+    addr: u64,
+}
+
+#[repr(C)]
+struct LLVMExecutorAddrRange {
+    start: LLVMExecutorAddr,
+    end: LLVMExecutorAddr,
+}
+
+#[repr(C)]
+struct LLVMError {
+    payload: *const c_void,
+}
+
+#[no_mangle]
+unsafe extern "C" fn llvm_orc_registerEHFrameSectionWrapper(_: LLVMExecutorAddrRange) -> LLVMError {
+    LLVMError { payload: null() }
+}
+
+#[no_mangle]
+unsafe extern "C" fn llvm_orc_deregisterEHFrameSectionWrapper(_: LLVMExecutorAddrRange) -> LLVMError {
+    LLVMError { payload: null() }
 }
 
 pub(crate) fn compile_llvm_ir(name: &String, path_: &String) -> Option<KernelFn> {
@@ -984,10 +1015,10 @@ fn cpu_features() -> Vec<String> {
 fn cpu_features() -> Vec<String> {
     let mut features = vec![];
     if is_x86_feature_detected!("aes") { features.push("aes"); }
-    if is_x86_feature_detected!("pclmulqdq") { features.push("pclmulqdq"); }
-    if is_x86_feature_detected!("rdrand") { features.push("rdrand"); }
-    if is_x86_feature_detected!("rdseed") { features.push("rdseed"); }
-    if is_x86_feature_detected!("tsc") { features.push("tsc"); }
+    // if is_x86_feature_detected!("pclmulqdq") { features.push("pclmulqdq"); }
+    // if is_x86_feature_detected!("rdrand") { features.push("rdrand"); }
+    // if is_x86_feature_detected!("rdseed") { features.push("rdseed"); }
+    // if is_x86_feature_detected!("tsc") { features.push("tsc"); }
     if is_x86_feature_detected!("mmx") { features.push("mmx"); }
     if is_x86_feature_detected!("sse") { features.push("sse"); }
     if is_x86_feature_detected!("sse2") { features.push("sse2"); }
@@ -1019,9 +1050,9 @@ fn cpu_features() -> Vec<String> {
     if is_x86_feature_detected!("avx512vp2intersect") { features.push("avx512vp2intersect"); }
     if is_x86_feature_detected!("f16c") { features.push("f16c"); }
     if is_x86_feature_detected!("fma") { features.push("fma"); }
-    if is_x86_feature_detected!("bmi1") { features.push("bmi1"); }
+    // if is_x86_feature_detected!("bmi1") { features.push("bmi1"); }
     if is_x86_feature_detected!("bmi2") { features.push("bmi2"); }
-    if is_x86_feature_detected!("abm") { features.push("abm"); }
+    // if is_x86_feature_detected!("abm") { features.push("abm"); }
     if is_x86_feature_detected!("lzcnt") { features.push("lzcnt"); }
     if is_x86_feature_detected!("tbm") { features.push("tbm"); }
     if is_x86_feature_detected!("popcnt") { features.push("popcnt"); }
@@ -1030,7 +1061,7 @@ fn cpu_features() -> Vec<String> {
     if is_x86_feature_detected!("xsaveopt") { features.push("xsaveopt"); }
     if is_x86_feature_detected!("xsaves") { features.push("xsaves"); }
     if is_x86_feature_detected!("xsavec") { features.push("xsavec"); }
-    if is_x86_feature_detected!("cmpxchg16b") { features.push("cmpxchg16b"); }
+    // if is_x86_feature_detected!("cmpxchg16b") { features.push("cmpxchg16b"); }
     if is_x86_feature_detected!("adx") { features.push("adx"); }
     if is_x86_feature_detected!("rtm") { features.push("rtm"); }
     // this breaks msvc shipped with vs2019

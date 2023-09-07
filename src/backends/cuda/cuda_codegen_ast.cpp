@@ -7,7 +7,8 @@
 #include <luisa/runtime/rtx/hit.h>
 #include <luisa/runtime/dispatch_buffer.h>
 #include <luisa/dsl/rtx/ray_query.h>
-#include "../common/string_scratch.h"
+
+#include "cuda_texture.h"
 #include "cuda_codegen_ast.h"
 
 namespace luisa::compute::cuda {
@@ -423,6 +424,19 @@ private:
                 _codegen->_scratch << " = params.";
                 _codegen->_emit_variable_name(*r.cbegin());
                 _codegen->_scratch << ";\n";
+                // inform the compiler of the underlying storage if the resource is captured
+                // Note: this is O(n^2) but we should not have that many resources
+                for (auto i = 0u; i < f.bound_arguments().size(); i++) {
+                    auto binding = f.bound_arguments()[i];
+                    if (auto b = luisa::get_if<Function::TextureBinding>(&binding);
+                        b != nullptr && f.arguments()[i] == v) {
+                        auto surf = reinterpret_cast<CUDATexture *>(b->handle)->binding(b->level);
+                        _codegen->_emit_indent();
+                        _codegen->_scratch << "lc_assume(";
+                        _codegen->_emit_variable_name(v);
+                        _codegen->_scratch << ".surface.storage == " << surf.storage << ");\n";
+                    }
+                }
             }
             // captured variables through stack
             if (!captured_elements.empty() ||
@@ -781,11 +795,12 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
 
     switch (expr->op()) {
         case CallOp::PACK: _scratch << "lc_pack_to"; break;
-        case CallOp::UNPACK:
+        case CallOp::UNPACK: {
             _scratch << "lc_unpack_from<";
             _emit_type_name(expr->type());
             _scratch << ">";
             break;
+        }
         case CallOp::CUSTOM: _scratch << "custom_" << hash_to_string(expr->custom().hash()); break;
         case CallOp::EXTERNAL: _scratch << expr->external()->name(); break;
         case CallOp::ALL: _scratch << "lc_all"; break;
@@ -857,7 +872,12 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
         case CallOp::BUFFER_READ: _scratch << "lc_buffer_read"; break;
         case CallOp::BUFFER_WRITE: _scratch << "lc_buffer_write"; break;
         case CallOp::BUFFER_SIZE: _scratch << "lc_buffer_size"; break;
-        case CallOp::BYTE_BUFFER_READ: _scratch << "lc_byte_buffer_read"; break;
+        case CallOp::BYTE_BUFFER_READ: {
+            _scratch << "lc_byte_buffer_read<";
+            _emit_type_name(expr->type());
+            _scratch << ">";
+            break;
+        }
         case CallOp::BYTE_BUFFER_WRITE: _scratch << "lc_byte_buffer_write"; break;
         case CallOp::BYTE_BUFFER_SIZE: _scratch << "lc_byte_buffer_size"; break;
         case CallOp::TEXTURE_READ: _scratch << "lc_texture_read"; break;
@@ -885,8 +905,8 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
             _scratch << ">";
             break;
         }
-        case CallOp::BINDLESS_BYTE_ADDRESS_BUFFER_READ: {
-            _scratch << "lc_bindless_byte_address_buffer_read<";
+        case CallOp::BINDLESS_BYTE_BUFFER_READ: {
+            _scratch << "lc_bindless_byte_buffer_read<";
             _emit_type_name(expr->type());
             _scratch << ">";
             break;
@@ -955,7 +975,7 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
         case CallOp::GRADIENT: _scratch << "LC_GRAD"; break;
         case CallOp::GRADIENT_MARKER: _scratch << "LC_MARK_GRAD"; break;
         case CallOp::ACCUMULATE_GRADIENT: _scratch << "LC_ACCUM_GRAD"; break;
-        case CallOp::BACKWARD: LUISA_ERROR_WITH_LOCATION("Not implemented."); break;
+        case CallOp::BACKWARD: LUISA_ERROR_WITH_LOCATION("autodiff::backward() should have been lowered."); break;
         case CallOp::DETACH: {
             _scratch << "static_cast<";
             _emit_type_name(expr->type());
@@ -963,9 +983,8 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
             break;
         }
         case CallOp::RASTER_DISCARD: LUISA_NOT_IMPLEMENTED(); break;
-        case CallOp::INDIRECT_CLEAR_DISPATCH_BUFFER: _scratch << "lc_indirect_buffer_clear"; break;
-        case CallOp::INDIRECT_EMPLACE_DISPATCH_KERNEL: _scratch << "lc_indirect_buffer_emplace"; break;
-        case CallOp::INDIRECT_SET_DISPATCH_KERNEL: LUISA_NOT_IMPLEMENTED(); break;
+        case CallOp::INDIRECT_SET_DISPATCH_KERNEL: _scratch << "lc_indirect_set_dispatch_kernel"; break;
+        case CallOp::INDIRECT_SET_DISPATCH_COUNT: _scratch << "lc_indirect_set_dispatch_count"; break;
         case CallOp::DDX: LUISA_NOT_IMPLEMENTED(); break;
         case CallOp::DDY: LUISA_NOT_IMPLEMENTED(); break;
         case CallOp::WARP_FIRST_ACTIVE_LANE: _scratch << "lc_warp_first_active_lane"; break;
@@ -1311,6 +1330,16 @@ void CUDACodegenAST::_emit_function(Function f) noexcept {
             _emit_variable_name(arg);
             _scratch << ";";
         }
+        for (auto i = 0u; i < f.bound_arguments().size(); i++) {
+            auto binding = f.bound_arguments()[i];
+            if (auto b = luisa::get_if<Function::TextureBinding>(&binding)) {
+                auto surface = reinterpret_cast<CUDATexture *>(b->handle)->binding(b->level);
+                // inform the compiler of the underlying storage
+                _scratch << "\n  lc_assume(";
+                _emit_variable_name(f.arguments()[i]);
+                _scratch << ".surface.storage == " << surface.storage << ");";
+            }
+        }
     } else {
         auto any_arg = false;
         for (auto arg : f.arguments()) {
@@ -1340,19 +1369,22 @@ void CUDACodegenAST::_emit_function(Function f) noexcept {
         if (f.tag() == Function::Tag::KERNEL && !f.requires_raytracing()) {
             _scratch << "extern \"C\" __global__ void kernel_launcher(Params params, const LCIndirectBuffer indirect) {\n"
                      << "  auto i = blockIdx.x * blockDim.x + threadIdx.x;\n"
-                     << "  if (i < indirect.header()->size) {\n"
+                     << "  auto n = min(indirect.header()->size, indirect.capacity - indirect.offset);\n"
+                     << "  if (i < n) {\n"
                      << "    auto args = params;\n"
-                     << "    auto d = indirect.dispatches()[i];\n"
+                     << "    auto d = indirect.dispatches()[i + indirect.offset];\n"
                      << "    args.ls_kid = d.dispatch_size_and_kernel_id;\n"
                      << "    auto block_size = lc_block_size();\n"
                      << "#ifdef LUISA_DEBUG\n"
                      << "    lc_assert(lc_all(block_size == d.block_size));\n"
                      << "#endif\n"
                      << "    auto dispatch_size = lc_make_uint3(d.dispatch_size_and_kernel_id);\n"
-                     << "    auto block_count = (dispatch_size + block_size - 1u) / block_size;\n"
-                     << "    auto nb = dim3(block_count.x, block_count.y, block_count.z);\n"
-                     << "    auto bs = dim3(block_size.x, block_size.y, block_size.z);\n"
-                     << "    kernel_main<<<nb, bs>>>(args);\n"
+                     << "    if (lc_all(dispatch_size > 0u)) {\n"
+                     << "      auto block_count = (dispatch_size + block_size - 1u) / block_size;\n"
+                     << "      auto nb = dim3(block_count.x, block_count.y, block_count.z);\n"
+                     << "      auto bs = dim3(block_size.x, block_size.y, block_size.z);\n"
+                     << "      kernel_main<<<nb, bs>>>(args);\n"
+                     << "    }\n"
                      << "  }\n"
                      << "}\n\n";
         }
@@ -1458,6 +1490,8 @@ void CUDACodegenAST::_emit_type_decl(Function kernel) noexcept {
     // process types in topological order
     types.clear();
     auto emit = [&](auto &&self, auto type) noexcept -> void {
+        if (type == Type::of<void>())
+            return;
         if (types.emplace(type).second) {
             if (type->is_array() || type->is_buffer()) {
                 self(self, type->element());
@@ -1520,6 +1554,19 @@ void CUDACodegenAST::visit(const Type *type) noexcept {
         }
         _scratch << "}\n\n";
     }
+    if(type->is_custom() &&
+        type != _ray_type &&
+        type != _triangle_hit_type &&
+        type != _procedural_hit_type &&
+        type != _committed_hit_type &&
+        type != _ray_query_all_type &&
+        type != _ray_query_any_type){
+            _scratch<< "using ";
+            _emit_type_name(type);
+            _scratch<<" = ";
+            _emit_type_name(type->members()[0]);
+            _scratch<<";\n\n";
+    }
 }
 
 void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
@@ -1575,6 +1622,8 @@ void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
                 _scratch << "LCRayQueryAny";
             } else if (type == _indirect_buffer_type) {
                 _scratch << "LCIndirectBuffer";
+            } else if (!type->members().empty()) {
+                _scratch << type->description();
             } else {
                 LUISA_ERROR_WITH_LOCATION(
                     "Unsupported custom type: {}.",

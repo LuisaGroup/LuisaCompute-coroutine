@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ffi::CString,
+    ffi::CString, default,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -10,7 +10,7 @@ use luisa_compute_ir::{
     context::is_type_equal,
     ir::{self, *},
     transform::autodiff::grad_type_of,
-    CArc, CBoxedSlice, Pooled,
+    CArc, Pooled,
 };
 
 use super::sha256_short;
@@ -600,6 +600,25 @@ impl<'a> FunctionEmitter<'a> {
             Func::Lerp => Some("lc_lerp"),
             Func::Step => Some("lc_step"),
             Func::SmoothStep => Some("lc_smoothstep"),
+            Func::SynchronizeBlock => Some("lc_synchronize_block"),
+            Func::WarpIsFirstActiveLane => Some("lc_warp_is_first_active_lane"),
+            Func::WarpFirstActiveLane => Some("lc_warp_first_active_lane"),
+            Func::WarpActiveAllEqual => Some("lc_warp_active_all_equal"),
+            Func::WarpActiveBitAnd => Some("lc_warp_active_bit_and"),
+            Func::WarpActiveBitOr => Some("lc_warp_active_bit_or"),
+            Func::WarpActiveBitXor => Some("lc_warp_active_bit_xor"),
+            Func::WarpActiveCountBits => Some("lc_warp_active_count_bits"),
+            Func::WarpActiveMax => Some("lc_warp_active_max"),
+            Func::WarpActiveMin => Some("lc_warp_active_min"),
+            Func::WarpActiveProduct => Some("lc_warp_active_product"),
+            Func::WarpActiveSum => Some("lc_warp_active_sum"),
+            Func::WarpActiveAll => Some("lc_warp_active_all"),
+            Func::WarpActiveAny => Some("lc_warp_active_any"),
+            Func::WarpActiveBitMask => Some("lc_warp_active_bit_mask"),
+            Func::WarpPrefixSum => Some("lc_warp_prefix_sum"),
+            Func::WarpPrefixProduct => Some("lc_warp_prefix_product"),
+            Func::WarpReadLaneAt => Some("lc_warp_read_lane_at"),
+            Func::WarpReadFirstLane => Some("lc_warp_read_first_lane"),
             _ => None,
         };
         if let Some(func) = func {
@@ -626,6 +645,34 @@ impl<'a> FunctionEmitter<'a> {
         args_v: &Vec<String>,
     ) -> bool {
         match f {
+            Func::ByteBufferRead => {
+                writeln!(
+                    &mut self.body,
+                    "const auto {1} = lc_byte_buffer_read<{0}>(k_args, {2}, {3});",
+                    node_ty_s, var, args_v[0], args_v[1]
+                )
+                .unwrap();
+                true
+            }
+            Func::ByteBufferWrite => {
+                let v_ty = self.type_gen.gen_c_type(args[2].type_());
+                writeln!(
+                    &mut self.body,
+                    "lc_byte_buffer_write<{}>(k_args, {}, {}, {});",
+                    v_ty, args_v[0], args_v[1], args_v[2]
+                )
+                .unwrap();
+                true
+            }
+            Func::ByteBufferSize => {
+                writeln!(
+                    &mut self.body,
+                    "const {} {} = lc_buffer_size<uint8_t>(k_args, {});",
+                    node_ty_s, var, args_v[0]
+                )
+                .unwrap();
+                true
+            }
             Func::BufferRead => {
                 let buffer_ty = self.type_gen.gen_c_type(args[0].type_());
                 writeln!(
@@ -652,6 +699,15 @@ impl<'a> FunctionEmitter<'a> {
                     &mut self.body,
                     "const {} {} = lc_buffer_size<{}>(k_args, {});",
                     node_ty_s, var, buffer_ty, args_v[0]
+                )
+                .unwrap();
+                true
+            } 
+            Func::BindlessByteAdressBufferRead => {
+                writeln!(
+                    &mut self.body,
+                    "const auto {1} = lc_bindless_byte_buffer_read<{0}>(k_args, {2}, {3}, {4});",
+                    node_ty_s, var, args_v[0], args_v[1], args_v[2]
                 )
                 .unwrap();
                 true
@@ -871,15 +927,17 @@ impl<'a> FunctionEmitter<'a> {
                 writeln!(&mut self.body, "lc_assert({}, {});", args_v.join(", "), id).unwrap();
                 true
             }
-            Func::ShaderExecutionReorder=> {
-                writeln!(&mut self.body, "lc_shader_execution_reorder({});", args_v.join(", ")).unwrap();
+            Func::ShaderExecutionReorder => {
+                writeln!(
+                    &mut self.body,
+                    "lc_shader_execution_reorder({});",
+                    args_v.join(", ")
+                )
+                .unwrap();
                 true
             }
             Func::Unreachable(msg) => {
-                let msg = CString::from_vec_with_nul(msg.to_vec())
-                    .unwrap()
-                    .into_string()
-                    .unwrap();
+                let msg = msg.to_string();
                 let id = self.globals.message.len();
                 self.globals.message.push(msg);
                 if !is_type_equal(node_ty, &Type::void()) {
@@ -1697,6 +1755,7 @@ impl<'a> FunctionEmitter<'a> {
             Instruction::Suspend(_) => {
                 panic!("Suspend should be lowered before codegen")
             }
+            default => panic!("unimplemented: {:?}", default),
         }
     }
     fn gen_block_(&mut self, block: Pooled<ir::BasicBlock>) {

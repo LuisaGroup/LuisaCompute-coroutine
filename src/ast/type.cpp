@@ -156,7 +156,15 @@ const Type *TypeRegistry::custom_type(luisa::string_view name) noexcept {
     t->description = name;
     return _register(t);
 }
+void _update(Type *dst, const Type *src) {
+    auto dst_inst = static_cast<TypeImpl *>(dst);
+    auto src_inst = static_cast<const TypeImpl *>(src);
+    dst_inst->alignment = src_inst->alignment;
+    dst_inst->size = src_inst->size;
+    dst_inst->members.push_back(src);
+    //dst_inst->description = src_inst->description;
 
+}
 size_t TypeRegistry::type_count() const noexcept {
     std::lock_guard lock{_mutex};
     return _types.size();
@@ -396,7 +404,7 @@ const TypeImpl *TypeRegistry::_decode(luisa::string_view desc) noexcept {
 }// namespace detail
 
 luisa::span<const Type *const> Type::members() const noexcept {
-    LUISA_ASSERT(is_structure(),
+    LUISA_ASSERT(is_structure()||(is_custom()&&size()>0),
                  "Calling members() on a non-structure type {}.",
                  description());
     return static_cast<const detail::TypeImpl *>(this)->members;
@@ -596,6 +604,9 @@ const Type *Type::custom(luisa::string_view name) noexcept {
     return detail::TypeRegistry::instance().custom_type(name);
 }
 
+void Type::update_from(const Type* type) {
+    detail::_update(this, type);
+}
 bool Type::is_bool() const noexcept { return tag() == Tag::BOOL; }
 bool Type::is_int32() const noexcept { return tag() == Tag::INT32; }
 bool Type::is_uint32() const noexcept { return tag() == Tag::UINT32; }

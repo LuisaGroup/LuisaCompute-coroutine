@@ -216,6 +216,7 @@ public:
     /// Return if uses automatic differentiation.
     [[nodiscard]] bool requires_autodiff() const noexcept;
 
+    void coroframe_replace(const Type *type) noexcept;
     // build primitives
     /// Define a kernel function with given definition
     template<typename Def>
@@ -235,6 +236,11 @@ public:
         return _define(Function::Tag::RASTER_STAGE, std::forward<Def>(def));
     }
 
+    /// Define a coroutine function with given definition
+    template<typename Def>
+    static auto define_coroutine(Def &&def) {
+        return _define(Function::Tag::COROUTINE, std::forward<Def>(def));
+    }
     // config
     /// Set block size
     void set_block_size(uint3 size) noexcept;
@@ -341,7 +347,7 @@ public:
     /// Add assign statement
     void assign(const Expression *lhs, const Expression *rhs) noexcept;
     /// Add suspend statement
-    void suspend_(const Expression *expr = nullptr) noexcept;
+    void suspend_(uint suspend_id) noexcept;
 
     /// Add if statement
     [[nodiscard]] IfStmt *if_(const Expression *cond) noexcept;

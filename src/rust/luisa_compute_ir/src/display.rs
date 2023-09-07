@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use crate::ir::BasicBlock;
 
+
 pub struct DisplayIR {
     output: String,
     map: HashMap<usize, usize>,
@@ -228,7 +229,7 @@ impl DisplayIR {
                 self.output += "}";
             }
             Instruction::Comment(_) => {}
-            Instruction::Return(_) => todo!(),
+            Instruction::Return(_) => {self.output += "return\n";},
             Instruction::CoroSplitMark { token } => {
                 self.output += format!("CoroSplitMark({})", token).as_str();
             }

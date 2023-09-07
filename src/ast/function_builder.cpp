@@ -96,8 +96,8 @@ void FunctionBuilder::return_(const Expression *expr) noexcept {
     }
 }
 
-void FunctionBuilder::suspend_(const Expression *expr) noexcept {
-	_create_and_append_statement<SuspendStmt>(expr);
+void FunctionBuilder::suspend_(uint suspend_id) noexcept {
+	_create_and_append_statement<SuspendStmt>(suspend_id);
     _direct_builtin_callables.mark(CallOp::SUSPEND);
     _propagated_builtin_callables.mark(CallOp::SUSPEND);
 }

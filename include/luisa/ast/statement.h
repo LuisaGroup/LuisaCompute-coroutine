@@ -495,17 +495,16 @@ public:
 class SuspendStmt : public Statement {
 
 private:
-    const Expression *_expr;
+    const uint _id;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
 
 public:
-    explicit SuspendStmt(const Expression *expr) noexcept
-        : Statement{Tag::SUSPEND}, _expr{expr} {
-        if (_expr != nullptr) { _expr->mark(Usage::READ); }
+    explicit SuspendStmt(const uint id) noexcept
+        : Statement{Tag::SUSPEND}, _id{id} {
     }
-    [[nodiscard]] auto expression() const noexcept { return _expr; }
+    [[nodiscard]] auto id() const noexcept { return _id; }
     LUISA_STATEMENT_COMMON()
 };
 
@@ -617,8 +616,6 @@ void traverse_expressions(
             break;
         }
         case Statement::Tag::SUSPEND: {
-            auto suspend_stmt = static_cast<const SuspendStmt *>(stmt);
-            if (auto value = suspend_stmt->expression()) { do_visit(value); }
             break;
         }
     }

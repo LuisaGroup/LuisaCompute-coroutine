@@ -1220,9 +1220,9 @@ ir::NodeRef AST2IR::_convert(const AutoDiffStmt *stmt) noexcept {
 }
 
 ir::NodeRef AST2IR::_convert(const SuspendStmt *stmt) noexcept {
-    auto id = _convert_expr(stmt->expression(), false);
+    auto id = stmt->id();
     auto instr = ir::luisa_compute_ir_new_instruction(
-        ir::Instruction{.tag = ir::Instruction::Tag::Suspend, .suspend = {id}});
+        ir::Instruction{.tag = ir::Instruction::Tag::CoroSplitMark, .coro_split_mark = {id}});
     auto node = ir::luisa_compute_ir_new_node(
         _pools.clone(),
         ir::Node{.type_ = _convert_type(nullptr).clone(), .instruction = instr});

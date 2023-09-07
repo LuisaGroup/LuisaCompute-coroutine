@@ -347,7 +347,7 @@ public:
     /// Add assign statement
     void assign(const Expression *lhs, const Expression *rhs) noexcept;
     /// Add suspend statement
-    void suspend_(const Expression *expr = nullptr) noexcept;
+    void suspend_(uint suspend_id) noexcept;
 
     /// Add if statement
     [[nodiscard]] IfStmt *if_(const Expression *cond) noexcept;

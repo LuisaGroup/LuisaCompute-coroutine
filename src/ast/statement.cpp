@@ -27,7 +27,7 @@ uint64_t ReturnStmt::_compute_hash() const noexcept {
 }
 
 uint64_t SuspendStmt::_compute_hash() const noexcept {
-    return _expr == nullptr ? hash64_default_seed : _expr->hash();
+    return luisa::hash<uint>{}(_id);
 }
 
 uint64_t ScopeStmt::_compute_hash() const noexcept {

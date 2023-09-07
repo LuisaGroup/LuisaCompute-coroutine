@@ -1,5 +1,6 @@
 #pragma once
 
+#include "luisa/core/basic_traits.h"
 #include <cassert>
 #include <luisa/dsl/var.h>
 #include <luisa/dsl/operators.h>
@@ -415,12 +416,9 @@ inline void return_(T &&t) noexcept {
         detail::extract_expression(std::forward<T>(t)));
 }
 
-template<typename T>
-inline void suspend(T &&t) noexcept {
-    using E = expr_value_t<T>;
-    static_assert(std::is_same_v<E, uint>);
+inline void suspend(uint suspend_id) noexcept {
     detail::FunctionBuilder::current()->suspend_(
-        detail::extract_expression(std::forward<T>(t)));
+        suspend_id);
 }
 
 inline void return_() noexcept {

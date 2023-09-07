@@ -333,13 +333,11 @@ impl CoroutineImpl {
                 INVALID_REF
             }
             Instruction::Suspend (suspend_id) => {
-                /*
-                    if(frame.id==suspend_id){
-                        frame.id+=1;
-                        return;
-                    }
-                 */
-                let suspend_id = self.promote(*suspend_id,builder,record);
+                panic!("suspend have been replaced by CoroSplitMark")
+                
+            }
+            Instruction::CoroSplitMark{token}=>{
+                let suspend_id = builder.const_(Const::Uint32(*token));
                 let const0=builder.const_(Const::Uint32(0));
                 let const1=builder.const_(Const::Uint32(1));
                 let id_handle = builder.call(Func::ExtractElement,&[self.corostate, const0],crate::context::register_type(Type::Primitive(Primitive::Uint32)));
@@ -352,11 +350,8 @@ impl CoroutineImpl {
                 let true_branch=true_builder.finish();
                 let false_branch=IrBuilder::new(builder.pools.clone()).finish();
                 builder.if_(cond,true_branch,false_branch)
-                //builder.suspend(suspend_id)
-                
             }
-            Instruction::CoroSplitMark { .. }
-            | Instruction::CoroSuspend { .. }
+            Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. }
             | Instruction::CoroFrame { .. } => {
                 todo!()

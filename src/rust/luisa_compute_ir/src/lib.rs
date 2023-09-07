@@ -9,6 +9,7 @@ mod display;
 pub mod serialize;
 pub mod transform;
 pub mod analysis;
+mod ast2ir;
 
 use ir::{ArrayType, Primitive, Type};
 

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use crate::ir::BasicBlock;
 
+
 pub struct DisplayIR {
     output: String,
     map: HashMap<usize, usize>,

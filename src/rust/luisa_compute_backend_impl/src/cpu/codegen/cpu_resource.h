@@ -26,7 +26,16 @@ inline T lc_buffer_read(const KernelFnArgs *k_args, const BufferView &buffer, si
 #endif
     return *(reinterpret_cast<const T *>(buffer.data) + i);
 }
-
+template<class T>
+inline T lc_byte_buffer_read(const KernelFnArgs *k_args, const BufferView &buffer, size_t i) noexcept {
+#ifdef LUISA_DEBUG
+    if (i >= lc_buffer_size<uint8_t>(k_args, buffer)) {
+        lc_abort_and_print_sll(k_args->internal_data, "Buffer read out of bounds: {} >= {}", i,
+                               lc_buffer_size<T>(k_args, buffer));
+    }
+#endif
+    return *(reinterpret_cast<const T *>(buffer.data + i));
+}
 template<class T>
 inline T *lc_buffer_ref(const KernelFnArgs *k_args, const BufferView &buffer, size_t i) noexcept {
 #ifdef LUISA_DEBUG
@@ -47,6 +56,16 @@ inline void lc_buffer_write(const KernelFnArgs *k_args, const BufferView &buffer
     }
 #endif
     *(reinterpret_cast<T *>(buffer.data) + i) = value;
+}
+template<class T>
+inline void lc_byte_buffer_write(const KernelFnArgs *k_args, const BufferView &buffer, size_t i, T value) noexcept {
+#ifdef LUISA_DEBUG
+    if (i >= lc_buffer_size<uint8_t>(k_args, buffer)) {
+        lc_abort_and_print_sll(k_args->internal_data, "Buffer read out of bounds: {} >= {}", i,
+                               lc_buffer_size<T>(k_args, buffer));
+    }
+#endif
+    *(reinterpret_cast<T *>(buffer.data + i)) = value;
 }
 
 inline BufferView lc_buffer_arg(const KernelFnArgs *k_args, size_t i) noexcept {
@@ -133,7 +152,12 @@ lc_bindless_buffer_type(const KernelFnArgs *k_args, const BindlessArray &array, 
     auto buf = lc_bindless_buffer(k_args, array, buf_index);
     return buf.ty;
 }
-
+template<class T>
+inline T lc_bindless_byte_buffer_read(const KernelFnArgs *k_args, const BindlessArray &array, size_t buf_index,
+                                 size_t element) noexcept {
+    auto buf = lc_bindless_buffer(k_args, array, buf_index);
+    return lc_byte_buffer_read<T>(k_args, buf, element);
+}
 template<class T>
 inline T lc_bindless_buffer_read(const KernelFnArgs *k_args, const BindlessArray &array, size_t buf_index,
                                  size_t element) noexcept {
@@ -345,5 +369,74 @@ __device__ inline T lc_unpack_from(BufferView array, lc_uint idx) {
         }
         return x.value;
     }
+}
+inline bool warp_is_first_active_lane() {
+    return true;
+}
+template<class T>
+inline bool warp_active_all_equal(T && v) {
+    return true;
+}
+template<class T>
+inline T warp_active_bit_and(T && v) {
+    return v;
+}
+template<class T>
+inline T warp_active_bit_or(T && v) {
+    return v;
+}
+template<class T>
+inline T warp_active_bit_xor(T && v) {
+    return v;
+}
+inline lc_uint warp_active_count_bits() {
+    return 1;
+}
+template<class T>
+inline T warp_active_max(T v) {
+    return v;
+}
+template<class T>
+inline T warp_active_min(T v) {
+    return v;
+}
+template<class T>
+inline T warp_active_product(T v) {
+    return v;
+}
+template<class T>
+inline T warp_active_sum(T v) {
+    return v;
+}
+
+inline lc_uint warp_all(bool v) {
+    return v;
+}
+
+inline lc_uint warp_any(bool v) {
+    return v;
+}
+
+inline lc_uint4 warp_active_bit_mask() {
+    return lc_make_uint4(1u, 0, 0, 0);
+}
+inline lc_uint warp_prefix_count_bits() {
+    return 0;
+}
+template<class T>
+inline T warp_prefix_sum(T &&) {
+    return lc_zero<T>();
+}
+template<class T>
+inline T warp_prefix_product(T &&) {
+    return lc_one<T>();
+}
+template<class T>
+inline T warp_read_lane_at(T && v, lc_uint index) {
+    return v;
+}
+template<class T>
+inline T read_first_lane(T && v) {
+    return v;
 }
 inline void lc_shader_execution_reorder(lc_uint hint, lc_uint hint_bits) noexcept {}

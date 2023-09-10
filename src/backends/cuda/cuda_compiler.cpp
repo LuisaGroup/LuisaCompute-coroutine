@@ -59,8 +59,16 @@ luisa::string CUDACompiler::compile(const luisa::string &src, const luisa::strin
 }
 
 size_t CUDACompiler::type_size(const Type *type) noexcept {
+    if(type->is_coroframe()){
+        if (!type->members().empty()) {
+            return type->size();
+        } else {
+            LUISA_ERROR_WITH_LOCATION("Cannot find size of {}." 
+            "Usages of coroframe type should after the coroutine definition!",
+                                      type->description());
+        }
+    }
     if (!type->is_custom()) { return type->size(); }
-    if(type->is_custom()&&!type->members().empty()) return type->size();
     // TODO: support custom types
     if (type->description() == "LC_IndirectKernelDispatch") {
         LUISA_ERROR_WITH_LOCATION("Not implemented.");

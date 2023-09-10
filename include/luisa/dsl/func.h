@@ -1,6 +1,8 @@
 #pragma once
 
+#include "luisa/ast/type.h"
 #include "luisa/core/logging.h"
+#include "luisa/dsl/expr_traits.h"
 #include <type_traits>
 #include <luisa/core/stl/memory.h>
 #include <luisa/ast/external_function.h>
@@ -491,8 +493,9 @@ class Coroutine<Ret(Args...)> {
 
 private:
     using CoroID=uint;
-    using FrameType = std::tuple_element_t<0, std::tuple<Args...>>;
+    using FrameType = std::tuple_element_t<0, std::tuple<Args...>>;//must be a reference to coroframe struct
     static_assert(std::is_lvalue_reference_v<FrameType>);
+    static_assert(is_coroframe_struct_v<expr_value_t<std::remove_cvref_t<FrameType>>>);
     luisa::shared_ptr<const detail::FunctionBuilder> _builder;
     luisa::unordered_map<CoroID, Callable<Ret(FrameType)>> _sub_callables;
 

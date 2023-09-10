@@ -310,6 +310,7 @@ ir::CArc<ir::Type> AST2IR::_convert_type(const Type *type) noexcept {
             ir::destroy_boxed_slice(members);
             return t;
         }
+        case Type::Tag::COROFRAME:
         case Type::Tag::CUSTOM: {
             auto type_desc = type->description();
             auto name = _boxed_slice<uint8_t>(type_desc.size());

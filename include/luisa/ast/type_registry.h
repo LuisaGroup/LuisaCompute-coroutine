@@ -244,10 +244,13 @@ const Type *Type::of() noexcept {
         return nullptr;
     } else {
         auto desc = detail::TypeDesc<std::remove_cvref_t<T>>::description();
-        if constexpr (is_custom_struct_v<T>) {
+        if constexpr (is_custom_struct_v<T>&&!is_coroframe_struct_v<T>) {
             static thread_local auto t = Type::custom(desc);
             return t;
-        } else {
+        } else if constexpr (is_coroframe_struct_v<T>) {
+            static thread_local auto t = Type::coroframe(desc);
+            return t;
+        } else  {
             static thread_local auto t = Type::from(desc);
             return t;
         }
@@ -356,8 +359,6 @@ constexpr auto is_valid_reflection_v = is_valid_reflection<S, M, O>::value;
   template<>                                                               \
   struct luisa::compute::is_custom_struct<S> : std::true_type {};          \
   template<>                                                               \
-  struct luisa::compute::is_internal_custom_struct<S> : std::true_type {}; \
-  template<>                                                               \
   struct luisa::compute::detail::TypeDesc<S> {                             \
     static constexpr luisa::string_view description() noexcept {           \
       return name;                                                         \
@@ -370,11 +371,10 @@ constexpr auto is_valid_reflection_v = is_valid_reflection<S, M, O>::value;
     using type = std::tuple<S>;                                   \
   };                                                              \
   template<>                                                      \
-  struct luisa::compute::is_custom_struct<S> : std::true_type {}; \
+  struct luisa::compute::is_coroframe_struct<S> : std::true_type {}; \
   template<>                                                      \
   struct luisa::compute::detail::TypeDesc<S> {                    \
     static constexpr luisa::string_view description() noexcept {  \
       return name;                                                \
     }                                                             \
   };
-

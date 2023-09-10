@@ -244,7 +244,7 @@ const Type *Type::of() noexcept {
         return nullptr;
     } else {
         auto desc = detail::TypeDesc<std::remove_cvref_t<T>>::description();
-        if constexpr (is_custom_struct_v<T>&&!is_coroframe_struct_v<T>) {
+        if constexpr (is_custom_struct_v<T>) {
             static thread_local auto t = Type::custom(desc);
             return t;
         } else if constexpr (is_coroframe_struct_v<T>) {

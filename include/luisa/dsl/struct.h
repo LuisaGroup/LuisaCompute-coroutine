@@ -348,3 +348,7 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
     }                                                                                        \
     template<>                                                                               \
     struct luisa_compute_extension<S> final : luisa::compute::detail::Ref<S>
+
+#define LUISA_COROFRAME_STRUCT(S)           \
+  LUISA_COROFRAME_STRUCT_REFLECT(S, #S); \
+  LUISA_CUSTOM_STRUCT_EXT(S)

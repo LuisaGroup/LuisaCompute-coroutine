@@ -1554,13 +1554,6 @@ void CUDACodegenAST::visit(const Type *type) noexcept {
         }
         _scratch << "}\n\n";
     }
-    if(type->is_coroframe()){
-            _scratch<< "using ";
-            _emit_type_name(type);
-            _scratch<<" = ";
-            _emit_type_name(type->members()[0]);
-            _scratch<<";\n\n";
-    }
 }
 
 void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
@@ -1624,7 +1617,7 @@ void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
             break;
         }
         case Type::Tag::COROFRAME:{
-            _scratch << type->description();
+            _emit_type_name(type->members()[0]);
             break;
         }
         default: break;

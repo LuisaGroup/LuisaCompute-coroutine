@@ -120,9 +120,6 @@ BufferCreationInfo LCDevice::create_buffer(const Type *element, size_t elem_coun
             LUISA_ERROR("Un-known custom type in dx-backend.");
         }
     } else {
-        LUISA_ASSERT(!element->is_coroframe()||!element->members().empty(),"Cannot find size of {}." 
-            "Usages of coroframe type should after the coroutine definition!",
-                                      element->description());
         info.total_size_bytes = element->size() * elem_count;
         res = static_cast<Buffer *>(
             new DefaultBuffer(

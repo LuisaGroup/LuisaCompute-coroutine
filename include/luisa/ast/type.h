@@ -412,7 +412,7 @@ public:
     [[nodiscard]] uint dimension() const noexcept;
     [[nodiscard]] luisa::span<const Type *const> members() const noexcept;
     [[nodiscard]] const Type *element() const noexcept;
-    
+    [[nodiscard]] const Type *corotype() const noexcept;
     ///change the corresponding Type to another Type in registery
     void update_from(const Type *type);
 

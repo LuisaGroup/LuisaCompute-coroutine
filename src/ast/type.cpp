@@ -459,7 +459,15 @@ const Type *Type::element() const noexcept {
                  description());
     return static_cast<const detail::TypeImpl *>(this)->members.front();
 }
-
+const Type *Type::corotype() const noexcept {
+    LUISA_ASSERT(is_coroframe(),
+                 "Calling corotype() on a non-coroframe type {}.",
+                 description());
+    LUISA_ASSERT(!static_cast<const detail::TypeImpl *>(this)->members.empty(),
+        "Calling corotype() on a coroframe before analyze.\n"
+        "Define Coroutine with this coroframe to specify the backend type!");
+    return static_cast<const detail::TypeImpl *>(this)->members.front();
+}
 const Type *Type::from(std::string_view description) noexcept {
     return detail::TypeRegistry::instance().decode_type(description);
 }
@@ -506,6 +514,9 @@ uint64_t Type::hash() const noexcept {
 }
 
 size_t Type::size() const noexcept {
+    LUISA_ASSERT(!(is_coroframe() &&members().empty()), "Cannot find size of {}."
+                 "Usages of coroframe type should after the coroutine definition!",
+                 description());
     return static_cast<const detail::TypeImpl *>(this)->size;
 }
 

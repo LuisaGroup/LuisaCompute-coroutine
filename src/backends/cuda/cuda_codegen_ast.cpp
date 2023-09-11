@@ -1617,7 +1617,7 @@ void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
             break;
         }
         case Type::Tag::COROFRAME:{
-            _emit_type_name(type->members()[0]);
+            _emit_type_name(type->corotype());
             break;
         }
         default: break;

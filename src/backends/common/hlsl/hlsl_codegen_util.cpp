@@ -389,10 +389,7 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
             str << '_' << type.description();
         } break;
         case Type::Tag::COROFRAME: {
-            LUISA_ASSERT(!type.members().empty(), "Cannot find compiled instance of {}."
-                                                  "Usages of coroframe type should after the coroutine definition!",
-                         type.description());
-            auto customType = opt->CreateStruct(type.members()[0]);
+            auto customType = opt->CreateStruct(type.corotype());
             str << customType;
         }
             return;

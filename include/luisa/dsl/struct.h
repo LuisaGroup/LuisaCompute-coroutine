@@ -425,7 +425,7 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
                 uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                      \
                 auto member_size = soa_size * stride;                                                  \
                 member_size = align_to_soa_cache_line(member_size);                                    \
-                _member_offsets.push_back(tot_size);                                                   \
+                _member_offsets.push_back(dsl::def(tot_size));                                         \
                 tot_size += member_size;                                                               \
             }                                                                                          \
         }                                                                                              \

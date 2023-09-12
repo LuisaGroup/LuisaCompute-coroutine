@@ -205,7 +205,6 @@ void _update(Type *dst, const Type *src) {
     dst_inst->size = src_inst->size;
     dst_inst->members.push_back(src);
     //dst_inst->description = src_inst->description;
-
 }
 size_t TypeRegistry::type_count() const noexcept {
     std::lock_guard lock{_mutex};
@@ -446,7 +445,7 @@ const TypeImpl *TypeRegistry::_decode(luisa::string_view desc) noexcept {
 }// namespace detail
 
 luisa::span<const Type *const> Type::members() const noexcept {
-    LUISA_ASSERT(is_structure()||(is_coroframe()),
+    LUISA_ASSERT(is_structure() || (is_coroframe()),
                  "Calling members() on a non-structure type {}.",
                  description());
     return static_cast<const detail::TypeImpl *>(this)->members;
@@ -464,8 +463,8 @@ const Type *Type::corotype() const noexcept {
                  "Calling corotype() on a non-coroframe type {}.",
                  description());
     LUISA_ASSERT(!static_cast<const detail::TypeImpl *>(this)->members.empty(),
-        "Calling corotype() on a coroframe before analyze.\n"
-        "Define Coroutine with this coroframe to specify the backend type!");
+                 "Calling corotype() on a coroframe before analyze.\n"
+                 "Define Coroutine with this coroframe to specify the backend type!");
     return static_cast<const detail::TypeImpl *>(this)->members.front();
 }
 const Type *Type::from(std::string_view description) noexcept {
@@ -514,8 +513,8 @@ uint64_t Type::hash() const noexcept {
 }
 
 size_t Type::size() const noexcept {
-    LUISA_ASSERT(!(is_coroframe() &&members().empty()), "Cannot find size of {}."
-                 "Usages of coroframe type should after the coroutine definition!",
+    LUISA_ASSERT(!(is_coroframe() && members().empty()), "Cannot find size of {}."
+                                                         "Usages of coroframe type should after the coroutine definition!",
                  description());
     return static_cast<const detail::TypeImpl *>(this)->size;
 }
@@ -660,7 +659,7 @@ const Type *Type::custom(luisa::string_view name) noexcept {
 const Type *Type::coroframe(luisa::string_view name) noexcept {
     return detail::TypeRegistry::instance().coroframe_type(name);
 }
-void Type::update_from(const Type* type) {
+void Type::update_from(const Type *type) {
     detail::_update(this, type);
 }
 bool Type::is_bool() const noexcept { return tag() == Tag::BOOL; }

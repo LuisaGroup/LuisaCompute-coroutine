@@ -9,6 +9,8 @@ using namespace luisa::compute;
 
 struct alignas(4) CoroFrame{
 };
+LUISA_CUSTOM_STRUCT_EXT(CoroFrame){};
+LUISA_COROFRAME_STRUCT_REFLECT(CoroFrame,"coroframe");
 
 int main(int argc, char *argv[]) {
     log_level_verbose();
@@ -19,24 +21,29 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
     auto device = context.create_device(argv[1]);
+    auto stream = device.create_stream(StreamTag::COMPUTE);
+
     constexpr auto n = 10u;
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = std::vector<uint>(n, 0u);
-    auto stream = device.create_stream(StreamTag::COMPUTE);
 
-    Coroutine coro = [](BufferUInt x_buffer, UInt id, UInt n) noexcept {
+    Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n) noexcept {
         auto x = x_buffer.read(id);
-        $suspend(0u);
-        x_buffer.write(id, (id * 1007) % 107);
-        $suspend(1u);
-        x = x_buffer.read((id + 7) % n);
-        $suspend(2u);
-        x_buffer.write(id, x);
+        $if(id < 5u) {
+            x_buffer.write(id, x + 10u);
+            $suspend(1u);
+            auto x = x_buffer.read(id);
+            x_buffer.write(id, x + 100u);
+        } $else {
+            x_buffer.write(id, x + 1000u);
+        };
     };
+    auto frame_buffer=device.create_buffer<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
         x_buffer.write(id, id);
-        coro(x_buffer, id);
+        auto frame = frame_buffer->read(id);
+        coro(frame, x_buffer, id, n);
     };
     auto shader = device.compile(kernel);
 

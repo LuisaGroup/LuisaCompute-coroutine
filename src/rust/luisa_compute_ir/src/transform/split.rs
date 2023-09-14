@@ -176,32 +176,48 @@ struct New2OldMap {
 }
 
 
-struct SplitManager {
+pub(crate) struct SplitManager {
     old2new: Old2NewMap,
     new2old: New2OldMap,
-    // map old node to new node
-    coro_scopes: HashMap<u32, NodeRef>,
+    pub(crate) entry_scope_token: u32,
+    pub(crate) coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
     continuations: HashMap<u32, Continuation>,
     split_possibility: HashMap<*const BasicBlock, SplitPossibility>,
 }
 
 impl SplitManager {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             old2new: Default::default(),
             new2old: Default::default(),
+            entry_scope_token: u32::MAX,
             coro_scopes: HashMap::new(),
             continuations: HashMap::new(),
             split_possibility: HashMap::new(),
         }
     }
 
+    pub(crate) fn split(&mut self, callable: &CallableModule) {
+        // prepare
+        let pools = &callable.pools;
+        let scope_builder = self.preprocess(callable);
+        self.entry_scope_token = scope_builder.token;
+        let bb = &callable.module.entry;
+
+        // visit
+        let mut sb_vec = self.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
+        while !sb_vec.is_empty() {
+            let scope_builder = sb_vec.pop().unwrap();
+            self.build_scope(pools, scope_builder);
+        }
+    }
+
+
     fn create_scope_builder_temp(&mut self, pools: CArc<ModulePools>) -> ScopeBuilder {
         ScopeBuilder::new(FrameTokenManager::get_temp_token(), pools)
     }
 
-
-    fn coro_split_mark_in_bb(&mut self, bb: &Pooled<BasicBlock>) {
+    fn preprocess_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
         let mut split_poss = self.split_possibility.entry(bb.as_ptr()).or_default().clone();
         bb.iter().for_each(|node_ref_present| {
             let node = node_ref_present.get();
@@ -211,17 +227,22 @@ impl SplitManager {
                     split_poss.possibly = true;
                     split_poss.directly = true;
                     split_poss.definitely = true;
+                    self.continuations.insert(*token, Continuation::new(*token));
+
+                    // TODO: args & captures
+                    let args = self.duplicate_args(*token, &callable_original.pools, &callable_original.args);
+                    let captures = self.duplicate_captures(*token, &callable_original.pools, &callable_original.captures);
                 }
                 // 3 Instructions that might contain coro split mark
                 Instruction::Loop { body, cond } => {
-                    self.coro_split_mark_in_bb(body);
+                    self.preprocess_bb(body, callable_original);
                     let split_poss_body = self.split_possibility.get(&body.as_ptr()).unwrap();
                     split_poss.possibly |= split_poss_body.possibly;
                     split_poss.definitely |= split_poss_body.definitely;
                 }
                 Instruction::If { cond, true_branch, false_branch } => {
-                    self.coro_split_mark_in_bb(true_branch);
-                    self.coro_split_mark_in_bb(false_branch);
+                    self.preprocess_bb(true_branch, callable_original);
+                    self.preprocess_bb(false_branch, callable_original);
                     let split_poss_true = self.split_possibility.get(&true_branch.as_ptr()).unwrap();
                     let split_poss_false = self.split_possibility.get(&false_branch.as_ptr()).unwrap();
                     split_poss.possibly |= split_poss_true.possibly || split_poss_false.possibly;
@@ -232,7 +253,7 @@ impl SplitManager {
                     default,
                     cases,
                 } => {
-                    self.coro_split_mark_in_bb(default);
+                    self.preprocess_bb(default, callable_original);
                     let split_poss_default = self.split_possibility.get(&default.as_ptr()).unwrap().clone();
                     split_poss.possibly |= split_poss_default.possibly;
                     split_poss.definitely |= split_poss_default.definitely;
@@ -242,7 +263,7 @@ impl SplitManager {
                         definitely: true,
                     };
                     for SwitchCase { value: _, block } in cases.as_ref().iter() {
-                        self.coro_split_mark_in_bb(block);
+                        self.preprocess_bb(block, callable_original);
                         let split_poss_case = self.split_possibility.get(&block.as_ptr()).unwrap();
                         split_poss_cases.possibly |= split_poss_case.possibly;
                         split_poss_cases.definitely &= split_poss_case.definitely;
@@ -255,15 +276,15 @@ impl SplitManager {
         });
         self.split_possibility.insert(bb.as_ptr(), split_poss);
     }
-    fn preprocess(&mut self, kernel: &KernelModule) -> ScopeBuilder {
-        // TODO: where to process captures/args/shared?
-        let bb = &kernel.module.entry;
+    fn preprocess(&mut self, callable: &CallableModule) -> ScopeBuilder {
+        let bb = &callable.module.entry;
         bb.nodes().iter().for_each(|node_ref_present| {
             let node = node_ref_present.get();
             match node.instruction.as_ref() {
                 Instruction::CoroSplitMark { token } => {
-                    FrameTokenManager::register_frame_token(*token);
-                    self.continuations.insert(*token, Continuation::new(*token));
+                    // TODO: args & captures
+                    let args = self.duplicate_args(*token, &callable.pools, &callable.args);
+                    let captures = self.duplicate_captures(*token, &callable.pools, &callable.captures);
                 }
                 _ => {}
             }
@@ -271,11 +292,17 @@ impl SplitManager {
 
         let entry_token = FrameTokenManager::get_new_token();
         FrameTokenManager::register_frame_token(entry_token);
+        // TODO: args & captures
+        let args = self.duplicate_args(entry_token, &callable.pools, &callable.args);
+        let captures = self.duplicate_captures(entry_token, &callable.pools, &callable.captures);
         self.continuations.insert(entry_token, Continuation::new(entry_token));
+
+        self.preprocess_bb(bb, callable);
+
         ScopeBuilder {
             token: entry_token,
             finished: false,
-            builder: IrBuilder::new(kernel.pools.clone()),
+            builder: IrBuilder::new(callable.pools.clone()),
         }
     }
 
@@ -284,13 +311,13 @@ impl SplitManager {
 
         // build scope
         let scope_bb = scope_builder.builder.finish();
-        let scope = Instruction::CoroScope {
-            token: frame_token,
-            body: scope_bb,
-        };
-        let scope_node = Node::new(CArc::new(scope), CArc::new(Type::Void));
-        let scope_node_ref = new_node(pools, scope_node);
-        self.coro_scopes.insert(frame_token, scope_node_ref);
+        // let scope = Instruction::CoroScope {
+        //     token: frame_token,
+        //     body: scope_bb,
+        // };
+        // let scope_node = Node::new(CArc::new(scope), CArc::new(Type::Void));
+        // let scope_node_ref = new_node(pools, scope_node);
+        self.coro_scopes.insert(frame_token, scope_bb);
     }
     fn build_scopes(&mut self, pools: &CArc<ModulePools>, mut sb_vec: Vec<ScopeBuilder>, force: bool) -> Vec<ScopeBuilder> {
         let mut sb_ans_vec = vec![];
@@ -759,20 +786,6 @@ impl SplitManager {
         todo!()
     }
 
-    fn split(&mut self, kernel: &KernelModule) {
-        // prepare
-        let pools = &kernel.pools;
-        let scope_builder = self.preprocess(kernel);
-        let bb = &kernel.module.entry;
-
-        // visit
-        let mut sb_vec = self.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
-        while !sb_vec.is_empty() {
-            let scope_builder = sb_vec.pop().unwrap();
-            self.build_scope(pools, scope_builder);
-        }
-    }
-
 
     // duplicate functions
     fn find_duplicated_block(&mut self, frame_token: u32, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
@@ -780,6 +793,7 @@ impl SplitManager {
     }
     fn find_duplicated_node(&mut self, frame_token: u32, node: NodeRef) -> NodeRef {
         if !node.valid() { return INVALID_REF; }
+        // TODO: get None for coroutine state/local; active var analysis
         self.old2new.nodes.get(&node).unwrap().get(&frame_token).unwrap().clone()
     }
     fn duplicate_arg(&mut self, frame_token: u32, pools: &CArc<ModulePools>, node_ref: NodeRef) -> NodeRef {
@@ -896,7 +910,7 @@ impl SplitManager {
         let frame_token = scope_builder.token;
         let mut builder = &mut scope_builder.builder;
         let node = node_ref.get();
-        assert!(!self.old2new.nodes.get(&node_ref).unwrap().contains_key(&frame_token),
+        assert!(!self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token),
                 "Node {:?} has already been duplicated", node);
         let dup_node = match node.instruction.as_ref() {
             Instruction::Buffer => unreachable!("Buffer should be handled by duplicate_args"),

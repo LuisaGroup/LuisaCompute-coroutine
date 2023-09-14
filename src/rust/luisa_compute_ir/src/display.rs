@@ -1,7 +1,6 @@
-use crate::{context::is_type_equal, ir::{Instruction, Module, NodeRef, SwitchCase, Type}, Pooled};
+use crate::{context::is_type_equal, ir::{Instruction, Module, NodeRef, SwitchCase, Type}, ir, Pooled};
 use std::collections::HashMap;
-use std::ffi::CString;
-use crate::ir::BasicBlock;
+use crate::ir::{BasicBlock, CallableModule, KernelModule};
 
 
 pub struct DisplayIR {
@@ -29,6 +28,38 @@ impl DisplayIR {
         self.display_ir_bb(&module.entry, 0, false)
     }
 
+    pub fn display_ir_kernel(&mut self, kernel: &KernelModule) -> String {
+        self.clear();
+        self.output += "\n----------- Args: ---------------\n";
+        for arg in kernel.args.as_ref() {
+            self.display(*arg, 0, false);
+        }
+        self.output += "\n----------- Shared: -------------\n";
+        for arg in kernel.shared.as_ref() {
+            self.display(*arg, 0, false);
+        }
+        self.output += "\n----------- Captures: -----------\n";
+        for arg in kernel.captures.as_ref() {
+            self.display(arg.node, 0, false);
+        }
+        self.output += "\n----------- Module: -------------\n";
+        self.display_ir_bb(&kernel.module.entry, 0, false)
+    }
+
+    pub fn display_ir_callable(&mut self, callable: &CallableModule) -> String {
+        self.clear();
+        self.output += "\n----------- Args: ---------------\n";
+        for arg in callable.args.as_ref() {
+            self.display(*arg, 0, false);
+        }
+        self.output += "\n----------- Captures: -----------\n";
+        for arg in callable.captures.as_ref() {
+            self.display(arg.node, 0, false);
+        }
+        self.output += "\n----------- Module: -------------\n";
+        self.display_ir_bb(&callable.module.entry, 0, false)
+    }
+
     pub fn display_ir_bb(&mut self, bb: &Pooled<BasicBlock>, ident: usize, no_new_line: bool) -> String {
         for node in bb.nodes().iter() {
             self.display(*node, ident, no_new_line);
@@ -37,14 +68,18 @@ impl DisplayIR {
     }
 
     fn get(&mut self, node: &NodeRef) -> usize {
-        self.map
-            .get(&node.0)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                self.map.insert(node.0, self.cnt);
-                self.cnt += 1;
-                self.cnt - 1
-            })
+        if node.valid() {
+            self.map
+                .get(&node.0)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    self.map.insert(node.0, self.cnt);
+                    self.cnt += 1;
+                    self.cnt - 1
+                })
+        } else {
+            usize::MAX
+        }
     }
 
     fn add_ident(&mut self, ident: usize) {
@@ -59,31 +94,31 @@ impl DisplayIR {
         self.add_ident(ident);
         match instruction.as_ref() {
             Instruction::Buffer => {
-                let temp = format!("${}: Buffer<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Buffer<{}> [param]", self.get(&node), type_, );
                 self.output += temp.as_str();
             }
             Instruction::Bindless => {
-                let temp = format!("${}: Bindless<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Bindless<{}> [param]", self.get(&node), type_, );
                 self.output += temp.as_str();
             }
             Instruction::Texture2D => {
-                let temp = format!("${}: Texture2D<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Texture2D<{}> [param]", self.get(&node), type_, );
                 self.output += temp.as_str();
             }
             Instruction::Texture3D => {
-                let temp = format!("${}: Texture3D<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Texture3D<{}> [param]", self.get(&node), type_, );
                 self.output += temp.as_str();
             }
             Instruction::Accel => {
-                let temp = format!("${}: Accel<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Accel<{}> [param]", self.get(&node), type_, );
                 self.output += temp.as_str();
             }
             Instruction::Shared => {
-                let temp = format!("${}: Shared<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Shared<{}> [param]", self.get(&node), type_, );
                 self.output += temp.as_str();
             }
             Instruction::Uniform => {
-                let temp = format!("${}: {} [param]", self.get(&node), type_,);
+                let temp = format!("${}: {} [param]", self.get(&node), type_, );
                 self.output += temp.as_str();
             }
             Instruction::Local { init } => {
@@ -95,20 +130,25 @@ impl DisplayIR {
                 );
                 self.output += temp.as_str();
             }
-            Instruction::Argument { .. } => todo!(),
+            Instruction::Argument { by_value } => {
+                let temp = format!("${}", self.get(&node));
+                let by_value_prefix = if *by_value { "" } else { "&" };
+                self.output += by_value_prefix;
+                self.output += temp.as_str();
+            }
             Instruction::UserData(_) => self.output += "Userdata",
             Instruction::Invalid => self.output += "INVALID",
             Instruction::Const(c) => {
-                let temp = format!("${}: {} = Const {}", self.get(&node), type_, c,);
+                let temp = format!("${}: {} = Const {}", self.get(&node), type_, c, );
                 self.output += temp.as_str();
             }
             Instruction::Update { var, value } => {
-                let temp = format!("${} = ${}", self.get(var), self.get(value),);
+                let temp = format!("${} = ${}", self.get(var), self.get(value), );
                 self.output += temp.as_str();
             }
             Instruction::Call(func, args) => {
                 if !is_type_equal(type_, &Type::void()) {
-                    let tmp = format!("${}: {} = ", self.get(&node), type_,);
+                    let tmp = format!("${}: {} = ", self.get(&node), type_, );
                     self.output += tmp.as_str();
                 }
 
@@ -119,7 +159,7 @@ impl DisplayIR {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                self.output += format!("Call {:?}({})", func, args,).as_str();
+                self.output += format!("Call {:?}({})", func, args, ).as_str();
             }
             Instruction::Phi(_) => {
                 let n = self.get(&node);
@@ -229,14 +269,14 @@ impl DisplayIR {
                 self.output += "}";
             }
             Instruction::Comment(_) => {}
-            Instruction::Return(_) => {self.output += "return\n";},
+            Instruction::Return(_) => { self.output += "return\n"; }
             Instruction::CoroSplitMark { token } => {
                 self.output += format!("CoroSplitMark({})", token).as_str();
             }
             Instruction::CoroSuspend { token } => {
                 self.output += format!("CoroSuspend({})", token).as_str();
             }
-            Instruction::Suspend (suspend_id ) => {
+            Instruction::Suspend(suspend_id) => {
                 let temp = format!("suspend ${}\n", self.get(suspend_id));
                 self.output += temp.as_str();
             }

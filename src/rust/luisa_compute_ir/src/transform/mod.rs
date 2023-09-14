@@ -10,6 +10,7 @@ pub mod ref2ret;
 pub mod reg2mem;
 
 pub mod split;
+mod coroutine_split;
 
 use crate::ir::{self, CallableModule, Module, KernelModule};
 
@@ -110,7 +111,7 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         "coroutine" => {
-            let transform = coroutine::Coroutine;
+            let transform = coroutine_split::Coroutine;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),

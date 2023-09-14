@@ -662,7 +662,7 @@ struct Instruction {
         Comment,
         CoroSplitMark,
         CoroSuspend,
-        Suspend,
+        CoroRegister,
         CoroResume,
         CoroFrame,
     };
@@ -751,8 +751,10 @@ struct Instruction {
         uint32_t token;
     };
 
-    struct Suspend_Body {
-        NodeRef _0;
+    struct CoroRegister_Body {
+        uint32_t token;
+        NodeRef value;
+        uint32_t var;
     };
 
     struct CoroResume_Body {
@@ -784,7 +786,7 @@ struct Instruction {
         Comment_Body comment;
         CoroSplitMark_Body coro_split_mark;
         CoroSuspend_Body coro_suspend;
-        Suspend_Body suspend;
+        CoroRegister_Body coro_register;
         CoroResume_Body coro_resume;
         CoroFrame_Body coro_frame;
     };

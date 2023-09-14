@@ -1,4 +1,4 @@
-use std::collections::{HashSet};
+use std::collections::HashSet;
 
 use super::Transform;
 
@@ -254,7 +254,6 @@ impl ToSSAImpl {
                 return v;
             }
             Instruction::RayQuery { .. } => panic!("ray query not supported"),
-            Instruction::Suspend { .. } => panic!("suspend not supported"),
             Instruction::If {
                 cond,
                 true_branch,
@@ -321,7 +320,8 @@ impl ToSSAImpl {
             Instruction::CoroSplitMark { .. }
             | Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. }
-            | Instruction::CoroFrame { .. } => return node,
+            | Instruction::CoroFrame { .. }
+            | Instruction::CoroRegister { .. } => return node,
         }
     }
     fn promote_bb(

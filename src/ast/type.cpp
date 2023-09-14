@@ -39,6 +39,7 @@ struct TypeImpl final : public Type {
     uint index{};
     luisa::string description;
     luisa::vector<const Type *> members;
+    luisa::unordered_map<luisa::string, size_t> member_names;
 };
 
 /// Type registry class
@@ -203,8 +204,17 @@ void _update(Type *dst, const Type *src) {
     auto src_inst = static_cast<const TypeImpl *>(src);
     dst_inst->alignment = src_inst->alignment;
     dst_inst->size = src_inst->size;
+    LUISA_ASSERT(dst_inst->members.empty(), "{} used as coroframe type "
+                                            "for second time!",
+                 dst_inst->description);
     dst_inst->members.push_back(src);
     //dst_inst->description = src_inst->description;
+}
+const size_t _add_member(Type *type, const luisa::string &name) {
+    auto inst = static_cast<TypeImpl *>(type);
+    size_t id = inst->member_names.size();
+    auto ret = inst->member_names.insert(std::make_pair(name, id));
+    return ret.second ? id : -1;
 }
 size_t TypeRegistry::type_count() const noexcept {
     std::lock_guard lock{_mutex};
@@ -661,6 +671,19 @@ const Type *Type::coroframe(luisa::string_view name) noexcept {
 }
 void Type::update_from(const Type *type) {
     detail::_update(this, type);
+}
+const size_t Type::add_member(const luisa::string &name) noexcept {
+    return detail::_add_member(this, name);
+}
+
+const size_t Type::member(const luisa::string &name) const noexcept {
+    auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;
+    auto it = map.find(name);
+    if (it == map.end()) {
+        return -1;
+    } else {
+        return it->second;
+    }
 }
 bool Type::is_bool() const noexcept { return tag() == Tag::BOOL; }
 bool Type::is_int32() const noexcept { return tag() == Tag::INT32; }

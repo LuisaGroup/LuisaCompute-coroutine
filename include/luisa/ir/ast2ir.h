@@ -83,6 +83,7 @@ private:
     [[nodiscard]] ir::NodeRef _convert(const CommentStmt *stmt) noexcept;
     [[nodiscard]] ir::NodeRef _convert(const AutoDiffStmt *stmt) noexcept;
     [[nodiscard]] ir::NodeRef _convert(const SuspendStmt *stmt) noexcept;
+    [[nodiscard]] ir::NodeRef _convert(const CoroBindStmt *stmt) noexcept;
     [[nodiscard]] ir::NodeRef _convert(const RayQueryStmt *stmt) noexcept;
     [[nodiscard]] ir::NodeRef _convert_stmt(const Statement *stmt) noexcept;
     [[nodiscard]] ir::Module _convert_body() noexcept;

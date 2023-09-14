@@ -52,8 +52,6 @@ int main(int argc, char *argv[]) {
             auto y_grad = def(make_float2(0.f));
             $autodiff {
                 requires_grad(x, y);
-                auto z = f(x, y);
-                backward(z);
                 x_grad = grad(x);
                 y_grad = grad(y);
             };

@@ -348,7 +348,10 @@ public:
     void assign(const Expression *lhs, const Expression *rhs) noexcept;
     /// Add suspend statement
     void suspend_(uint suspend_id) noexcept;
-
+    ///bind local to promise
+    void bind_promise_(uint suspend_id, const Expression *var, const luisa::string &name) noexcept;
+    ///read local from promise
+    const MemberExpr *read_promise_(const Expression *expr, const luisa::string &name) noexcept;
     /// Add if statement
     [[nodiscard]] IfStmt *if_(const Expression *cond) noexcept;
     /// Add loop statement

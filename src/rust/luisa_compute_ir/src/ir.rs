@@ -1,9 +1,9 @@
-use half::f16;
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize, Serializer};
 use crate::analysis::usage_detect::detect_usage;
 use crate::ast2ir;
 use crate::*;
+use half::f16;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -1134,7 +1134,11 @@ pub enum Instruction {
     CoroSuspend {
         token: u32,
     },
-    Suspend(NodeRef),
+    CoroRegister {
+        token: u32,
+        value: NodeRef,
+        var: u32,
+    },
     // ------------------
     CoroResume {
         token: u32,
@@ -2007,10 +2011,12 @@ impl ModuleDuplicator {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { .. }
-            | Instruction::Suspend(..)
+            | Instruction::CoroRegister { .. }
             | Instruction::CoroResume { .. }
             | Instruction::CoroFrame { .. } => {
-                unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
+                unreachable!(
+                    "Unexpected coroutine instruction in ModuleDuplicator::duplicate_node"
+                );
             }
         };
         // insert the duplicated node into the map
@@ -2349,12 +2355,6 @@ impl IrBuilder {
         self.append(node);
         node
     }
-    pub fn suspend(&mut self, id: NodeRef) -> NodeRef {
-        let node = Node::new(CArc::new(Instruction::Suspend(id)), Type::void());
-        let node = new_node(&self.pools, node);
-        self.append(node);
-        node
-    }
     pub fn ray_query(
         &mut self,
         ray_query: NodeRef,
@@ -2403,7 +2403,10 @@ impl IrBuilder {
     pub fn coro_split_mark(&mut self, token: u32) -> NodeRef {
         let new_node = new_node(
             &self.pools,
-            Node::new(CArc::new(Instruction::CoroSplitMark { token }), Type::void()),
+            Node::new(
+                CArc::new(Instruction::CoroSplitMark { token }),
+                Type::void(),
+            ),
         );
         self.append(new_node);
         new_node
@@ -2415,6 +2418,15 @@ impl IrBuilder {
         );
         self.append(new_node);
         new_node
+    }
+    pub fn coro_register(&mut self, token: u32, value: NodeRef, var: u32) -> NodeRef {
+        let node = Node::new(
+            CArc::new(Instruction::CoroRegister { token, value, var }),
+            Type::void(),
+        );
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
     }
     pub fn coro_resume(&mut self, token: u32) -> NodeRef {
         let new_node = new_node(

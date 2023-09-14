@@ -1,7 +1,8 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ffi::CString, default,
+    default,
+    ffi::CString,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -702,7 +703,7 @@ impl<'a> FunctionEmitter<'a> {
                 )
                 .unwrap();
                 true
-            } 
+            }
             Func::BindlessByteAdressBufferRead => {
                 writeln!(
                     &mut self.body,
@@ -1752,8 +1753,12 @@ impl<'a> FunctionEmitter<'a> {
                 let comment = CString::new(comment.as_ref()).unwrap();
                 writeln!(&mut self.body, "/* {} */", comment.to_string_lossy()).unwrap();
             }
-            Instruction::Suspend(_) => {
-                panic!("Suspend should be lowered before codegen")
+            Instruction::CoroSuspend { .. }
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroFrame { .. }
+            | Instruction::CoroRegister { .. }
+            | Instruction::CoroSplitMark { .. } => {
+                panic!("Coroutine intrinsics should be lowered before codegen")
             }
             default => panic!("unimplemented: {:?}", default),
         }

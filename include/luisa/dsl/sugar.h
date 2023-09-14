@@ -90,12 +90,12 @@
 #define $elif(...) *([&] { return __VA_ARGS__; }) % [&]() noexcept
 #define $loop ::luisa::compute::detail::LoopStmtBuilder{} % [&]() noexcept
 #define $while(...) ::luisa::compute::detail::LoopStmtBuilder{} / [&]() noexcept { \
-    $if(!(__VA_ARGS__)) { $break; };                                               \
+    $if (!(__VA_ARGS__)) { $break; };                                              \
 } % [&]() noexcept
 
 #define $autodiff ::luisa::compute::detail::AutoDiffStmtBuilder{} % [&]() noexcept
 #define $suspend(...) ::luisa::compute::suspend(__VA_ARGS__)
-
+#define $read_promise(x, y) ::luisa::compute::read_promise(x, #y)
 #define $switch(...) ::luisa::compute::detail::SwitchStmtBuilder{__VA_ARGS__} % [&]() noexcept
 #define $case(...) ::luisa::compute::detail::SwitchCaseStmtBuilder{__VA_ARGS__} % [&]() noexcept
 #define $default ::luisa::compute::detail::SwitchDefaultStmtBuilder{} % [&]() noexcept
@@ -110,4 +110,3 @@
     $comment(luisa::format(FMT_STRING("{} [{}:{}]"), std::string_view{__VA_ARGS__}, __FILE__, __LINE__))
 
 #endif
-

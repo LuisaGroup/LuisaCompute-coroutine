@@ -96,10 +96,24 @@ void FunctionBuilder::return_(const Expression *expr) noexcept {
     }
 }
 
-void FunctionBuilder::suspend_(uint suspend_id) noexcept {
-	_create_and_append_statement<SuspendStmt>(suspend_id);
+void FunctionBuilder::suspend_(const uint suspend_id) noexcept {
+    _create_and_append_statement<SuspendStmt>(suspend_id);
     _direct_builtin_callables.mark(CallOp::SUSPEND);
     _propagated_builtin_callables.mark(CallOp::SUSPEND);
+}
+void FunctionBuilder::bind_promise_(const uint suspend_id, const Expression *expr, const luisa::string &name) noexcept {
+    auto type = expr->type();
+    auto res = const_cast<Type *>(type)->add_member(name);
+    _create_and_append_statement<CoroBindStmt>(suspend_id, expr, res);
+    _direct_builtin_callables.mark(CallOp::SUSPEND);
+    _propagated_builtin_callables.mark(CallOp::SUSPEND);
+}
+const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const luisa::string &name) noexcept {
+    LUISA_ASSERT(expr->type()->is_coroframe(), "Can only read from Coroframe types!");
+    auto member = expr->type()->member(name);
+    if (expr->type()->member(name) != -1) {
+        return _create_expression<MemberExpr>(expr->type()->members()[member], expr, member);
+    }
 }
 
 RayQueryStmt *FunctionBuilder::ray_query_(const RefExpr *query) noexcept {
@@ -187,7 +201,7 @@ inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag 
     Variable v{type, tag, _next_variable_uid()};
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
-    if (_tag == Function::Tag::CALLABLE||_tag == Function::Tag::COROUTINE) [[unlikely]] {
+    if (_tag == Function::Tag::CALLABLE || _tag == Function::Tag::COROUTINE) [[unlikely]] {
         _arguments.emplace_back(v);
         _bound_arguments.emplace_back();
     }
@@ -626,7 +640,7 @@ void FunctionBuilder::set_block_size(uint3 size) noexcept {
             LUISA_ERROR("Function block size must be larger than 0, Current block size is: [{}, {}, {}].",
                         size.x, size.y, size.z);
         }
-        if(size.z > 64)[[unlikely]]{
+        if (size.z > 64) [[unlikely]] {
             LUISA_ERROR("Function block z-axis's size must be less or equal than 64, Current block size is: {}.",
                         size.z);
         }
@@ -655,7 +669,7 @@ bool FunctionBuilder::requires_autodiff() const noexcept {
     return _propagated_builtin_callables.uses_autodiff();
 }
 
-void FunctionBuilder::coroframe_replace(const Type* type) noexcept{
+void FunctionBuilder::coroframe_replace(const Type *type) noexcept {
     LUISA_ASSERT(_arguments.size() > 0, "Lack of parameter for coroutine generated callables!");
     _arguments[0]._type = type;
 }

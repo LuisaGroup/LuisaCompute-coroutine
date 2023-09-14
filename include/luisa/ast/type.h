@@ -415,7 +415,10 @@ public:
     [[nodiscard]] const Type *corotype() const noexcept;
     ///change the corresponding Type to another Type in registery
     void update_from(const Type *type);
-
+    /// add a member with name and type
+    const size_t add_member(const luisa::string &name) noexcept;
+    /// get member index with string
+    [[nodiscard]] const size_t member(const luisa::string &name) const noexcept;
     /// Scalar = bool || float || int || uint
     [[nodiscard]] bool is_scalar() const noexcept;
     [[nodiscard]] bool is_bool() const noexcept;
@@ -455,4 +458,3 @@ public:
 };
 
 }// namespace luisa::compute
-

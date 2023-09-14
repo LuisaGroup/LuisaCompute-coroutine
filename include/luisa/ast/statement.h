@@ -33,6 +33,7 @@ public:
         COMMENT,
         RAY_QUERY,
         AUTO_DIFF,
+        COROBIND,
         SUSPEND
     };
 
@@ -73,7 +74,7 @@ class CommentStmt;
 class RayQueryStmt;
 class AutoDiffStmt;
 class SuspendStmt;
-
+class CoroBindStmt;
 struct LC_AST_API StmtVisitor {
     virtual void visit(const BreakStmt *) = 0;
     virtual void visit(const ContinueStmt *) = 0;
@@ -91,6 +92,7 @@ struct LC_AST_API StmtVisitor {
     virtual void visit(const RayQueryStmt *) = 0;
     virtual void visit(const AutoDiffStmt *stmt);
     virtual void visit(const SuspendStmt *stmt);
+    virtual void visit(const CoroBindStmt *stmt);
     virtual ~StmtVisitor() noexcept = default;
 };
 
@@ -507,7 +509,25 @@ public:
     [[nodiscard]] auto id() const noexcept { return _id; }
     LUISA_STATEMENT_COMMON()
 };
+/// Bind Promise statement
+class CoroBindStmt : public Statement {
 
+private:
+    const uint _suspend_id;
+    const Expression *_expr;
+    const uint _var_id;
+private:
+    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+
+public:
+    explicit CoroBindStmt(const uint suspend_id, const Expression *expr, const uint var_id) noexcept
+        : Statement{Tag::COROBIND}, _suspend_id{suspend_id}, _expr{expr}, _var_id{var_id} {
+    }
+    [[nodiscard]] auto suspend_id() const noexcept { return _suspend_id; }
+    [[nodiscard]] auto var_id() const noexcept { return _var_id; }
+    [[nodiscard]] auto expression() const noexcept { return _expr; }
+    LUISA_STATEMENT_COMMON()
+};
 #undef LUISA_STATEMENT_COMMON
 
 // helper function for easy traversal over the ASTs

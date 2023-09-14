@@ -835,7 +835,7 @@ impl SplitManager {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { .. }
-            | Instruction::Suspend(..)
+            | Instruction::CoroRegister{..}
             | Instruction::CoroResume { .. }
             | Instruction::CoroFrame { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");

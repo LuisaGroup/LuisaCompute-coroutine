@@ -458,7 +458,7 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
                      detail::extract_expression((_member_offsets[i] +                                  \
                                                  (id + _element_offset) * stride) *                    \
                                                 (uint)sizeof(uint))});                                 \
-                builder->assign(builder->member(mem, ret, member_index), data);                        \
+                builder->assign(builder->member(mem, ret, i), data);                                   \
                 member_index += mem->size();                                                           \
             }                                                                                          \
             return Var<S>{ret};                                                                        \
@@ -476,7 +476,7 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
                 _buffer.write((_member_offsets[i] +                                                    \
                                (id + _element_offset) * stride) *                                      \
                                   sizeof(uint),                                                        \
-                              builder->member(mem, value.expression(), member_index));                 \
+                              builder->member(mem, value.expression(), i));                            \
                 member_index += mem->size();                                                           \
             }                                                                                          \
         }                                                                                              \

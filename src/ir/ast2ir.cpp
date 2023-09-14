@@ -223,6 +223,7 @@ ir::NodeRef AST2IR::_convert_stmt(const Statement *stmt) noexcept {
         case Statement::Tag::RAY_QUERY: return _convert(static_cast<const RayQueryStmt *>(stmt));
         case Statement::Tag::AUTO_DIFF: return _convert(static_cast<const AutoDiffStmt *>(stmt));
         case Statement::Tag::SUSPEND: return _convert(static_cast<const SuspendStmt *>(stmt));
+        case Statement::Tag::COROBIND: return _convert(static_cast<const CoroBindStmt *>(stmt));
     }
     LUISA_ERROR_WITH_LOCATION("Invalid statement tag: {}.", luisa::to_string(stmt->tag()));
 }
@@ -878,8 +879,7 @@ ir::NodeRef AST2IR::_convert(const CallExpr *expr) noexcept {
             }
             args.resize(expr->type()->dimension());
         }
-    }
-    else if (expr->op() == CallOp::GRADIENT_MARKER) {
+    } else if (expr->op() == CallOp::GRADIENT_MARKER) {
         //        LUISA_VERBOSE("using gradient marker arg emplace");
         args.reserve(2);
         args.emplace_back(_convert_expr(expr->arguments()[0], true));
@@ -1224,6 +1224,17 @@ ir::NodeRef AST2IR::_convert(const SuspendStmt *stmt) noexcept {
     auto id = stmt->id();
     auto instr = ir::luisa_compute_ir_new_instruction(
         ir::Instruction{.tag = ir::Instruction::Tag::CoroSplitMark, .coro_split_mark = {id}});
+    auto node = ir::luisa_compute_ir_new_node(
+        _pools.clone(),
+        ir::Node{.type_ = _convert_type(nullptr).clone(), .instruction = instr});
+    ir::luisa_compute_ir_append_node(_current_builder(), node);
+    return node;
+}
+ir::NodeRef AST2IR::_convert(const CoroBindStmt *stmt) noexcept {
+    auto expr = _convert_expr(stmt->expression(),false);
+    auto instr = ir::luisa_compute_ir_new_instruction(
+        ir::Instruction{.tag = ir::Instruction::Tag::CoroRegister,
+                        .coro_register = {stmt->suspend_id(), expr,stmt->var_id()}});
     auto node = ir::luisa_compute_ir_new_node(
         _pools.clone(),
         ir::Node{.type_ = _convert_type(nullptr).clone(), .instruction = instr});

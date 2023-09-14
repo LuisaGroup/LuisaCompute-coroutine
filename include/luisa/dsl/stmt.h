@@ -1,6 +1,7 @@
 #pragma once
 
 #include "luisa/core/basic_traits.h"
+#include "luisa/core/concepts.h"
 #include <cassert>
 #include <luisa/dsl/var.h>
 #include <luisa/dsl/operators.h>
@@ -416,11 +417,28 @@ inline void return_(T &&t) noexcept {
         detail::extract_expression(std::forward<T>(t)));
 }
 
-inline void suspend(uint suspend_id) noexcept {
-    detail::FunctionBuilder::current()->suspend_(
-        suspend_id);
+auto get_var_list() noexcept {
+	return luisa::vector<std::pair<const Expression*, luisa::string>>{};
 }
-
+template<typename U,typename V,typename... Args>
+auto get_var_list(std::pair<U, V> &&p, Args &&...args) noexcept {
+	auto rets = get_var_list(std::forward<Args>(args)...);
+    rets.push_back(std::make_pair(detail::extract_expression(p.first), luisa::string{p.second}));
+	return rets;
+}
+template<typename... Args>
+inline void suspend(uint &&suspend_id, Args&&...args) noexcept {
+    auto rets = get_var_list(std::forward<Args>(args)...);
+    for (auto &ret : rets) {
+        detail::FunctionBuilder::current()->bind_promise_(
+            suspend_id, ret.first, ret.second);
+    }
+}
+template<typename T, typename S>
+inline auto read_promise(T &&t, S &&name) noexcept {
+    return detail::FunctionBuilder::current()->read_promise_(
+        detail::extract_expression(std::forward<T>(t)), std::forward<S>(name));
+}
 inline void return_() noexcept {
     detail::FunctionBuilder::current()->return_();
 }

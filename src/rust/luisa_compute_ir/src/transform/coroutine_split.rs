@@ -2,6 +2,7 @@ use super::Transform;
 
 use crate::{*, display::DisplayIR};
 use ir::*;
+use crate::analysis::coro_frame::CoroFrameAnalyser;
 use crate::transform::split::SplitManager;
 
 pub struct Coroutine;
@@ -16,17 +17,23 @@ impl CoroutineImpl {
 
 impl Transform for Coroutine {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
-        println!("\n--------------- Before split --------------\n");
-        let result = DisplayIR::new().display_ir_callable(&callable);
+        println!("{:-^40}", "Before split");
+        let mut display_ir = DisplayIR::new();
+        let result = display_ir.display_ir_callable(&callable);
         println!("{}", result);
 
-        let mut sm = SplitManager::new();
-        sm.split(&callable);
-        println!("\n--------------- After split ---------------\n");
-        for (token, sb) in sm.coro_scopes.iter() {
-            let result = DisplayIR::new().display_ir_bb(sb, 0, false);
-            println!("CoroScope {}:\n{}", token, result);
-        }
+        let mut coro_frame_analyser = CoroFrameAnalyser::new();
+        coro_frame_analyser.analyse_callable(&callable);
+        println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
+
+        // let mut sm = SplitManager::new();
+        // sm.split(&callable);
+        // println!("{:-^40}", "After split");
+        // for (token, sb) in sm.coro_scopes.iter() {
+        //     let result = DisplayIR::new().display_ir_bb(sb, 0, false);
+        //     println!("CoroScope {}:\n{}", token, result);
+        // }
+
         unimplemented!("Coroutine split");
 
         // let mut entry = module.entry;

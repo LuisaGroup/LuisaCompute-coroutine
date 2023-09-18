@@ -254,7 +254,6 @@ impl ToSSAImpl {
                 return v;
             }
             Instruction::RayQuery { .. } => panic!("ray query not supported"),
-            Instruction::Suspend { .. } => panic!("suspend not supported"),
             Instruction::If {
                 cond,
                 true_branch,
@@ -318,10 +317,14 @@ impl ToSSAImpl {
             Instruction::Return(_) => {
                 panic!("call LowerControlFlow before ToSSA");
             }
-            Instruction::CoroSplitMark { .. }
-            | Instruction::CoroSuspend { .. }
+            Instruction::CoroSplitMark { .. } => {
+                unimplemented!("Coroutine is not supported yet");
+            }
+            Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. }
-            | Instruction::CoroScope { .. } => return node,
+            | Instruction::CoroScope { .. } => {
+                unreachable!("{:?} should not be defined as statement directly", instruction);
+            }
         }
     }
     fn promote_bb(

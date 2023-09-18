@@ -1,73 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
+use std::ptr::null;
 use lazy_static::lazy_static;
 
 use crate::{CArc, CBoxedSlice, Pooled};
+use crate::analysis::coro_frame::VisitState;
+use crate::analysis::frame_token_manager::FrameTokenManager;
 use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef};
-
-struct FrameTokenManager {
-    frame_token_counter: u32,
-    frame_token_occupied: HashSet<u32>,
-    frame_token_temp: u32,
-}
-
-static INVALID_FRAME_TOKEN_MASK: u32 = 0x8000_0000;
-
-impl FrameTokenManager {
-    fn register_frame_token(token: u32) {
-        let ftm = Self::get_instance();
-        assert!(token < INVALID_FRAME_TOKEN_MASK, "Invalid frame token");
-        ftm.frame_token_occupied.insert(token);
-    }
-    fn get_new_token() -> u32 {
-        let ftm = Self::get_instance();
-        while ftm.frame_token_occupied.contains(&ftm.frame_token_counter) {
-            assert_ne!(ftm.frame_token_counter, 0, "Frame token overflow");
-            ftm.frame_token_counter -= 1;
-        }
-        ftm.frame_token_occupied.insert(ftm.frame_token_counter);
-        ftm.frame_token_counter
-    }
-
-    fn get_temp_token() -> u32 {
-        let ftm = Self::get_instance();
-        let token = ftm.frame_token_temp;
-        assert!(token >= INVALID_FRAME_TOKEN_MASK, "Temp frame token overflow");
-        ftm.frame_token_temp -= 1;
-        token
-    }
-
-    fn get_instance() -> &'static mut Self {
-        lazy_static!(
-            static ref INSTANCE: FrameTokenManager = FrameTokenManager {
-                frame_token_counter: INVALID_FRAME_TOKEN_MASK - 1,
-                frame_token_occupied: HashSet::new(),
-                frame_token_temp: u32::MAX,
-            };
-        );
-        let p: *const FrameTokenManager = INSTANCE.deref();
-        unsafe {
-            let p: *mut FrameTokenManager = std::mem::transmute(p);
-            p.as_mut().unwrap()
-        }
-    }
-}
-
-struct Continuation {
-    token: u32,
-    prev: HashSet<u32>,
-    next: HashSet<u32>,
-}
-
-impl Continuation {
-    fn new(token: u32) -> Self {
-        Self {
-            token,
-            prev: HashSet::new(),
-            next: HashSet::new(),
-        }
-    }
-}
 
 struct ScopeBuilder {
     token: u32,
@@ -102,49 +41,11 @@ impl ModuleDuplicator {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct SplitPossibility {
     possibly: bool,
     directly: bool,
     definitely: bool,
-}
-
-impl Default for SplitPossibility {
-    fn default() -> Self {
-        Self {
-            possibly: false,
-            directly: false,
-            definitely: false,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct VisitState {
-    bb: *const Pooled<BasicBlock>,
-    start: NodeRef,
-    end: NodeRef,
-    present: NodeRef,
-}
-
-impl VisitState {
-    fn new(bb: &Pooled<BasicBlock>, start: Option<NodeRef>, end: Option<NodeRef>, present: Option<NodeRef>) -> Self {
-        let start = if let Some(node_ref_start) = start { node_ref_start } else { bb.first.get().next };
-        let end = if let Some(node_ref_end) = end { node_ref_end } else { bb.last };
-        let present = if let Some(node_ref_present) = present { node_ref_present } else { start };
-        Self {
-            bb: bb as *const Pooled<BasicBlock>,
-            start,
-            end,
-            present,
-        }
-    }
-    fn new_whole(bb: &Pooled<BasicBlock>) -> Self {
-        Self::new(bb, None, None, None)
-    }
-    fn get_bb_ref(&self) -> &Pooled<BasicBlock> {
-        unsafe { &*self.bb }
-    }
 }
 
 struct VisitResult {
@@ -181,7 +82,6 @@ pub(crate) struct SplitManager {
     new2old: New2OldMap,
     pub(crate) entry_scope_token: u32,
     pub(crate) coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
-    continuations: HashMap<u32, Continuation>,
     split_possibility: HashMap<*const BasicBlock, SplitPossibility>,
 }
 
@@ -192,7 +92,6 @@ impl SplitManager {
             new2old: Default::default(),
             entry_scope_token: u32::MAX,
             coro_scopes: HashMap::new(),
-            continuations: HashMap::new(),
             split_possibility: HashMap::new(),
         }
     }
@@ -227,13 +126,12 @@ impl SplitManager {
                     split_poss.possibly = true;
                     split_poss.directly = true;
                     split_poss.definitely = true;
-                    self.continuations.insert(*token, Continuation::new(*token));
 
                     // TODO: args & captures
                     let args = self.duplicate_args(*token, &callable_original.pools, &callable_original.args);
                     let captures = self.duplicate_captures(*token, &callable_original.pools, &callable_original.captures);
                 }
-                // 3 Instructions that might contain coro split mark
+                // 3 Instructions after CCF
                 Instruction::Loop { body, cond } => {
                     self.preprocess_bb(body, callable_original);
                     let split_poss_body = self.split_possibility.get(&body.as_ptr()).unwrap();
@@ -295,15 +193,10 @@ impl SplitManager {
         // TODO: args & captures
         let args = self.duplicate_args(entry_token, &callable.pools, &callable.args);
         let captures = self.duplicate_captures(entry_token, &callable.pools, &callable.captures);
-        self.continuations.insert(entry_token, Continuation::new(entry_token));
 
         self.preprocess_bb(bb, callable);
 
-        ScopeBuilder {
-            token: entry_token,
-            finished: false,
-            builder: IrBuilder::new(callable.pools.clone()),
-        }
+        ScopeBuilder::new(entry_token, callable.pools.clone())
     }
 
     fn build_scope(&mut self, pools: &CArc<ModulePools>, scope_builder: ScopeBuilder) {
@@ -331,15 +224,6 @@ impl SplitManager {
         sb_ans_vec
     }
 
-    fn record_continuation(&mut self, prev: u32, next: u32) {
-        let mut continuation = self.continuations.get_mut(&prev).unwrap();
-        continuation.token = prev;
-        continuation.next.insert(next);
-        let mut continuation = self.continuations.get_mut(&next).unwrap();
-        continuation.token = next;
-        continuation.prev.insert(prev);
-    }
-
     fn visit_bb(&mut self, pools: &CArc<ModulePools>, visit_state: VisitState, mut scope_builder: ScopeBuilder) -> Vec<ScopeBuilder> {
         assert!(!scope_builder.finished);
 
@@ -358,14 +242,14 @@ impl SplitManager {
                     return sb_vec;
                 }
                 Instruction::CoroSuspend { token } => {
-                    let sb_before = self.visit_coro_suspend(scope_builder, *token);
+                    let sb_before = self.visit_coro_suspend(scope_builder);
                     return vec![sb_before];
                 }
                 Instruction::CoroResume { token } => {
                     unreachable!("Split: CoroResume");
                 }
 
-                // 3 Instructions to be processed
+                // 3 Instructions after CCF
                 Instruction::Loop { body, cond } => {
                     let mut visit_state_after = visit_state.clone();
                     visit_state_after.present = node_ref_present;
@@ -391,7 +275,7 @@ impl SplitManager {
                 Instruction::Switch { value, cases, default } => {
                     let mut visit_state_after = visit_state.clone();
                     visit_state_after.present = node_ref_present;
-                    let mut visit_result = self.visit_switch_case(pools, scope_builder, visit_state_after, value, cases, default);
+                    let mut visit_result = self.visit_switch(pools, scope_builder, visit_state_after, value, cases, default);
                     if visit_result.split_possibly {
                         return visit_result.result;
                     } else {
@@ -405,41 +289,25 @@ impl SplitManager {
                     self.duplicate_node(&mut scope_builder, node_ref_present);
                 }
             }
-            node_ref_present = node_ref_present.get().next;
+            node_ref_present = node.next;
         }
         vec![scope_builder]
     }
     fn visit_coro_split_mark(&mut self, mut sb_before: ScopeBuilder, token_next: u32, node_ref: NodeRef) -> (ScopeBuilder, ScopeBuilder) {
-        let frame_token = sb_before.token;
         let mut builder = &mut sb_before.builder;
 
         // replace CoroSplitMark with CoroSuspend
         let coro_suspend = builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
-        // record continuation
-        self.record_continuation(frame_token, token_next);
-
         // create a new scope builder for the next scope
         // the next frame must have a CoroResume
-        let mut builder_next = IrBuilder::new(builder.pools.clone());
-        builder_next.coro_resume(token_next);
-        let sb_after = ScopeBuilder {
-            token: token_next,
-            finished: false,
-            builder: builder_next,
-        };
+        let mut sb_after = ScopeBuilder::new(token_next, builder.pools.clone());
+        sb_after.builder.coro_resume(token_next);
         sb_before.finished = true;
         (sb_before, sb_after)
     }
-    fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
-        // unimplemented!("Multi-visit unsupported");
-        let frame_token = scope_builder.token;
-        // let mut builder = &mut scope_builder.builder;
-
-        // record continuation
-        self.record_continuation(frame_token, token_next);
-
+    fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder) -> ScopeBuilder {
         scope_builder.finished = true;
         scope_builder
     }
@@ -559,6 +427,7 @@ impl SplitManager {
             visit_result.result.push(scope_builder);
         } else {
             // split in true/false_branch
+            visit_result.split_possibly = true;
             let mut sb_after_vec = vec![];
 
             // process true/false branch
@@ -593,12 +462,11 @@ impl SplitManager {
                     visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
                 }
             }
-            visit_result.split_possibly = true;
         }
         visit_result
     }
-    fn visit_switch_case(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
-                         visit_state: VisitState, value: &NodeRef, cases: &CBoxedSlice<SwitchCase>, default: &Pooled<BasicBlock>) -> VisitResult {
+    fn visit_switch(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
+                    visit_state: VisitState, value: &NodeRef, cases: &CBoxedSlice<SwitchCase>, default: &Pooled<BasicBlock>) -> VisitResult {
         // split in cases/default
         let cases_ref = cases.as_ref();
         let mut split_poss_case_vec = Vec::with_capacity(cases_ref.len());
@@ -621,8 +489,10 @@ impl SplitManager {
             // no split, duplicate the node
             self.duplicate_node(&mut scope_builder, visit_state.present);
             visit_result.split_possibly = false;
+            visit_result.result.push(scope_builder);
         } else {
             // split in cases/default
+            visit_result.split_possibly = true;
             let mut sb_after_vec = vec![];
 
             // process cases
@@ -664,7 +534,6 @@ impl SplitManager {
                     visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
                 }
             }
-            visit_result.split_possibly = true;
         }
         visit_result
     }
@@ -878,11 +747,7 @@ impl SplitManager {
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
         assert!(!self.old2new.blocks.get(&bb.as_ptr()).unwrap().contains_key(&frame_token),
                 "Basic block {:?} has already been duplicated", bb);
-        let mut scope_builder = ScopeBuilder {
-            token: frame_token,
-            finished: false,
-            builder: IrBuilder::new(pools.clone()),
-        };
+        let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
         bb.iter().for_each(|node| {
             self.duplicate_node(&mut scope_builder, node);
         });
@@ -1012,7 +877,6 @@ impl SplitManager {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { token } => builder.coro_suspend(*token),
-            Instruction::Suspend(..)
             | Instruction::CoroResume { .. }
             | Instruction::CoroScope { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");

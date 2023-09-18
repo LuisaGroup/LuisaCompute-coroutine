@@ -109,7 +109,6 @@ impl Reg2MemImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
-                | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
                 | Instruction::CoroScope { .. } => {}
             }
@@ -189,7 +188,6 @@ impl Reg2MemImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
-                | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
                 | Instruction::CoroScope { .. } => {}
             }

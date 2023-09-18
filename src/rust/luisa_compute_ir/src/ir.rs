@@ -1134,7 +1134,6 @@ pub enum Instruction {
     CoroSuspend {
         token: u32,
     },
-    Suspend(NodeRef),
     // ------------------
     CoroResume {
         token: u32,
@@ -2007,7 +2006,6 @@ impl ModuleDuplicator {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { .. }
-            | Instruction::Suspend(..)
             | Instruction::CoroResume { .. }
             | Instruction::CoroScope { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
@@ -2345,12 +2343,6 @@ impl IrBuilder {
     }
     pub fn ad_scope(&mut self, body: Pooled<BasicBlock>) -> NodeRef {
         let node = Node::new(CArc::new(Instruction::AdScope { body }), Type::void());
-        let node = new_node(&self.pools, node);
-        self.append(node);
-        node
-    }
-    pub fn suspend(&mut self, id: NodeRef) -> NodeRef {
-        let node = Node::new(CArc::new(Instruction::Suspend(id)), Type::void());
         let node = new_node(&self.pools, node);
         self.append(node);
         node

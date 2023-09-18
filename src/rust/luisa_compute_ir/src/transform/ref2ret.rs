@@ -234,7 +234,6 @@ impl Ref2RetImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
-                | Instruction::Suspend(..)
                 | Instruction::CoroResume { .. }
                 | Instruction::CoroScope { .. } => {}
             }

@@ -332,10 +332,6 @@ impl CoroutineImpl {
                 builder.return_(INVALID_REF);
                 INVALID_REF
             }
-            Instruction::Suspend (suspend_id) => {
-                panic!("suspend have been replaced by CoroSplitMark")
-                
-            }
             Instruction::CoroSplitMark{token}=>{
                 let suspend_id = builder.const_(Const::Uint32(*token));
                 let const0=builder.const_(Const::Uint32(0));

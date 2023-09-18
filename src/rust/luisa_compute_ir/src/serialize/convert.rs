@@ -253,10 +253,6 @@ impl KernelSerializer {
                     on_procedural_hit,
                 }
             }
-            Instruction::Suspend (id) => {
-                let id = self.serialize_noderef(*id);
-                SerializedInstruction::Suspend(id)
-            }
             Instruction::Comment(s) => {
                 let s = s.as_ref().to_vec();
                 SerializedInstruction::Comment(s)
@@ -267,10 +263,10 @@ impl KernelSerializer {
             Instruction::CoroSuspend { token } => {
                 SerializedInstruction::CoroSuspend { token: *token }
             }
-            | Instruction::CoroResume { token } => {
+            Instruction::CoroResume { token } => {
                 SerializedInstruction::CoroResume { token: *token }
             }
-            | Instruction::CoroScope { token, body } => {
+            Instruction::CoroScope { token, body } => {
                 let body = self.serialize_block(body);
                 SerializedInstruction::CoroFrame { token: *token, body }
             }

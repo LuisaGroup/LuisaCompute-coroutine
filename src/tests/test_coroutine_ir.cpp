@@ -29,14 +29,17 @@ int main(int argc, char *argv[]) {
 
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n) noexcept {
         auto x = x_buffer.read(id);
-        $if(id < 5u) {
-            x_buffer.write(id, x + 10u);
-            $suspend(1u);
-            auto x = x_buffer.read(id);
-            x_buffer.write(id, x + 100u);
-        } $else {
-            x_buffer.write(id, x + 1000u);
+        $loop {
+            $if(id < 5u) {
+                x_buffer.write(id, x + 10u);
+                $suspend(1u);
+                x = x_buffer.read(id);
+                x_buffer.write(id, x + 100u);
+            } $else {
+                x_buffer.write(id, x + 1000u);
+            };
         };
+        x_buffer.write(id, x + 10000u);
     };
     auto frame_buffer=device.create_buffer<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {

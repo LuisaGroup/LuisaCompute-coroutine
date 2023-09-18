@@ -1129,7 +1129,6 @@ impl Backward {
             }
             crate::ir::Instruction::AdDetach(_) => {}
             Instruction::RayQuery { .. } => panic!("RayQuery is not supported yet"),
-            Instruction::Suspend { .. } => panic!("Coroutine is not supported yet"),
             crate::ir::Instruction::Call(func, args) => {
                 if grad_type.is_none() {
                     return;
@@ -1734,10 +1733,14 @@ impl Backward {
             crate::ir::Instruction::Return(_) => {
                 panic!("should not have return in autodiff section")
             }
-            Instruction::CoroSplitMark { .. }
-            | Instruction::CoroSuspend { .. }
+            Instruction::CoroSplitMark { .. } => {
+                unimplemented!("Coroutine is not supported yet");
+            }
+            Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. }
-            | Instruction::CoroScope { .. } => {}
+            | Instruction::CoroScope { .. } => {
+                unreachable!("{:?} should not be defined as statement directly", instruction);
+            }
         }
     }
     fn backward_block(&mut self, block: &BasicBlock, mut builder: IrBuilder) -> Pooled<BasicBlock> {

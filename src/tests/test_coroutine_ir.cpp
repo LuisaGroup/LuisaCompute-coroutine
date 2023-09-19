@@ -7,10 +7,17 @@
 using namespace luisa;
 using namespace luisa::compute;
 
-struct alignas(4) CoroFrame{
+struct alignas(4) CoroFrame {
 };
 LUISA_CUSTOM_STRUCT_EXT(CoroFrame){};
-LUISA_COROFRAME_STRUCT_REFLECT(CoroFrame,"coroframe");
+LUISA_COROFRAME_STRUCT_REFLECT(CoroFrame, "CoroFrame")
+
+struct alignas(8) User {
+public:
+    uint age;
+    float savings;
+};
+LUISA_STRUCT(User, age, savings) {};
 
 int main(int argc, char *argv[]) {
     log_level_verbose();
@@ -29,16 +36,18 @@ int main(int argc, char *argv[]) {
 
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n) noexcept {
         auto x = x_buffer.read(id);
+        auto user = def<User>(20u, 1000.0f);
         $switch (1u) {
             $case (1u) {
-                $if(id < 5u) {
+                $if (id < 5u) {
                     x_buffer.write(id, x + 1000u);
                     $suspend(1u);
                     x = x_buffer.read(id);
                     $suspend(2u);
                     x = x;
                     x_buffer.write(id, x + n);
-                } $else {
+                }
+                $else {
                     x_buffer.write(id, x + 2000u);
                 };
             };
@@ -46,9 +55,9 @@ int main(int argc, char *argv[]) {
                 x_buffer.write(id, x + 3000u);
             };
         };
-        x_buffer.write(id, x + 10000u);
+        x_buffer.write(id, x + 10000u + user.age);
     };
-    auto frame_buffer=device.create_buffer<CoroFrame>(n);
+    auto frame_buffer = device.create_buffer<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
         x_buffer.write(id, id);

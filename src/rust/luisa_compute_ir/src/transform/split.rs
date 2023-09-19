@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::FrameTokenManager;
-use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef};
+use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType};
 
 struct ScopeBuilder {
     token: u32,
@@ -65,8 +65,11 @@ struct CallableModuleInfo {
     captures: Vec<Capture>,
 }
 
+#[derive(Debug)]
 struct CoroFrame {
-
+    token: u32,
+    frame_node: NodeRef,
+    frame_type: CArc<Type>,
 }
 
 
@@ -142,27 +145,52 @@ impl SplitManager {
     //     });
     // }
     fn preprocess(&mut self, callable: &CallableModule) -> ScopeBuilder {
+        let pools = &callable.pools;
         let entry_token = self.frame_analyser.entry_token;
-        let args = self.duplicate_args(entry_token, &callable.pools, &callable.args);
-        let captures = self.duplicate_captures(entry_token, &callable.pools, &callable.captures);
-        self.coro_callable_info.insert(entry_token, CallableModuleInfo {
-            args: args.to_vec(),
-            captures: captures.to_vec(),
-        });
 
         // self.preprocess_bb(bb, callable);
 
         // duplicate frames as args
         let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
         for token in token_vec.iter() {
-            // duplicate all args & captures redundantly
-            let active_var = self.frame_analyser.active_vars.get(token).unwrap().clone();
-            // for arg in callable.args.as_ref() {
-            //     if active_var.input.contains()
-            // }
+            let mut args = vec![];
+            let mut captures = vec![];
+            let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
 
-            let args = self.duplicate_args(*token, &callable.pools, &callable.args);
-            let captures = self.duplicate_captures(*token, &callable.pools, &callable.captures);
+            for arg in callable.args.as_ref() {
+                if input_var.contains(arg) {
+                    input_var.remove(arg);
+                    let dup_arg = self.duplicate_arg(*token, pools, *arg);
+                    args.push(dup_arg);
+                }
+            }
+            for capture in callable.captures.as_ref() {
+                if input_var.contains(&capture.node) {
+                    input_var.remove(&capture.node);
+                    let dup_capture = self.duplicate_capture(*token, pools, capture);
+                    captures.push(dup_capture);
+                }
+            }
+
+            // create coro frame
+            let fields: Vec<_> = input_var.iter().map(|node_ref| {
+                let node = node_ref.get();
+                node.type_.clone()
+            }).collect();
+            let alignment = fields.iter().map(|type_| type_.alignment()).max().unwrap();
+            let size = fields.iter().map(|type_| type_.size()).sum();
+            let frame_type = crate::context::register_type(Type::Struct(StructType {
+                fields: CBoxedSlice::new(fields),
+                alignment,
+                size,
+            }));
+            // let coro_frame = CoroFrame {
+            //     token: *token,
+            //     frame_node:
+            //     frame_type,
+            // };
+            todo!();
+
             let callable_info = self.coro_callable_info.entry(*token).or_default();
             callable_info.args.extend(args.to_vec());
             callable_info.captures.extend(captures.to_vec());
@@ -170,7 +198,7 @@ impl SplitManager {
             // duplicate IN[B] as args
         }
 
-        ScopeBuilder::new(entry_token, callable.pools.clone())
+        ScopeBuilder::new(entry_token, pools.clone())
     }
 
     fn build_scope(&mut self, scope_builder: ScopeBuilder, force: bool) {
@@ -683,6 +711,13 @@ impl SplitManager {
         self.record_node_mapping(frame_token, node_ref, dup_node_ref);
         dup_node_ref
     }
+    fn duplicate_capture(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
+                         capture: &Capture) -> Capture {
+        Capture {
+            node: self.duplicate_arg(frame_token, pools, capture.node.clone()),
+            binding: capture.binding.clone(),
+        }
+    }
     fn duplicate_args(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
                       args: &CBoxedSlice<NodeRef>) -> CBoxedSlice<NodeRef> {
         let dup_args: Vec<NodeRef> = args.iter().map(|arg| {
@@ -693,10 +728,7 @@ impl SplitManager {
     fn duplicate_captures(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
                           captures: &CBoxedSlice<Capture>) -> CBoxedSlice<Capture> {
         let dup_captures: Vec<Capture> = captures.iter().map(|capture| {
-            Capture {
-                node: self.duplicate_arg(frame_token, pools, capture.node.clone()),
-                binding: capture.binding.clone(),
-            }
+            self.duplicate_capture(frame_token, pools, capture)
         }).collect();
         CBoxedSlice::new(dup_captures)
     }
@@ -709,12 +741,13 @@ impl SplitManager {
     }
 
     fn duplicate_callable(&mut self, frame_token: u32, callable: &CArc<CallableModule>) -> CArc<CallableModule> {
+        let pools = &callable.pools;
         if let Some(copy) = self.old2new.callables.get(&callable.as_ptr()).unwrap().get(&frame_token) {
             return copy.clone();
         }
         let dup_callable = {
-            let dup_args = self.duplicate_args(frame_token, &callable.pools, &callable.args);
-            let dup_captures = self.duplicate_captures(frame_token, &callable.pools, &callable.captures);
+            let dup_args = self.duplicate_args(frame_token, pools, &callable.args);
+            let dup_captures = self.duplicate_captures(frame_token, pools, &callable.captures);
             let dup_module = self.duplicate_module(frame_token, &callable.module);
             CallableModule {
                 module: dup_module,
@@ -724,7 +757,7 @@ impl SplitManager {
                 subroutines: callable.subroutines.clone(),
                 subroutine_ids: callable.subroutine_ids.clone(),
                 cpu_custom_ops: callable.cpu_custom_ops.clone(),
-                pools: callable.pools.clone(),
+                pools: pools.clone(),
             }
         };
         let dup_callable = CArc::new(dup_callable);

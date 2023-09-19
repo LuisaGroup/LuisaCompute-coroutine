@@ -26,12 +26,12 @@ impl Transform for Coroutine {
         coro_frame_analyser.analyse_callable(&callable);
         println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
 
-        let mut sm = SplitManager::split(coro_frame_analyser, &callable);
-        println!("{:-^40}", "After split");
-        for (token, sb) in sm.coro_scopes.iter() {
-            let result = DisplayIR::new().display_ir_bb(sb, 0, false);
-            println!("CoroScope {}:\n{}", token, result);
-        }
+        // let mut sm = SplitManager::split(coro_frame_analyser, &callable);
+        // println!("{:-^40}", "After split");
+        // for (token, sb) in sm.coro_scopes.iter() {
+        //     let result = DisplayIR::new().display_ir_bb(sb, 0, false);
+        //     println!("CoroScope {}:\n{}", token, result);
+        // }
 
         unimplemented!("Coroutine split");
 

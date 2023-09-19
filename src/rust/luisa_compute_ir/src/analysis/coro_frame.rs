@@ -231,7 +231,18 @@ impl CoroFrameAnalyser {
         let mut split_poss = self.split_possibility.entry(bb.as_ptr()).or_default().clone();
         bb.iter().for_each(|node_ref_present| {
             let node = node_ref_present.get();
-            match node.instruction.as_ref() {
+            let instruction = node.instruction.as_ref();
+            match instruction {
+                Instruction::Buffer
+                | Instruction::Bindless
+                | Instruction::Texture2D
+                | Instruction::Texture3D
+                | Instruction::Accel
+                | Instruction::Shared
+                | Instruction::Uniform
+                | Instruction::Argument { .. } => unreachable!("{:?} should not appear in basic block", instruction),
+                Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
+
                 Instruction::CoroSplitMark { token } => {
                     FrameTokenManager::register_frame_token(*token);
                     split_poss.possibly = true;
@@ -276,6 +287,9 @@ impl CoroFrameAnalyser {
                     split_poss.possibly |= split_poss_default.possibly || split_poss_cases.possibly;
                     split_poss.definitely |= split_poss_default.definitely && split_poss_cases.definitely;
                 }
+
+                Instruction::CoroSuspend { .. }
+                | Instruction::CoroResume { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),
                 _ => {}
             }
         });
@@ -430,6 +444,16 @@ impl CoroFrameAnalyser {
             let active_var = self.active_vars.entry(frame_builder.token).or_insert(ActiveVar::new(frame_builder.token));
 
             match instruction {
+                Instruction::Buffer
+                | Instruction::Bindless
+                | Instruction::Texture2D
+                | Instruction::Texture3D
+                | Instruction::Accel
+                | Instruction::Shared
+                | Instruction::Uniform
+                | Instruction::Argument { .. } => unreachable!("{:?} should not appear in basic block", instruction),
+                Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
+
                 Instruction::CoroSplitMark { token: token_next } => {
                     let mut fb_vec = self.visit_coro_split_mark(frame_builder, *token_next, visit_state.present);
                     return if fb_vec.len() == 2 {
@@ -461,16 +485,6 @@ impl CoroFrameAnalyser {
                 } => {
                     return self.visit_switch(frame_builder, visit_state.clone(), value, cases, default).result;
                 }
-
-                Instruction::Buffer
-                | Instruction::Bindless
-                | Instruction::Texture2D
-                | Instruction::Texture3D
-                | Instruction::Accel
-                | Instruction::Shared
-                | Instruction::Uniform
-                | Instruction::Argument { .. } => unreachable!("{:?} should not appear in basic block", instruction),
-                Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
 
                 Instruction::Local { init } => {
                     active_var.record_use(*init);
@@ -512,8 +526,7 @@ impl CoroFrameAnalyser {
                 Instruction::Comment(_) => {}
 
                 Instruction::CoroSuspend { .. }
-                | Instruction::CoroResume { .. }
-                | Instruction::CoroScope { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),
+                | Instruction::CoroResume { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),
             }
             visit_state.present = node.next;
         }

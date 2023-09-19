@@ -348,8 +348,7 @@ impl CoroutineImpl {
                 builder.if_(cond,true_branch,false_branch)
             }
             Instruction::CoroSuspend { .. }
-            | Instruction::CoroResume { .. }
-            | Instruction::CoroScope { .. } => {
+            | Instruction::CoroResume { .. } => {
                 todo!()
             }
         }

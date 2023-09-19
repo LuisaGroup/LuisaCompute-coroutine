@@ -321,8 +321,7 @@ impl ToSSAImpl {
                 unimplemented!("Coroutine is not supported yet");
             }
             Instruction::CoroSuspend { .. }
-            | Instruction::CoroResume { .. }
-            | Instruction::CoroScope { .. } => {
+            | Instruction::CoroResume { .. } => {
                 unreachable!("{:?} should not be defined as statement directly", instruction);
             }
         }

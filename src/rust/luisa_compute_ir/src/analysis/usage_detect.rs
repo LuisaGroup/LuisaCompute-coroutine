@@ -167,10 +167,8 @@ impl UsageDetector {
             }
             crate::ir::Instruction::Comment(_) => {}
             crate::ir::Instruction::CoroSplitMark{..} => {}
-            crate::ir::Instruction::CoroScope {..}
-            | crate::ir::Instruction::CoroSuspend{..}
-            | crate::ir::Instruction::CoroResume{..}
-            | crate::ir::Instruction::CoroScope {..} => {
+            crate::ir::Instruction::CoroSuspend{..}
+            | crate::ir::Instruction::CoroResume{..} => {
                 unreachable!("Unexpected coroutine instruction in UsageDetector::detect_node");
             }
         }

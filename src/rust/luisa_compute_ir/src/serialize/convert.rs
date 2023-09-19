@@ -266,10 +266,6 @@ impl KernelSerializer {
             Instruction::CoroResume { token } => {
                 SerializedInstruction::CoroResume { token: *token }
             }
-            Instruction::CoroScope { token, body } => {
-                let body = self.serialize_block(body);
-                SerializedInstruction::CoroFrame { token: *token, body }
-            }
         }
     }
     fn serialize_func(&mut self, func: &Func) -> SerializedFunc {

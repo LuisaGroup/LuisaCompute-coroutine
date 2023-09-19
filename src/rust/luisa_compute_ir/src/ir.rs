@@ -1130,17 +1130,11 @@ pub enum Instruction {
     CoroSplitMark {
         token: u32,
     },
-    // TODO: merge the 2 instructions below
     CoroSuspend {
         token: u32,
     },
-    // ------------------
     CoroResume {
         token: u32,
-    },
-    CoroScope {
-        token: u32,
-        body: Pooled<BasicBlock>,
     },
 }
 
@@ -2006,8 +2000,7 @@ impl ModuleDuplicator {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { .. }
-            | Instruction::CoroResume { .. }
-            | Instruction::CoroScope { .. } => {
+            | Instruction::CoroResume { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
             }
         };

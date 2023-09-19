@@ -663,7 +663,6 @@ struct Instruction {
         CoroSplitMark,
         CoroSuspend,
         CoroResume,
-        CoroScope,
     };
 
     struct Local_Body {
@@ -754,11 +753,6 @@ struct Instruction {
         uint32_t token;
     };
 
-    struct CoroScope_Body {
-        uint32_t token;
-        Pooled<BasicBlock> body;
-    };
-
     Tag tag;
     union {
         Local_Body local;
@@ -780,7 +774,6 @@ struct Instruction {
         CoroSplitMark_Body coro_split_mark;
         CoroSuspend_Body coro_suspend;
         CoroResume_Body coro_resume;
-        CoroScope_Body coro_scope;
     };
 };
 

@@ -24,23 +24,6 @@ impl ScopeBuilder {
     }
 }
 
-struct ModuleDuplicator {
-    // map old node to new node
-    callables: HashMap<*const CallableModule, CArc<CallableModule>>,
-    nodes: HashMap<NodeRef, NodeRef>,
-    blocks: HashMap<*const BasicBlock, Pooled<BasicBlock>>,
-}
-
-impl ModuleDuplicator {
-    fn new() -> Self {
-        Self {
-            callables: HashMap::new(),
-            nodes: HashMap::new(),
-            blocks: HashMap::new(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Default)]
 struct SplitPossibility {
     possibly: bool,
@@ -76,21 +59,36 @@ struct New2OldMap {
     blocks: HashMap<*const BasicBlock, *const BasicBlock>,
 }
 
+#[derive(Debug, Default)]
+struct CallableModuleInfo {
+    args: Vec<NodeRef>,
+    captures: Vec<Capture>,
+}
+
+struct CoroFrame {
+
+}
+
 
 pub(crate) struct SplitManager {
+    frame_analyser: CoroFrameAnalyser,
+
     old2new: Old2NewMap,
     new2old: New2OldMap,
+
+    // TODO: set private and add an API
     pub(crate) coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
-    frame_analyser: CoroFrameAnalyser,
+    coro_callable_info: HashMap<u32, CallableModuleInfo>,
 }
 
 impl SplitManager {
     pub(crate) fn split(frame_analyser: CoroFrameAnalyser, callable: &CallableModule) -> Self {
         let mut sm = Self {
+            frame_analyser,
             old2new: Default::default(),
             new2old: Default::default(),
             coro_scopes: HashMap::new(),
-            frame_analyser
+            coro_callable_info: HashMap::new(),
         };
 
         // prepare
@@ -112,50 +110,64 @@ impl SplitManager {
         ScopeBuilder::new(FrameTokenManager::get_temp_token(), pools)
     }
 
-    fn preprocess_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
-        bb.iter().for_each(|node_ref_present| {
-            let node = node_ref_present.get();
-            match node.instruction.as_ref() {
-                Instruction::CoroSplitMark { token } => {
-                    // TODO: args & captures
-                    let args = self.duplicate_args(*token, &callable_original.pools, &callable_original.args);
-                    let captures = self.duplicate_captures(*token, &callable_original.pools, &callable_original.captures);
-                }
-                // 3 Instructions after CCF
-                Instruction::Loop { body, cond } => {
-                    self.preprocess_bb(body, callable_original);
-                }
-                Instruction::If { cond, true_branch, false_branch } => {
-                    self.preprocess_bb(true_branch, callable_original);
-                    self.preprocess_bb(false_branch, callable_original);
-                }
-                Instruction::Switch {
-                    value: _,
-                    default,
-                    cases,
-                } => {
-                    self.preprocess_bb(default, callable_original);
-                    for SwitchCase { value: _, block } in cases.as_ref().iter() {
-                        self.preprocess_bb(block, callable_original);
-                    }
-                }
-                _ => {}
-            }
-        });
-    }
+    // fn preprocess_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
+    //     bb.iter().for_each(|node_ref_present| {
+    //         let node = node_ref_present.get();
+    //         match node.instruction.as_ref() {
+    //             Instruction::CoroSplitMark { token } => {
+    //                 // TODO: args & captures
+    //                 let args = self.duplicate_args(*token, &callable_original.pools, &callable_original.args);
+    //                 let captures = self.duplicate_captures(*token, &callable_original.pools, &callable_original.captures);
+    //             }
+    //             // 3 Instructions after CCF
+    //             Instruction::Loop { body, cond } => {
+    //                 self.preprocess_bb(body, callable_original);
+    //             }
+    //             Instruction::If { cond, true_branch, false_branch } => {
+    //                 self.preprocess_bb(true_branch, callable_original);
+    //                 self.preprocess_bb(false_branch, callable_original);
+    //             }
+    //             Instruction::Switch {
+    //                 value: _,
+    //                 default,
+    //                 cases,
+    //             } => {
+    //                 self.preprocess_bb(default, callable_original);
+    //                 for SwitchCase { value: _, block } in cases.as_ref().iter() {
+    //                     self.preprocess_bb(block, callable_original);
+    //                 }
+    //             }
+    //             _ => {}
+    //         }
+    //     });
+    // }
     fn preprocess(&mut self, callable: &CallableModule) -> ScopeBuilder {
-        let bb = &callable.module.entry;
-
         let entry_token = self.frame_analyser.entry_token;
-        // TODO: args & captures
         let args = self.duplicate_args(entry_token, &callable.pools, &callable.args);
         let captures = self.duplicate_captures(entry_token, &callable.pools, &callable.captures);
+        self.coro_callable_info.insert(entry_token, CallableModuleInfo {
+            args: args.to_vec(),
+            captures: captures.to_vec(),
+        });
 
-        self.preprocess_bb(bb, callable);
+        // self.preprocess_bb(bb, callable);
 
         // duplicate frames as args
-        for token in self.frame_analyser.continuations.keys() {
-            // TODO
+        let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
+        for token in token_vec.iter() {
+            // duplicate all args & captures redundantly
+            let active_var = self.frame_analyser.active_vars.get(token).unwrap().clone();
+            // for arg in callable.args.as_ref() {
+            //     if active_var.input.contains()
+            // }
+
+            let args = self.duplicate_args(*token, &callable.pools, &callable.args);
+            let captures = self.duplicate_captures(*token, &callable.pools, &callable.captures);
+            let callable_info = self.coro_callable_info.entry(*token).or_default();
+            callable_info.args.extend(args.to_vec());
+            callable_info.captures.extend(captures.to_vec());
+
+            // duplicate IN[B] as args
         }
 
         ScopeBuilder::new(entry_token, callable.pools.clone())
@@ -188,7 +200,11 @@ impl SplitManager {
         let mut node_ref_present = visit_state.start;
         while node_ref_present != visit_state.end {
             let node = node_ref_present.get();
-            match node.instruction.as_ref() {
+            let type_ = &node.type_;
+            let instruction = node.instruction.as_ref();
+            println!("{:?}: {:?}", visit_state.present, instruction);
+
+            match instruction {
                 // coroutine related instructions
                 Instruction::CoroSplitMark { token } => {
                     // TODO: different behaviors for loop/if
@@ -620,8 +636,31 @@ impl SplitManager {
     }
     fn find_duplicated_node(&mut self, frame_token: u32, node: NodeRef) -> NodeRef {
         if !node.valid() { return INVALID_REF; }
-        // TODO: get None for coroutine state/local; active var analysis
         self.old2new.nodes.get(&node).unwrap().get(&frame_token).unwrap().clone()
+    }
+    fn record_node_mapping(&mut self, frame_token: u32, old: NodeRef, new: NodeRef) {
+        let mut old_original = old;
+        while let Some(node_ref_t) = self.new2old.nodes.get(&old_original) {
+            old_original = node_ref_t.clone();
+        }
+        self.old2new.nodes.entry(old_original).or_default().insert(frame_token, new);
+        self.new2old.nodes.entry(new).or_insert(old_original);
+    }
+    fn record_block_mapping(&mut self, frame_token: u32, old: &Pooled<BasicBlock>, new: &Pooled<BasicBlock>) {
+        let mut old_original = old.as_ptr();
+        while let Some(bb_t) = self.new2old.blocks.get(&old_original) {
+            old_original = bb_t.clone();
+        }
+        self.old2new.blocks.entry(old_original).or_default().insert(frame_token, new.clone());
+        self.new2old.blocks.entry(new.as_ptr()).or_insert(old_original);
+    }
+    fn record_callable_mapping(&mut self, frame_token: u32, old: &CArc<CallableModule>, new: &CArc<CallableModule>) {
+        let mut old_original = old.as_ptr();
+        while let Some(callable_t) = self.new2old.callables.get(&old_original) {
+            old_original = callable_t.clone();
+        }
+        self.old2new.callables.entry(old_original).or_default().insert(frame_token, new.clone());
+        self.new2old.callables.entry(new.as_ptr()).or_insert(old_original);
     }
     fn duplicate_arg(&mut self, frame_token: u32, pools: &CArc<ModulePools>, node_ref: NodeRef) -> NodeRef {
         let node = node_ref.get();
@@ -641,12 +680,7 @@ impl SplitManager {
         let dup_node_ref = new_node(pools, dup_node);
 
         // add to node map
-        let mut node_ref_original = node_ref;
-        while let Some(node_ref_t) = self.new2old.nodes.get(&node_ref) {
-            node_ref_original = node_ref_t.clone();
-        }
-        self.old2new.nodes.entry(node_ref_original).or_default().insert(frame_token, dup_node_ref);
-        self.new2old.nodes.entry(dup_node_ref).or_insert(node_ref_original);
+        self.record_node_mapping(frame_token, node_ref, dup_node_ref);
         dup_node_ref
     }
     fn duplicate_args(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
@@ -694,12 +728,8 @@ impl SplitManager {
             }
         };
         let dup_callable = CArc::new(dup_callable);
-        let mut callable_original = callable.as_ptr();
-        while let Some(callable_t) = self.new2old.callables.get(&callable_original) {
-            callable_original = *callable_t;
-        }
-        self.old2new.callables.entry(callable_original).or_default().insert(frame_token, dup_callable.clone());
-        self.new2old.callables.entry(dup_callable.as_ptr()).or_insert(callable_original);
+        // insert the duplicated callable into the map
+        self.record_callable_mapping(frame_token, callable, &dup_callable);
         dup_callable
     }
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
@@ -711,12 +741,7 @@ impl SplitManager {
         });
         let dup_bb = scope_builder.builder.finish();
         // insert the duplicated block into the map
-        let mut bb_original = bb.as_ptr();
-        while let Some(bb_t) = self.new2old.blocks.get(&bb_original) {
-            bb_original = *bb_t;
-        }
-        self.old2new.blocks.entry(bb_original).or_default().insert(frame_token, dup_bb.clone());
-        self.new2old.blocks.entry(dup_bb.as_ptr()).or_insert(bb_original);
+        self.record_block_mapping(frame_token, bb, &dup_bb);
         dup_bb
     }
     fn duplicate_module(&mut self, frame_token: u32, module: &Module) -> Module {
@@ -735,21 +760,23 @@ impl SplitManager {
         let node = node_ref.get();
         assert!(!self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token),
                 "Node {:?} has already been duplicated", node);
-        let dup_node = match node.instruction.as_ref() {
-            Instruction::Buffer => unreachable!("Buffer should be handled by duplicate_args"),
-            Instruction::Bindless => unreachable!("Bindless should be handled by duplicate_args"),
-            Instruction::Texture2D => unreachable!("Texture2D should be handled by duplicate_args"),
-            Instruction::Texture3D => unreachable!("Texture3D should be handled by duplicate_args"),
-            Instruction::Accel => unreachable!("Accel should be handled by duplicate_args"),
-            Instruction::Shared => unreachable!("Shared should be handled by duplicate_shared"),
-            Instruction::Uniform => unreachable!("Uniform should be handled by duplicate_args"),
-            Instruction::Argument { .. } => unreachable!("Argument should be handled by duplicate_args"),
+        let instruction = node.instruction.as_ref();
+        let dup_node = match instruction {
+            Instruction::Buffer
+            | Instruction::Bindless
+            | Instruction::Texture2D
+            | Instruction::Texture3D
+            | Instruction::Accel
+            | Instruction::Shared
+            | Instruction::Uniform
+            | Instruction::Argument { .. } => unreachable!("{:?} should not appear in basic block", instruction),
+            Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
+
             Instruction::Local { init } => {
                 let dup_init = self.find_duplicated_node(frame_token, *init);
                 builder.local(dup_init)
             }
             Instruction::UserData(data) => builder.userdata(data.clone()),
-            Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
             Instruction::Const(const_) => builder.const_(const_.clone()),
             Instruction::Update { var, value } => {
                 // unreachable if SSA
@@ -835,18 +862,10 @@ impl SplitManager {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { token } => builder.coro_suspend(*token),
-            | Instruction::CoroResume { .. }
-            | Instruction::CoroScope { .. } => {
-                unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
-            }
+            Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
         };
         // insert the duplicated node into the map
-        let mut node_ref_original = node_ref;
-        while let Some(node_ref_t) = self.new2old.nodes.get(&node_ref) {
-            node_ref_original = node_ref_t.clone();
-        }
-        self.old2new.nodes.entry(node_ref_original).or_default().insert(frame_token, dup_node);
-        self.new2old.nodes.entry(dup_node).or_insert(node_ref_original);
+        self.record_node_mapping(frame_token, node_ref, dup_node);
         dup_node
     }
 }

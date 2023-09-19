@@ -159,10 +159,6 @@ pub enum SerializedInstruction {
     CoroResume {
         token: u32,
     },
-    CoroFrame {
-        token: u32,
-        body: SerializedBlockRef,
-    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]

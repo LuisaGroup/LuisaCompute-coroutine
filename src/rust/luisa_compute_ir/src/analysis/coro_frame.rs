@@ -84,9 +84,9 @@ impl VisitResult {
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct SplitPossibility {
-    possibly: bool,
-    directly: bool,
-    definitely: bool,
+    pub(crate) possibly: bool,
+    pub(crate) directly: bool,
+    pub(crate) definitely: bool,
 }
 
 
@@ -139,6 +139,7 @@ impl ActiveVar {
         output += &format!("input: {}\n", display_ir.display_existent_nodes(&self.input));
         output += &format!("output: {}\n", display_ir.display_existent_nodes(&self.output));
         output += &"-".repeat(40);
+        output += "\n";
         output
     }
 }
@@ -148,6 +149,7 @@ pub(crate) struct CoroFrameAnalyser {
     pub(crate) active_vars: HashMap<u32, ActiveVar>,
     pub(crate) split_possibility: HashMap<*const BasicBlock, SplitPossibility>,
     visited_coro_split_mark: HashSet<NodeRef>,
+    pub(crate) entry_token: u32,
 }
 
 impl CoroFrameAnalyser {
@@ -157,6 +159,7 @@ impl CoroFrameAnalyser {
             active_vars: HashMap::new(),
             split_possibility: HashMap::new(),
             visited_coro_split_mark: HashSet::new(),
+            entry_token: u32::MAX,
         }
     }
 
@@ -164,6 +167,8 @@ impl CoroFrameAnalyser {
         self.preprocess_bb(&callable.module.entry);
 
         let entry_token = FrameTokenManager::get_new_token();
+        FrameTokenManager::register_frame_token(entry_token);
+        self.entry_token = entry_token;
         let active_var = self.active_vars.entry(entry_token).or_insert(ActiveVar::new(entry_token));
 
         for arg in callable.args.as_ref() {
@@ -195,7 +200,6 @@ impl CoroFrameAnalyser {
             for continuation in self.continuations.values() {
                 let mut active_var = self.active_vars.get(&continuation.token).unwrap().clone();
                 active_var.output.clear();
-                active_var.input = active_var.use_b.clone();
                 let mut to_self = false;
                 // OUT[B] = U IN[S] for all S in next[B]
                 for token_next in continuation.next.iter() {
@@ -210,9 +214,10 @@ impl CoroFrameAnalyser {
                     active_var.output.extend(active_var.input.iter());
                 }
                 // IN[B] = use[B] U (OUT[B] - def[B])
+                active_var.input = active_var.use_b.clone();
                 let mut out_minus_def = active_var.output.clone();
                 out_minus_def.retain(|node_ref| !active_var.def_b.contains(node_ref));
-                active_var.input.extend(active_var.output.iter());
+                active_var.input.extend(out_minus_def);
 
                 // check if changed
                 if active_var != *self.active_vars.get(&continuation.token).unwrap() {
@@ -306,9 +311,7 @@ impl CoroFrameAnalyser {
     }
     fn visit_loop(&mut self, mut frame_builder: FrameBuilder, visit_state: VisitState,
                   body: &Pooled<BasicBlock>, cond: &NodeRef) -> VisitResult {
-        let split_poss = self.split_possibility.get(&body.as_ptr()).unwrap();
         let mut visit_result = VisitResult::new();
-
         let mut fb_after_vec = vec![];
 
         let fb_body = self.visit_branch_split(frame_builder.token, body, &mut fb_after_vec);

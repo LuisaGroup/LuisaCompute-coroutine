@@ -34,7 +34,8 @@ int main(int argc, char *argv[]) {
                 x_buffer.write(id, x + 10u);
                 $suspend(1u);
                 x = x_buffer.read(id);
-                x_buffer.write(id, x + 100u);
+                $suspend(2u);
+                x_buffer.write(id, x + 100u + n);
             } $else {
                 x_buffer.write(id, x + 1000u);
             };

@@ -518,12 +518,14 @@ impl CoroFrameAnalyser {
                     }
                 }
                 Instruction::GenericLoop { .. } => todo!(),
+                Instruction::RayQuery { .. } => todo!(),
+
                 Instruction::Break => {}
                 Instruction::Continue => {}
                 Instruction::AdScope { .. } => {}
-                Instruction::RayQuery { .. } => todo!(),
                 Instruction::AdDetach(_) => {}
                 Instruction::Comment(_) => {}
+                Instruction::Print { .. } => {}
 
                 Instruction::CoroSuspend { .. }
                 | Instruction::CoroResume { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),

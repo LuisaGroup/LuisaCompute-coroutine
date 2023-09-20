@@ -549,7 +549,7 @@ private:
     JSON _root;
     luisa::unordered_map<const Type *, uint> _type_to_index;
     luisa::unordered_map<const std::byte *, uint> _constant_to_index;
-    luisa::unordered_map<Function, uint> _function_to_index;
+    luisa::unordered_map<uint64_t, uint> _function_to_index;
     luisa::unordered_map<const ExternalFunction *, uint> _external_function_to_index;
     FunctionContext *_func_ctx{nullptr};
 
@@ -721,7 +721,7 @@ private:
     [[nodiscard]] uint _function_index(Function f) noexcept {
         LUISA_ASSERT(f.tag() != Function::Tag::RASTER_STAGE,
                      "Raster stage functions are not supported.");
-        if (auto iter = _function_to_index.find(f);
+        if (auto iter = _function_to_index.find(f.hash());
             iter != _function_to_index.end()) {
             return iter->second;
         }
@@ -803,7 +803,7 @@ private:
         // insert into the root table
         auto &funcs = _root["functions"].as_array();
         auto index = static_cast<uint>(funcs.size());
-        _function_to_index[f] = index;
+        _function_to_index.emplace(f.hash(), index);
         funcs.emplace_back(std::move(ctx.j));
         return index;
     }
@@ -823,6 +823,7 @@ private:
             case Expression::Tag::CALL: _convert_call_expr(j, static_cast<const CallExpr *>(expr)); break;
             case Expression::Tag::CAST: _convert_cast_expr(j, static_cast<const CastExpr *>(expr)); break;
             case Expression::Tag::TYPE_ID: _convert_type_id_expr(j, static_cast<const TypeIDExpr *>(expr)); break;
+            case Expression::Tag::STRING_ID: _convert_string_id_expr(j, static_cast<const StringIDExpr *>(expr)); break;
             case Expression::Tag::CPUCUSTOM: LUISA_NOT_IMPLEMENTED();
             case Expression::Tag::GPUCUSTOM: LUISA_NOT_IMPLEMENTED();
         }
@@ -842,7 +843,7 @@ private:
         if (expr->is_swizzle()) {
             luisa::string swizzle;
             for (auto i = 0u; i < expr->swizzle_size(); i++) {
-                swizzle.push_back("0123"[expr->swizzle_index(i)]);
+                swizzle.push_back("xyzw"[expr->swizzle_index(i)]);
             }
             j["swizzle"] = std::move(swizzle);
         } else {
@@ -889,6 +890,9 @@ private:
     void _convert_type_id_expr(JSON &j, const TypeIDExpr *expr) noexcept {
         j["data_type"] = _type_index(expr->data_type());
     }
+    void _convert_string_id_expr(JSON &j, const StringIDExpr *expr) noexcept {
+        j["data"] = expr->data();
+    }
     [[nodiscard]] JSON _convert_stmt(const Statement *stmt) noexcept {
         JSON j;
         j["tag"] = luisa::to_string(stmt->tag());
@@ -908,6 +912,7 @@ private:
             case Statement::Tag::COMMENT: _convert_comment_stmt(j, static_cast<const CommentStmt *>(stmt)); break;
             case Statement::Tag::RAY_QUERY: _convert_ray_query_stmt(j, static_cast<const RayQueryStmt *>(stmt)); break;
             case Statement::Tag::AUTO_DIFF: _convert_autodiff_stmt(j, static_cast<const AutoDiffStmt *>(stmt)); break;
+            case Statement::Tag::SUSPEND: _convert_suspend_stmt(j, static_cast<const SuspendStmt *>(stmt)); break;
         }
         return j;
     }
@@ -983,6 +988,9 @@ private:
     }
     void _convert_autodiff_stmt(JSON &j, const AutoDiffStmt *stmt) noexcept {
         j["body"] = _convert_stmt(stmt->body());
+    }
+    void _convert_suspend_stmt(JSON &j, const SuspendStmt *stmt) noexcept {
+        j["id"] = stmt->id();
     }
 
 public:

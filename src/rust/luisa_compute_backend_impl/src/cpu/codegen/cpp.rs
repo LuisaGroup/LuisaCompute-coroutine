@@ -45,7 +45,7 @@ impl TypeGenInner {
                 ir::Primitive::Float64 => "double".to_string(),
                 // crate::ir::Primitive::USize => format!("i{}", std::mem::size_of::<usize>() * 8),
             },
-            Type::Void => "()".to_string(),
+            Type::Void => "void".to_string(),
             Type::UserData => "lc_user_data_t".to_string(),
             Type::Struct(st) => {
                 let field_types: Vec<String> = st
@@ -445,13 +445,16 @@ impl<'a> FunctionEmitter<'a> {
             callable_emitter.gen_callable_module(&f.0);
             callable_emitter.indent += self.indent;
 
+            let ret_type = self.type_gen.gen_c_type(&f.0.ret_type);
+
             let fname = format!(
                 "callable_{}",
                 callable_emitter.globals.generated_callables.len()
             );
             let source = format!(
-                "[=]({}){{\n{}\n{};}}",
+                "[=]({}) -> {} {{\n{}\n{};}}",
                 params.join(","),
+                ret_type,
                 callable_emitter.fwd_defs,
                 callable_emitter.body
             );
@@ -702,8 +705,8 @@ impl<'a> FunctionEmitter<'a> {
                 )
                 .unwrap();
                 true
-            } 
-            Func::BindlessByteAdressBufferRead => {
+            }
+            Func::BindlessByteBufferRead => {
                 writeln!(
                     &mut self.body,
                     "const auto {1} = lc_bindless_byte_buffer_read<{0}>(k_args, {2}, {3}, {4});",
@@ -915,6 +918,7 @@ impl<'a> FunctionEmitter<'a> {
         args_v: &Vec<String>,
     ) -> bool {
         match f {
+            Func::PropagateGrad => true,
             Func::RequiresGradient => true,
             Func::Assume => {
                 writeln!(&mut self.body, "lc_assume({});", args_v.join(", ")).unwrap();
@@ -1111,27 +1115,27 @@ impl<'a> FunctionEmitter<'a> {
                 true
             }
             Func::Load => {
-                writeln!(self.body, "const {} {} = {};", node_ty_s, var, args_v[0]).unwrap();
+                writeln!(self.body, "const {}& {} = {};", node_ty_s, var, args_v[0]).unwrap();
                 true
             }
             Func::GradientMarker => {
                 let ty = self.type_gen.gen_c_type(args[1].type_());
                 writeln!(
                     self.body,
-                    "const {} {}_grad = {};",
+                    "const {}& {}_grad = {};",
                     ty, args_v[0], args_v[1]
                 )
                 .unwrap();
                 true
             }
             Func::Detach => {
-                writeln!(self.body, "const {} {} = {};", node_ty_s, var, args_v[0]).unwrap();
+                writeln!(self.body, "const {}& {} = {};", node_ty_s, var, args_v[0]).unwrap();
                 true
             }
             Func::Gradient => {
                 writeln!(
                     self.body,
-                    "const {0} {1} = {2}_grad;",
+                    "const {0}& {1} = {2}_grad;",
                     node_ty_s, var, args_v[0]
                 )
                 .unwrap();
@@ -1148,24 +1152,24 @@ impl<'a> FunctionEmitter<'a> {
             }
             Func::BitNot => {
                 if node_ty.is_bool() {
-                    writeln!(self.body, "const {} {} = !{};", node_ty_s, var, args_v[0]).unwrap();
+                    writeln!(self.body, "const {}& {} = !{};", node_ty_s, var, args_v[0]).unwrap();
                 } else {
-                    writeln!(self.body, "const {} {} = ~{};", node_ty_s, var, args_v[0]).unwrap();
+                    writeln!(self.body, "const {}& {} = ~{};", node_ty_s, var, args_v[0]).unwrap();
                 }
                 true
             }
             Func::Neg => {
-                writeln!(self.body, "const {} {} = -{};", node_ty_s, var, args_v[0]).unwrap();
+                writeln!(self.body, "const {}& {} = -{};", node_ty_s, var, args_v[0]).unwrap();
                 true
             }
             Func::Not => {
-                writeln!(self.body, "const {} {} = !{};", node_ty_s, var, args_v[0]).unwrap();
+                writeln!(self.body, "const {}& {} = !{};", node_ty_s, var, args_v[0]).unwrap();
                 true
             }
             Func::Bitcast => {
                 writeln!(
                     self.body,
-                    "const {0} {1} = lc_bit_cast<{0}>({2});",
+                    "const {0}& {1} = lc_bit_cast<{0}>({2});",
                     node_ty_s, var, args_v[0]
                 )
                 .unwrap();
@@ -1175,14 +1179,14 @@ impl<'a> FunctionEmitter<'a> {
                 if node_ty.is_bool() && node_ty.is_primitive() {
                     writeln!(
                         self.body,
-                        "const {} {} = {} != 0;",
+                        "const {}& {} = {} != 0;",
                         node_ty_s, var, args_v[0]
                     )
                     .unwrap();
                 } else if (node_ty.is_float() || node_ty.is_int()) && node_ty.is_primitive() {
                     writeln!(
                         self.body,
-                        "const {} {} = static_cast<{}>({});",
+                        "const {}& {} = static_cast<{}>({});",
                         node_ty_s, var, node_ty_s, args_v[0]
                     )
                     .unwrap();
@@ -1190,7 +1194,7 @@ impl<'a> FunctionEmitter<'a> {
                     let vt_s = node_ty_s[3..].to_string();
                     writeln!(
                         self.body,
-                        "const {} {} = lc_make_{}({});",
+                        "const {}& {} = lc_make_{}({});",
                         node_ty_s, var, vt_s, args_v[0]
                     )
                     .unwrap();
@@ -1225,7 +1229,7 @@ impl<'a> FunctionEmitter<'a> {
                     .collect();
                 writeln!(
                     self.body,
-                    "const {} {} = {}({});",
+                    "const {}& {} = {}({});",
                     node_ty_s,
                     var,
                     node_ty_s,
@@ -1711,7 +1715,7 @@ impl<'a> FunctionEmitter<'a> {
                 self.write_ident();
                 writeln!(&mut self.body, "}}").unwrap();
             }
-            Instruction::AdScope { body } => {
+            Instruction::AdScope { body, .. } => {
                 writeln!(&mut self.body, "/* AdScope */").unwrap();
                 self.gen_block(*body);
                 self.write_ident();
@@ -1749,8 +1753,10 @@ impl<'a> FunctionEmitter<'a> {
             }
             Instruction::Comment(comment) => {
                 self.write_ident();
-                let comment = CString::new(comment.as_ref()).unwrap();
-                writeln!(&mut self.body, "/* {} */", comment.to_string_lossy()).unwrap();
+                writeln!(&mut self.body, "/* {} */", comment.to_string()).unwrap();
+            }
+            Instruction::Print { fmt, args } => {
+                todo!()
             }
             default => panic!("unimplemented: {:?}", default),
         }

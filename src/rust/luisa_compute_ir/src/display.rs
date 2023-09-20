@@ -68,11 +68,11 @@ impl DisplayIR {
     }
 
     pub fn display_existent_nodes(&self, nodes: &HashSet<NodeRef>) -> String {
-        let mut node_cnts: Vec<_> = nodes.iter().map(|node|{
+        let mut node_cnts: Vec<_> = nodes.iter().map(|node| {
             self.get(node)
         }).collect();
         node_cnts.sort_unstable();
-        let mut node_cnts: Vec<_> = node_cnts.iter().map(|node|{
+        let mut node_cnts: Vec<_> = node_cnts.iter().map(|node| {
             format!("${}", node)
         }).collect();
         format!("{{{}}}", node_cnts.join(", "))
@@ -273,8 +273,11 @@ impl DisplayIR {
                 self.add_ident(ident);
                 self.output += "}";
             }
-            Instruction::AdScope { body } => {
-                self.output += "AdScope {\n";
+            Instruction::AdScope { body, forward, .. } => {
+                self.output += &format!(
+                    "{}AdScope {{\n",
+                    if *forward { "Forward" } else { "Reverse" }
+                );
                 for node in body.nodes().iter() {
                     self.display(*node, ident + 1, false);
                 }
@@ -300,6 +303,7 @@ impl DisplayIR {
             | Instruction::CoroResume { token } => {
                 self.output += format!("CoroResume({})", token).as_str();
             }
+            Instruction::Print { .. } => {}
         }
         if !no_new_line {
             self.output += "\n";

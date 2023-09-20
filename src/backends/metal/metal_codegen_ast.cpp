@@ -676,9 +676,9 @@ void MetalCodegenAST::emit(Function kernel, luisa::string_view native_include) n
     // collect functions
     luisa::vector<Function> functions;
     {
-        auto collect_functions = [&functions, collected = luisa::unordered_set<Function>{}](
+        auto collect_functions = [&functions, collected = luisa::unordered_set<uint64_t>{}](
                                      auto &&self, Function function) mutable noexcept -> void {
-            if (collected.emplace(function).second) {
+            if (collected.emplace(function.hash()).second) {
                 for (auto &&c : function.custom_callables()) { self(self, c->function()); }
                 functions.emplace_back(function);
             }
@@ -1011,9 +1011,11 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
             break;
         }
         case CallOp::RAY_TRACING_INSTANCE_TRANSFORM: _scratch << "accel_instance_transform"; break;
+        case CallOp::RAY_TRACING_INSTANCE_USER_ID: _scratch << "accel_instance_user_id"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM: _scratch << "accel_set_instance_transform"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_VISIBILITY: _scratch << "accel_set_instance_visibility"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_OPACITY: _scratch << "accel_set_instance_opacity"; break;
+        case CallOp::RAY_TRACING_SET_INSTANCE_USER_ID: _scratch << "accel_set_instance_user_id"; break;
         case CallOp::RAY_TRACING_TRACE_CLOSEST: _scratch << "accel_trace_closest"; break;
         case CallOp::RAY_TRACING_TRACE_ANY: _scratch << "accel_trace_any"; break;
         case CallOp::RAY_TRACING_QUERY_ALL: _scratch << "accel_query_all"; break;
@@ -1105,6 +1107,10 @@ void MetalCodegenAST::visit(const TypeIDExpr *expr) noexcept {
     _emit_type_name(expr->type());
     _scratch << ">(0ull)";
     // TODO: use expr->data_type() to generate correct type
+}
+
+void MetalCodegenAST::visit(const StringIDExpr *expr) noexcept {
+    LUISA_NOT_IMPLEMENTED();
 }
 
 void MetalCodegenAST::visit(const CastExpr *expr) noexcept {

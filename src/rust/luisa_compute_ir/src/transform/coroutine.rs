@@ -10,6 +10,7 @@ Remove all Instruction::Update nodes
 
 */
 pub struct Coroutine;
+
 struct CoroutineImpl {
     map_blocks: HashMap<*mut BasicBlock, *mut BasicBlock>,
     local_defs: HashSet<NodeRef>,
@@ -18,6 +19,7 @@ struct CoroutineImpl {
     corostate: NodeRef,
     corostate_type: CArc<Type>,
 }
+
 struct SSABlockRecord {
     defined: NestedHashSet<NodeRef>,
     stored: NestedHashMap<NodeRef, NodeRef>,
@@ -42,17 +44,17 @@ impl SSABlockRecord {
 }
 
 impl CoroutineImpl {
-    fn new(model: &Module,state: NodeRef) -> Self {
+    fn new(model: &Module, state: NodeRef) -> Self {
         Self {
             map_blocks: HashMap::new(),
             local_defs: model.collect_nodes().into_iter().collect(),
             map_immutables: HashMap::new(),
             suspend_count: 0,
             corostate: state,
-            corostate_type: crate::context::register_type(Type::Struct(StructType { 
-                fields: CBoxedSlice::new(vec![crate::context::register_type(Type::Primitive(Primitive::Uint32))]), 
+            corostate_type: crate::context::register_type(Type::Struct(StructType {
+                fields: CBoxedSlice::new(vec![crate::context::register_type(Type::Primitive(Primitive::Uint32))]),
                 alignment: 4,
-                size: 4 
+                size: 4,
             })),
         }
     }
@@ -332,25 +334,26 @@ impl CoroutineImpl {
                 builder.return_(INVALID_REF);
                 INVALID_REF
             }
-            Instruction::CoroSplitMark{token}=>{
+            Instruction::CoroSplitMark { token } => {
                 let suspend_id = builder.const_(Const::Uint32(*token));
-                let const0=builder.const_(Const::Uint32(0));
-                let const1=builder.const_(Const::Uint32(1));
-                let id_handle = builder.call(Func::ExtractElement,&[self.corostate, const0],crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-                let cond=builder.call(Func::Eq,&[suspend_id,id_handle],crate::context::register_type(Type::Primitive(Primitive::Bool)));
-                let mut true_builder=IrBuilder::new(builder.pools.clone());
-                let left_id=true_builder.call(Func::GetElementPtr,&[self.corostate, const0],crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-                let inc1=true_builder.call(Func::Add,&[id_handle,const1],crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-                true_builder.update(left_id,inc1);
+                let const0 = builder.const_(Const::Uint32(0));
+                let const1 = builder.const_(Const::Uint32(1));
+                let id_handle = builder.call(Func::ExtractElement, &[self.corostate, const0], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
+                let cond = builder.call(Func::Eq, &[suspend_id, id_handle], crate::context::register_type(Type::Primitive(Primitive::Bool)));
+                let mut true_builder = IrBuilder::new(builder.pools.clone());
+                let left_id = true_builder.call(Func::GetElementPtr, &[self.corostate, const0], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
+                let inc1 = true_builder.call(Func::Add, &[id_handle, const1], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
+                true_builder.update(left_id, inc1);
                 true_builder.return_(INVALID_REF);
-                let true_branch=true_builder.finish();
-                let false_branch=IrBuilder::new(builder.pools.clone()).finish();
-                builder.if_(cond,true_branch,false_branch)
+                let true_branch = true_builder.finish();
+                let false_branch = IrBuilder::new(builder.pools.clone()).finish();
+                builder.if_(cond, true_branch, false_branch)
             }
             Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. } => {
                 todo!()
             }
+            Instruction::Print { .. } => { todo!() }
         }
     }
     fn promote_bb(
@@ -372,13 +375,13 @@ impl Transform for Coroutine {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         //let result=DisplayIR::new().display_ir(&module);
         //println!("{}",result);
-        let module=callable.module;
-        let mut imp = CoroutineImpl::new(&module,callable.args[0]);
-        let mut builder=IrBuilder::new(module.pools.clone());
-        let const0=builder.const_(Const::Uint32(0));
-        let const1=builder.const_(Const::Uint32(1));
-        let left_id=builder.call(Func::GetElementPtr,&[imp.corostate,const0],crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-        builder.update(left_id,const1);
+        let module = callable.module;
+        let mut imp = CoroutineImpl::new(&module, callable.args[0]);
+        let mut builder = IrBuilder::new(module.pools.clone());
+        let const0 = builder.const_(Const::Uint32(0));
+        let const1 = builder.const_(Const::Uint32(1));
+        let left_id = builder.call(Func::GetElementPtr, &[imp.corostate, const0], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
+        builder.update(left_id, const1);
         let new_bb = imp.promote_bb(
             module.entry,
             builder,
@@ -386,20 +389,21 @@ impl Transform for Coroutine {
         );
         let mut entry = module.entry;
         *entry.get_mut() = *new_bb;
-        let ret=Module {
-            kind: module.kind,
+        let ret = Module {
+            kind: module.kind.clone(),
             entry,
-            pools: module.pools,
+            flags: module.flags.clone(),
+            pools: module.pools.clone(),
         };
         //println!("\n\n----------after------\n\n");
         //let result=DisplayIR::new().display_ir(&ret);
         //println!("{}",result);
-        callable.args[0].get_mut().type_=imp.corostate_type;
+        callable.args[0].get_mut().type_ = imp.corostate_type;
         CallableModule {
-            module:ret,
-            args:callable.args,
-            subroutine_ids:CBoxedSlice::new(vec![]),
-            subroutines:CBoxedSlice::new(vec![]),
+            module: ret,
+            args: callable.args,
+            subroutine_ids: CBoxedSlice::new(vec![]),
+            subroutines: CBoxedSlice::new(vec![]),
             ..callable
         }
     }

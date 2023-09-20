@@ -1,4 +1,4 @@
-use std::collections::{HashSet};
+use std::collections::HashSet;
 
 use super::Transform;
 
@@ -53,9 +53,9 @@ impl ToSSAImpl {
         builder: &mut IrBuilder,
         record: &mut SSABlockRecord,
     ) -> NodeRef {
-        if !self.local_defs.contains(&node) {
-            return builder.call(Func::Load, &[node], node.type_().clone());
-        }
+        // if !self.local_defs.contains(&node) {
+        //     return builder.call(Func::Load, &[node], node.type_().clone());
+        // }
         if let Some((var, indices)) = node.access_chain() {
             let mut cur = self.promote(var, builder, record);
             for (t, i) in &indices {
@@ -75,8 +75,8 @@ impl ToSSAImpl {
         builder: &mut IrBuilder,
         record: &mut SSABlockRecord,
     ) {
-        if var.is_local() {
-            let value = self.promote(value, builder, record);
+        let value = self.promote(value, builder, record);
+        if var.is_local() || var.is_refernece_argument() {
             record.phis.insert(var);
             record.stored.insert(var, value);
             if !self.local_defs.contains(&var) {
@@ -85,6 +85,8 @@ impl ToSSAImpl {
         } else {
             // the hardpart
             let (var, indices) = var.access_chain().unwrap();
+            // dbg!(var.type_(), &indices);
+            let unpromoted_var = var;
             let var = self.promote(var, builder, record);
             let mut st = vec![var];
             let mut cur = var;
@@ -95,20 +97,27 @@ impl ToSSAImpl {
                 cur = el;
             }
             let mut value = value;
-            for (t, i) in indices.iter().rev() {
+            for (_, i) in indices.iter().rev() {
                 let i = builder.const_(Const::Int32(*i as i32));
-                let el = builder.call(Func::InsertElement, &[cur, value, i], t.clone());
+                let el = builder.call(Func::InsertElement, &[cur, value, i], cur.type_().clone());
                 value = el;
                 cur = st.pop().unwrap();
             }
+            assert!(
+                context::is_type_equal(unpromoted_var.type_(), value.type_()),
+                "Type mismatch: {} vs {}",
+                unpromoted_var.type_(),
+                value.type_()
+            );
             record.phis.insert(var);
-            record.stored.insert(var, cur);
+            record.stored.insert(unpromoted_var, value);
+            assert_eq!(self.promote(unpromoted_var, builder, record), value);
             if !self.local_defs.contains(&var) {
-                builder.update(var, value);
+                builder.update(unpromoted_var, value);
             }
         }
     }
-    fn promot_branches(
+    fn promote_branches(
         &mut self,
         branches: &[Pooled<BasicBlock>],
         builder: &mut IrBuilder,
@@ -191,8 +200,10 @@ impl ToSSAImpl {
             Instruction::Shared => return node,
             Instruction::Uniform => return node,
             Instruction::Local { init } => {
-                if !self.local_defs.contains(&node) {
-                    return node;
+                if !self.local_defs.contains(&node) && !record.stored.contains_key(&node) {
+                    let val = builder.load(node);
+                    record.stored.insert(node, val);
+                    return val;
                 }
                 let init = self.promote(*init, builder, record);
                 let var = builder.local(init);
@@ -200,7 +211,18 @@ impl ToSSAImpl {
                 record.stored.insert(node, init);
                 return var;
             }
-            Instruction::Argument { .. } => todo!(),
+            Instruction::Argument { by_value } => {
+                if *by_value {
+                    return node;
+                }
+                assert!(!self.local_defs.contains(&node));
+                if !record.stored.contains_key(&node) {
+                    let val = builder.load(node);
+                    record.stored.insert(node, val);
+                    return node;
+                }
+                unreachable!();
+            }
             Instruction::UserData(_) => return node,
             Instruction::Invalid => return node,
             Instruction::Const(c) => {
@@ -219,7 +241,8 @@ impl ToSSAImpl {
                 }
                 if *func == Func::GetElementPtr {
                     let v = self.load(args[0], builder, record);
-                    return builder.call(Func::ExtractElement, &[v, args[1]], type_.clone());
+                    let idx = self.promote(args[1], builder, record);
+                    return builder.call(Func::ExtractElement, &[v, idx], type_.clone());
                 }
                 let promoted_args = args
                     .as_ref()
@@ -261,7 +284,7 @@ impl ToSSAImpl {
             } => {
                 let cond = self.promote(*cond, builder, record);
                 let (records, branches, phis) =
-                    self.promot_branches(&[*true_branch, *false_branch], builder, record);
+                    self.promote_branches(&[*true_branch, *false_branch], builder, record);
                 builder.if_(cond, branches[0], branches[1]);
                 self.merge_incomings(&records, &branches, &phis, builder, record);
                 return INVALID_REF;
@@ -278,7 +301,7 @@ impl ToSSAImpl {
                     .chain(std::iter::once(*default))
                     .collect::<Vec<_>>();
                 let (incoming_records, incoming_branches, phis) =
-                    self.promot_branches(&branches, builder, record);
+                    self.promote_branches(&branches, builder, record);
                 builder.switch(
                     value,
                     &incoming_branches[0..incoming_branches.len() - 1]
@@ -324,6 +347,14 @@ impl ToSSAImpl {
             | Instruction::CoroResume { .. } => {
                 unreachable!("{:?} should not be defined as statement directly", instruction);
             }
+            Instruction::Print { fmt, args } => {
+                let args = args
+                    .iter()
+                    .map(|node| self.promote(*node, builder, record))
+                    .collect::<Vec<_>>();
+                builder.print(fmt.clone(), &args);
+                return INVALID_REF;
+            }
         }
     }
     fn promote_bb(
@@ -355,6 +386,7 @@ impl Transform for ToSSA {
             kind: module.kind,
             entry,
             pools: module.pools,
+            flags: module.flags,
         }
     }
 }

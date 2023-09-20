@@ -164,11 +164,13 @@ static const AccelBuildModificationFlags AccelBuildModificationFlags_TRANSFORM =
 static const AccelBuildModificationFlags AccelBuildModificationFlags_OPAQUE_ON = AccelBuildModificationFlags{ /* .bits = */ (uint32_t)(1 << 2) };
 static const AccelBuildModificationFlags AccelBuildModificationFlags_OPAQUE_OFF = AccelBuildModificationFlags{ /* .bits = */ (uint32_t)(1 << 3) };
 static const AccelBuildModificationFlags AccelBuildModificationFlags_VISIBILITY = AccelBuildModificationFlags{ /* .bits = */ (uint32_t)(1 << 4) };
+static const AccelBuildModificationFlags AccelBuildModificationFlags_USER_ID = AccelBuildModificationFlags{ /* .bits = */ (uint32_t)(1 << 5) };
 
 struct AccelBuildModification {
     uint32_t index;
+    uint32_t user_id;
     AccelBuildModificationFlags flags;
-    uint8_t visibility;
+    uint32_t visibility;
     uint64_t mesh;
     float affine[12];
 };
@@ -518,7 +520,14 @@ struct DeviceInterface {
     void (*destroy_device)(DeviceInterface);
     CreatedBufferInfo (*create_buffer)(Device, const void*, size_t);
     void (*destroy_buffer)(Device, Buffer);
-    CreatedResourceInfo (*create_texture)(Device, PixelFormat, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool);
+    CreatedResourceInfo (*create_texture)(Device,
+                                          PixelFormat,
+                                          uint32_t,
+                                          uint32_t,
+                                          uint32_t,
+                                          uint32_t,
+                                          uint32_t,
+                                          bool);
     void *(*native_handle)(Device);
     uint32_t (*compute_warp_size)(Device);
     void (*destroy_texture)(Device, Texture);
@@ -528,7 +537,14 @@ struct DeviceInterface {
     void (*destroy_stream)(Device, Stream);
     void (*synchronize_stream)(Device, Stream);
     void (*dispatch)(Device, Stream, CommandList, DispatchCallback, uint8_t*);
-    CreatedSwapchainInfo (*create_swapchain)(Device, uint64_t, Stream, uint32_t, uint32_t, bool, bool, uint32_t);
+    CreatedSwapchainInfo (*create_swapchain)(Device,
+                                             uint64_t,
+                                             Stream,
+                                             uint32_t,
+                                             uint32_t,
+                                             bool,
+                                             bool,
+                                             uint32_t);
     void (*present_display_in_stream)(Device, Stream, Swapchain, Texture);
     void (*destroy_swapchain)(Device, Swapchain);
     CreatedShaderInfo (*create_shader)(Device, KernelModule, const ShaderOption*);

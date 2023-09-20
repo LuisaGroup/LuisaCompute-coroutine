@@ -780,8 +780,9 @@ impl SplitManager {
     fn duplicate_module(&mut self, frame_token: u32, module: &Module) -> Module {
         let dup_entry = self.duplicate_block(frame_token, &module.pools, &module.entry);
         Module {
-            kind: module.kind,
+            kind: module.kind.clone(),
             entry: dup_entry,
+            flags: module.flags.clone(),
             pools: module.pools.clone(),
         }
     }
@@ -878,7 +879,7 @@ impl SplitManager {
                 let dup_default = self.duplicate_block(frame_token, &builder.pools, default);
                 builder.switch(dup_value, dup_cases.as_slice(), dup_default)
             }
-            Instruction::AdScope { body } => {
+            Instruction::AdScope { body, .. } => {
                 let dup_body = self.duplicate_block(frame_token, &builder.pools, body);
                 builder.ad_scope(dup_body)
             }
@@ -896,6 +897,13 @@ impl SplitManager {
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { token } => builder.coro_suspend(*token),
             Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
+            Instruction::Print { fmt, args } => {
+                let args = args
+                    .iter()
+                    .map(|x| self.find_duplicated_node(frame_token, *x))
+                    .collect::<Vec<_>>();
+                builder.print(fmt.clone(), &args)
+            }
         };
         // insert the duplicated node into the map
         self.record_node_mapping(frame_token, node_ref, dup_node);

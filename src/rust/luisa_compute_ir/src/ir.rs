@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize, Serializer};
 use crate::analysis::usage_detect::detect_usage;
 use crate::ast2ir;
 use crate::*;
+use bitflags::bitflags;
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
 use std::ops::Deref;
+use std::sync::atomic::AtomicU32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
@@ -455,7 +457,7 @@ impl Type {
     }
     pub fn is_opaque(&self, name: &str) -> bool {
         match self {
-            Type::Opaque(name_) => name_.to_string().as_str() == name,
+            Type::Opaque(name_) => name.is_empty() || name_.to_string().as_str() == name,
             _ => false,
         }
     }
@@ -506,6 +508,29 @@ impl Type {
             },
             Type::Vector(v) => v.element.is_int(),
             Type::Matrix(m) => m.element.is_int(),
+            _ => false,
+        }
+    }
+    pub fn is_unsigned(&self) -> bool {
+        match self {
+            Type::Primitive(p) => match p {
+                Primitive::Uint16 | Primitive::Uint32 | Primitive::Uint64 => true,
+                _ => false,
+            },
+            Type::Vector(v) => v.element.to_type().is_unsigned(),
+            Type::Matrix(m) => m.element.to_type().is_unsigned(),
+            _ => false,
+        }
+    }
+    pub fn is_signed(&self) -> bool {
+        match self {
+            Type::Primitive(p) => match p {
+                Primitive::Int16 | Primitive::Int32 | Primitive::Int64 => true,
+                Primitive::Float16 | Primitive::Float32 | Primitive::Float64 => true,
+                _ => false,
+            },
+            Type::Vector(v) => v.element.to_type().is_signed(),
+            Type::Matrix(m) => m.element.to_type().is_signed(),
             _ => false,
         }
     }
@@ -567,6 +592,13 @@ pub enum Func {
     DispatchId,
     DispatchSize,
 
+    // Forward AD
+    /// (input, grads, ...) -> ()
+    PropagateGrad,
+    /// (var, idx) -> dvar/dinput_{idx}
+    OutputGrad,
+
+    // Reverse AD
     RequiresGradient,
     Backward,
     // marks the beginning of backward pass
@@ -579,9 +611,11 @@ pub enum Func {
 
     // (handle, instance_id) -> Mat4
     RayTracingInstanceTransform,
+    RayTracingInstanceUserId,
     RayTracingSetInstanceTransform,
     RayTracingSetInstanceOpacity,
     RayTracingSetInstanceVisibility,
+    RayTracingSetInstanceUserId,
     // (handle, Ray, mask) -> Hit
     // struct Ray alignas(16) { float origin[3], tmin; float direction[3], tmax; };
     // struct Hit alignas(16) { uint inst; uint prim; float u; float v; };
@@ -788,10 +822,14 @@ pub enum Func {
     Texture2dRead,
     /// (texture, coord, value) -> void
     Texture2dWrite,
+    /// (texture) -> uint2
+    Texture2dSize,
     /// (texture, coord) -> value
     Texture3dRead,
     /// (texture, coord, value) -> void
     Texture3dWrite,
+    /// (texture) -> uint3
+    Texture3dSize,
     ///(bindless_array, index: uint, uv: float2) -> float4
     BindlessTexture2dSample,
     ///(bindless_array, index: uint, uv: float2, level: float) -> float4
@@ -831,7 +869,7 @@ pub enum Func {
     // (bindless_array, index: uint) -> u64: returns the type of the buffer
     BindlessBufferType,
     // (bindless_array, index: uint, element_bytes: uint) -> T
-    BindlessByteAdressBufferRead,
+    BindlessByteBufferRead,
 
     // scalar -> vector, the resulting type is stored in node
     Vec,
@@ -1119,11 +1157,17 @@ pub enum Instruction {
     },
     AdScope {
         body: Pooled<BasicBlock>,
+        forward: bool,
+        n_forward_grads: usize,
     },
     RayQuery {
         ray_query: NodeRef,
         on_triangle_hit: Pooled<BasicBlock>,
         on_procedural_hit: Pooled<BasicBlock>,
+    },
+    Print {
+        fmt: CBoxedSlice<u8>,
+        args: CBoxedSlice<NodeRef>,
     },
     AdDetach(Pooled<BasicBlock>),
     Comment(CBoxedSlice<u8>),
@@ -1339,21 +1383,29 @@ impl BasicBlock {
     /// split the block into two at @at
     /// @at is not transfered into the other block
     pub fn split(&self, at: NodeRef, pools: &CArc<ModulePools>) -> Pooled<BasicBlock> {
+        #[cfg(debug_assertions)]
+        {
+            let nodes = self.nodes();
+            assert!(nodes.contains(&at));
+        }
         let new_bb_start = at.get().next;
         let second_last = self.last.get().prev;
         let new_bb = pools.bb_pool.alloc(BasicBlock::new(pools));
-        new_bb.first.update(|first| {
-            first.next = new_bb_start;
-        });
-        new_bb.last.update(|last| {
-            last.prev = second_last;
-        });
-        second_last.update(|node| {
-            node.next = new_bb.last;
-        });
-        new_bb_start.update(|node| {
-            node.prev = new_bb.first;
-        });
+        if new_bb_start != self.last {
+            new_bb.first.update(|first| {
+                first.next = new_bb_start;
+            });
+            new_bb.last.update(|last| {
+                last.prev = second_last;
+            });
+            second_last.update(|node| {
+                node.next = new_bb.last;
+            });
+            new_bb_start.update(|node| {
+                node.prev = new_bb.first;
+            });
+        }
+
         at.update(|at| {
             at.next = self.last;
         });
@@ -1518,7 +1570,8 @@ impl NodeRef {
     pub fn is_lvalue(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Local { .. } => true,
-            Instruction::Argument { by_value, .. } => !by_value,
+            Instruction::Argument { by_value } => !by_value,
+            Instruction::Shared => true,
             Instruction::Call(f, _) => *f == Func::GetElementPtr,
             _ => false,
         }
@@ -1532,12 +1585,22 @@ pub enum ModuleKind {
     Function,
     Kernel,
 }
-
+bitflags! {
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct ModuleFlags : u32 {
+        const NONE = 0;
+        const REQUIRES_REV_AD_TRANSFORM = 1;
+        const REQUIRES_FWD_AD_TRANSFORM = 2;
+    }
+}
 #[repr(C)]
 #[derive(Debug, Serialize)]
 pub struct Module {
     pub kind: ModuleKind,
     pub entry: Pooled<BasicBlock>,
+    pub flags: ModuleFlags,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
 }
@@ -1659,16 +1722,6 @@ pub struct BlockModule {
 
 unsafe impl Send for BlockModule {}
 
-impl Module {
-    pub fn from_fragment(entry: Pooled<BasicBlock>, pools: CArc<ModulePools>) -> Self {
-        Self {
-            kind: ModuleKind::Block,
-            entry,
-            pools,
-        }
-    }
-}
-
 struct NodeCollector {
     nodes: Vec<NodeRef>,
     unique: HashSet<NodeRef>,
@@ -1694,7 +1747,7 @@ impl NodeCollector {
         self.nodes.push(node_ref);
         let inst = node_ref.get().instruction.as_ref();
         match inst {
-            Instruction::AdScope { body } => {
+            Instruction::AdScope { body, .. } => {
                 self.visit_block(*body);
             }
             Instruction::If {
@@ -1974,9 +2027,17 @@ impl ModuleDuplicator {
                 let dup_default = self.duplicate_block(&builder.pools, default);
                 builder.switch(dup_value, dup_cases.as_slice(), dup_default)
             }
-            Instruction::AdScope { body } => {
+            Instruction::AdScope {
+                body,
+                forward,
+                n_forward_grads,
+            } => {
                 let dup_body = self.duplicate_block(&builder.pools, body);
-                builder.ad_scope(dup_body)
+                if *forward {
+                    builder.fwd_ad_scope(dup_body, *n_forward_grads)
+                } else {
+                    builder.ad_scope(dup_body)
+                }
             }
             Instruction::RayQuery {
                 ray_query,
@@ -2002,6 +2063,13 @@ impl ModuleDuplicator {
             Instruction::CoroSuspend { .. }
             | Instruction::CoroResume { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
+            }
+            Instruction::Print { fmt, args } => {
+                let args = args
+                    .iter()
+                    .map(|x| self.find_duplicated_node(*x))
+                    .collect::<Vec<_>>();
+                builder.print(fmt.clone(), &args)
             }
         };
         // insert the duplicated node into the map
@@ -2079,6 +2147,7 @@ impl ModuleDuplicator {
             kind: module.kind,
             entry: dup_entry,
             pools: module.pools.clone(),
+            flags: module.flags,
         }
     }
 }
@@ -2128,6 +2197,20 @@ impl IrBuilder {
         let new_node = new_node(
             &self.pools,
             Node::new(CArc::new(Instruction::Comment(msg)), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
+    pub fn print(&mut self, fmt: CBoxedSlice<u8>, args: &[NodeRef]) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(
+                CArc::new(Instruction::Print {
+                    fmt,
+                    args: CBoxedSlice::new(args.to_vec()),
+                }),
+                Type::void(),
+            ),
         );
         self.append(new_node);
         new_node
@@ -2214,16 +2297,32 @@ impl IrBuilder {
         self.append(node.clone());
         node
     }
-    pub fn store(&mut self, var: NodeRef, value: NodeRef) -> NodeRef {
-        assert!(var.is_lvalue());
-        let node = Node::new(CArc::new(Instruction::Update { var, value }), Type::void());
-        let node = new_node(&self.pools, node);
-        self.append(node);
-        node
-    }
     pub fn extract(&mut self, node: NodeRef, index: usize, ret_type: CArc<Type>) -> NodeRef {
+        match node.type_().as_ref() {
+            Type::Vector(vt) => assert_eq!(vt.element.to_type(), ret_type),
+            Type::Matrix(mt) => assert_eq!(mt.column(), ret_type),
+            Type::Struct(st) => assert_eq!(st.fields[index], ret_type),
+            Type::Array(at) => assert_eq!(at.element, ret_type),
+            Type::Opaque(_) => {}
+            _ => panic!("Invalid type for extract"),
+        }
         let c = self.const_(Const::Int32(index as i32));
         self.call(Func::ExtractElement, &[node, c], ret_type)
+    }
+    pub fn extract_dynamic(
+        &mut self,
+        node: NodeRef,
+        index: NodeRef,
+        ret_type: CArc<Type>,
+    ) -> NodeRef {
+        match node.type_().as_ref() {
+            Type::Vector(vt) => assert_eq!(vt.element.to_type(), ret_type),
+            Type::Matrix(mt) => assert_eq!(mt.column(), ret_type),
+            Type::Array(at) => assert_eq!(at.element, ret_type),
+            Type::Opaque(_) => {}
+            _ => panic!("Invalid type for extract with dynamic index"),
+        }
+        self.call(Func::ExtractElement, &[node, index], ret_type)
     }
     pub fn call(&mut self, func: Func, args: &[NodeRef], ret_type: CArc<Type>) -> NodeRef {
         let node = Node::new(
@@ -2240,7 +2339,36 @@ impl IrBuilder {
     pub fn bitcast(&mut self, node: NodeRef, t: CArc<Type>) -> NodeRef {
         self.call(Func::Bitcast, &[node], t)
     }
+    pub fn gep(&mut self, this: NodeRef, indices: &[NodeRef], t: CArc<Type>) -> NodeRef {
+        assert!(this.is_lvalue());
+        let mut e = Some(this.type_().clone());
+        indices.iter().for_each(|i| {
+            if let Some(ee) = &e {
+                e = match ee.as_ref() {
+                    Type::Vector(vt) => Some(vt.element.to_type()),
+                    Type::Matrix(mt) => Some(mt.column()),
+                    Type::Array(at) => Some(at.element.clone()),
+                    Type::Struct(st) => Some(st.fields[i.get_i32() as usize].clone()),
+                    Type::Opaque(_) => None,
+                    _ => panic!(
+                        "Invalid type {:?} for GEP with dynamic indices",
+                        this.type_()
+                    ),
+                };
+            };
+        });
+        if let Some(e) = e {
+            assert_eq!(e, t);
+        }
+        self.call(Func::GetElementPtr, &[&[this], indices].concat(), t)
+    }
     pub fn update(&mut self, var: NodeRef, value: NodeRef) -> NodeRef {
+        assert!(
+            context::is_type_equal(var.type_(), value.type_()),
+            "type mismatch {} {}",
+            var.type_(),
+            value.type_()
+        );
         match var.get().instruction.as_ref() {
             Instruction::Local { .. } => {}
             Instruction::Argument { by_value } => {
@@ -2335,7 +2463,27 @@ impl IrBuilder {
         node
     }
     pub fn ad_scope(&mut self, body: Pooled<BasicBlock>) -> NodeRef {
-        let node = Node::new(CArc::new(Instruction::AdScope { body }), Type::void());
+        let node = Node::new(
+            CArc::new(Instruction::AdScope {
+                body,
+                forward: false,
+                n_forward_grads: 0,
+            }),
+            Type::void(),
+        );
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
+    }
+    pub fn fwd_ad_scope(&mut self, body: Pooled<BasicBlock>, n_grads: usize) -> NodeRef {
+        let node = Node::new(
+            CArc::new(Instruction::AdScope {
+                body,
+                forward: true,
+                n_forward_grads: n_grads,
+            }),
+            Type::void(),
+        );
         let node = new_node(&self.pools, node);
         self.append(node);
         node
@@ -2466,7 +2614,7 @@ pub extern "C" fn luisa_compute_ir_node_usage(kernel: &KernelModule) -> CBoxedSl
                         "Requested resource {} not exist in usage map",
                         captured.node.0
                     )
-                    .as_str(),
+                        .as_str(),
                 )
                 .to_u8(),
         );
@@ -2675,6 +2823,8 @@ pub extern "C" fn luisa_compute_ir_register_type(ty: &Type) -> *mut CArcSharedBl
     CArc::into_raw(context::register_type(ty.clone()))
 }
 
+// #[no_mangle]
+// pub extern "C"
 pub mod debug {
     use crate::display::DisplayIR;
     use std::ffi::CString;

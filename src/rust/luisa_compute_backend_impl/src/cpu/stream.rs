@@ -1,8 +1,6 @@
 use api::{Argument, Sampler};
 use luisa_compute_api_types as api;
-use luisa_compute_ir::{
-    ir::{Binding, Capture},
-};
+use luisa_compute_ir::ir::{Binding, Capture};
 use parking_lot::{Condvar, Mutex};
 use rayon;
 use std::{
@@ -11,10 +9,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use std::{
-    panic::{RefUnwindSafe},
-    sync::atomic::AtomicBool,
-};
+use std::{panic::RefUnwindSafe, sync::atomic::AtomicBool};
 
 use super::{
     accel::{AccelImpl, GeometryImpl},
@@ -44,7 +39,7 @@ impl StagingBuffers {
     unsafe fn allocate(&mut self, ptr: *const u8, size: usize) {
         let bump = &mut self.bump;
         let buffer = bump
-            .alloc_layout(std::alloc::Layout::from_size_align(size, 256).unwrap())
+            .alloc_layout(std::alloc::Layout::from_size_align(size, 16).unwrap())
             .as_ptr();
         std::ptr::copy_nonoverlapping(ptr, buffer, size);
         self.buffers.push(buffer);
@@ -476,7 +471,9 @@ pub unsafe fn convert_arg(arg: Argument) -> defs::KernelFnArg {
                 trace_any,
                 set_instance_visibility,
                 set_instance_transform,
+                set_instance_user_id,
                 instance_transform,
+                instance_user_id,
                 ray_query,
             })
         }
@@ -544,7 +541,9 @@ pub unsafe fn convert_capture(c: Capture) -> defs::KernelFnArg {
                 trace_any,
                 set_instance_visibility,
                 set_instance_transform,
+                set_instance_user_id,
                 instance_transform,
+                instance_user_id,
                 ray_query,
             })
         }
@@ -623,6 +622,20 @@ extern "C" fn set_instance_visibility(
     unsafe {
         let accel = &*(accel as *const AccelImpl);
         accel.set_instance_visibility(instance_id, visible);
+    }
+}
+
+extern "C" fn set_instance_user_id(accel: *const std::ffi::c_void, instance_id: u32, user_id: u32) {
+    unsafe {
+        let accel = &*(accel as *const AccelImpl);
+        accel.set_instance_user_id(instance_id, user_id);
+    }
+}
+
+extern "C" fn instance_user_id(accel: *const std::ffi::c_void, instance_id: u32) -> u32 {
+    unsafe {
+        let accel = &*(accel as *const AccelImpl);
+        accel.instance_user_id(instance_id)
     }
 }
 

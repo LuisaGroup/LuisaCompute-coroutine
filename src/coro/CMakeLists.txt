@@ -1,5 +1,8 @@
 set(LUISA_COMPUTE_CORO_SOURCES
-        shader_scheduler.cpp)
+        shader_scheduler.cpp
+        coro_dispatcher.cpp
+        coro_graph.cpp
+        coro_node.cpp)
 
 add_library(luisa-compute-coro SHARED ${LUISA_COMPUTE_CORO_SOURCES})
 target_link_libraries(luisa-compute-coro PUBLIC luisa-compute-dsl)

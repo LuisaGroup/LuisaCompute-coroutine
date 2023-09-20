@@ -799,7 +799,7 @@ private:
         ctx.j["body"] = _convert_stmt(f.body());
         // pop the context and check the stack
         auto popped_ctx = std::exchange(_func_ctx, old_ctx);
-        LUISA_ASSERT(popped_ctx == &ctx, "Function context stack corrupted.");
+        LUISA_ASSERT(popped_ctx == &ctx, "Func context stack corrupted.");
         // insert into the root table
         auto &funcs = _root["functions"].as_array();
         auto index = static_cast<uint>(funcs.size());
@@ -998,7 +998,7 @@ public:
         AST2JSON converter;
         auto entry = converter._function_index(f);
         LUISA_ASSERT(converter._func_ctx == nullptr,
-                     "Function context stack corrupted.");
+                     "Func context stack corrupted.");
         auto j = std::move(converter._root);
         j["entry"] = entry;
         return j;

@@ -137,7 +137,7 @@ public:
     }
 
     template<typename Size>
-        requires luisa::is_uint_vector_v<Size>
+        requires luisa::is_unsigned_integral_vector_v<Size>
     void dispatch(CommandBuffer &command_buffer, Size dispatch_size) noexcept {
         // get dispatch size
         constexpr auto dim = luisa::vector_dimension_v<Size>;

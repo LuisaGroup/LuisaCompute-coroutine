@@ -162,20 +162,21 @@ impl UsageDetector {
                 }
                 self.detect_block(default);
             }
-            crate::ir::Instruction::AdScope { body } => {
+            crate::ir::Instruction::AdScope { body, .. } => {
                 self.detect_block(body);
             }
             crate::ir::Instruction::AdDetach(block) => {
                 self.detect_block(block);
             }
             crate::ir::Instruction::Comment(_) => {}
+
             crate::ir::Instruction::CoroSplitMark { .. } => {}
-            crate::ir::Instruction::CoroFrame { .. }
-            | crate::ir::Instruction::CoroSuspend { .. }
-            | crate::ir::Instruction::CoroResume { .. }
-            | crate::ir::Instruction::CoroFrame { .. } => {
+            crate::ir::Instruction::CoroRegister { .. } => {}
+            crate::ir::Instruction::CoroSuspend { .. }
+            | crate::ir::Instruction::CoroResume { .. } => {
                 unreachable!("Unexpected coroutine instruction in UsageDetector::detect_node");
             }
+            crate::ir::Instruction::Print { .. } => {}
         }
     }
 

@@ -141,6 +141,7 @@ pub enum SerializedInstruction {
     },
     AdScope {
         body: SerializedBlockRef,
+        forward: bool,
     },
     AdDetach(SerializedBlockRef),
     RayQuery {
@@ -158,10 +159,6 @@ pub enum SerializedInstruction {
     },
     CoroResume {
         token: u32,
-    },
-    CoroFrame {
-        token: u32,
-        body: SerializedBlockRef,
     },
     CoroRegister {
         token: u32,

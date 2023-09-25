@@ -193,7 +193,7 @@ int main(int argc, char *argv[]) {
     auto render_kernel_ir = AST2IR::build_kernel(render_kernel.function()->function());
     auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
     ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "ref2ret");
-    auto m = ir::luisa_compute_ir_transform_pipeline_transform(ppl, render_kernel_ir->get()->module);
+    auto m = ir::luisa_compute_ir_transform_pipeline_transform_module(ppl, render_kernel_ir->get()->module);
     render_kernel_ir->get()->module = m;
     auto render = device.compile<2, Image<uint>, Image<float>, uint>(render_kernel_ir->get());
 

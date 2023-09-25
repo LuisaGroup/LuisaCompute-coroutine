@@ -95,13 +95,9 @@ transform_function(Function function) noexcept {
 #endif
     }
     return function.shared_builder();
-    if (function.direct_builtin_callables().uses_coroutine()) {
-        LUISA_ERROR("Coroutine intrinsics must be used in coroutines!");
-    }
-    return function.shared_builder();
 }
 
-luisa::shared_ptr<const FunctionBuilder> transform_coroutine(Type* corotype,luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function function) noexcept {
+luisa::shared_ptr<const FunctionBuilder> transform_coroutine(Type *corotype, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function function) noexcept {
     if (function.direct_builtin_callables().uses_coroutine()) {
 #ifndef LUISA_ENABLE_IR
         LUISA_ERROR_WITH_LOCATION(
@@ -119,7 +115,7 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(Type* corotype,luis
         auto m = AST2IR::build_coroutine(function);
         perform_coroutine_transform(m->get());
         converted = IR2AST::build(m->get());
-        auto subroutines=m->get()->subroutines;
+        auto subroutines = m->get()->subroutines;
         auto subroutine_ids = m->get()->subroutine_ids;
         auto coroframe = corotype;
         auto coroframe_new = converted->arguments()[0].type();
@@ -129,7 +125,6 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(Type* corotype,luis
             auto sub = IR2AST::build(subroutines.ptr[i]._0.get());
             sub->coroframe_replace(corotype);
             sub_builders.insert(std::make_pair(subroutine_ids.ptr[i], sub));
-
         }
         LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
                                     "kernel with hash {:016x}. "

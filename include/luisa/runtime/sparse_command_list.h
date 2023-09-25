@@ -1,10 +1,14 @@
 #pragma once
+
 #include <luisa/core/concepts.h>
 #include <luisa/runtime/rhi/tile_modification.h>
 #include <luisa/runtime/stream_event.h>
 
 namespace luisa::compute {
+
+class Stream;
 struct SparseCommandListCommit;
+
 class LC_RUNTIME_API SparseCommandList : concepts::Noncopyable {
     friend struct SparseCommandListCommit;
 
@@ -23,9 +27,12 @@ public:
     [[nodiscard]] auto size() const noexcept { return _update_cmd.size(); }
     [[nodiscard]] auto empty() const noexcept { return _update_cmd.empty(); }
 };
+
 struct LC_RUNTIME_API SparseCommandListCommit {
     SparseCommandList cmd_list;
-    void operator()(DeviceInterface *device, uint64_t stream_handle) noexcept;
+    void operator()(Stream &stream) noexcept;
 };
+
 LUISA_MARK_STREAM_EVENT_TYPE(SparseCommandListCommit)
+
 }// namespace luisa::compute

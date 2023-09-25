@@ -55,7 +55,7 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
     auto device = context.create_device(argv[1]);
-    constexpr auto n = 3u;
+    constexpr auto n = 7u;
     auto x_buffer = device.create_buffer<float>(n);
     auto stream = device.create_stream(StreamTag::GRAPHICS);
 

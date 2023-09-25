@@ -1,5 +1,6 @@
-#include <luisa/runtime/sparse_command_list.h>
 #include <luisa/core/logging.h>
+#include <luisa/runtime/stream.h>
+#include <luisa/runtime/sparse_command_list.h>
 #include <luisa/runtime/rhi/device_interface.h>
 
 namespace luisa::compute {
@@ -21,8 +22,8 @@ SparseCommandListCommit SparseCommandList::commit() noexcept {
     return {std::move(*this)};
 }
 
-void SparseCommandListCommit::operator()(DeviceInterface *device, uint64_t stream_handle) noexcept {
-    device->update_sparse_resources(stream_handle, std::move(cmd_list._update_cmd));
+void SparseCommandListCommit::operator()(Stream &stream) noexcept {
+    stream.device()->update_sparse_resources(stream.handle(), std::move(cmd_list._update_cmd));
     cmd_list._update_cmd.clear();
 }
 

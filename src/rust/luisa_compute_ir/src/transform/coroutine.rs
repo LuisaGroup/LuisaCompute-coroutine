@@ -10,6 +10,7 @@ Remove all Instruction::Update nodes
 
 */
 pub struct Coroutine;
+
 struct CoroutineImpl {
     map_blocks: HashMap<*mut BasicBlock, *mut BasicBlock>,
     local_defs: HashSet<NodeRef>,
@@ -18,6 +19,7 @@ struct CoroutineImpl {
     corostate: NodeRef,
     corostate_type: CArc<Type>,
 }
+
 struct SSABlockRecord {
     defined: NestedHashSet<NodeRef>,
     stored: NestedHashMap<NodeRef, NodeRef>,
@@ -334,7 +336,7 @@ impl CoroutineImpl {
                 builder.return_(INVALID_REF);
                 INVALID_REF
             }
-            Instruction::CoroRegister{..} => {
+            Instruction::CoroRegister { .. } => {
                 todo!()
             }
             Instruction::CoroSplitMark { token } => {
@@ -368,9 +370,10 @@ impl CoroutineImpl {
                 let false_branch = IrBuilder::new(builder.pools.clone()).finish();
                 builder.if_(cond, true_branch, false_branch)
             }
-            Instruction::CoroSuspend { .. }
-            | Instruction::CoroResume { .. }
-            | Instruction::CoroFrame { .. } => {
+            Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
+                todo!()
+            }
+            Instruction::Print { .. } => {
                 todo!()
             }
         }
@@ -409,8 +412,9 @@ impl Transform for Coroutine {
         let mut entry = module.entry;
         *entry.get_mut() = *new_bb;
         let ret = Module {
-            kind: module.kind,
+            kind: module.kind.clone(),
             entry,
+            flags: module.flags.clone(),
             pools: module.pools.clone(),
         };
         //println!("\n\n----------after------\n\n");

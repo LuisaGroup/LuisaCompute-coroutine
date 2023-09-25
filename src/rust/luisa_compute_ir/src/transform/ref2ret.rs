@@ -221,7 +221,7 @@ impl Ref2RetImpl {
                     }
                     self.transform_block(default);
                 }
-                Instruction::AdScope { body } => self.transform_block(body),
+                Instruction::AdScope { body, .. } => self.transform_block(body),
                 Instruction::RayQuery {
                     on_triangle_hit,
                     on_procedural_hit,
@@ -234,9 +234,13 @@ impl Ref2RetImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
-                | Instruction::CoroRegister{..}
-                | Instruction::CoroResume { .. }
-                | Instruction::CoroFrame { .. } => {}
+                | Instruction::CoroRegister { .. }
+                | Instruction::CoroResume { .. } => {
+                    todo!()
+                }
+                Instruction::Print { .. } => {
+                    todo!()
+                }
             }
         }
     }

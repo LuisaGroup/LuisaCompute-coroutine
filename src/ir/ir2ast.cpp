@@ -43,11 +43,16 @@ void IR2AST::_convert_block(const ir::BasicBlock *block) noexcept {
             case ir::Instruction::Tag::AdScope: _convert_instr_ad_scope(node); break;
             case ir::Instruction::Tag::AdDetach: _convert_instr_ad_detach(node); break;
             case ir::Instruction::Tag::RayQuery: _convert_instr_ray_query(node); break;
-            case ir::Instruction::Tag::Comment:
-                _convert_instr_comment(node);
-                break;
-                //            case ir::Instruction::Tag::Debug: _convert_instr_debug(node); break;
-            default: LUISA_ERROR_WITH_LOCATION("Invalid instruction in body: `{}`.", to_string(node->instruction->tag));
+            case ir::Instruction::Tag::Comment: _convert_instr_comment(node); break;
+            case ir::Instruction::Tag::Print: LUISA_NOT_IMPLEMENTED();// TODO: print
+            case ir::Instruction::Tag::Buffer: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Buffer' in function body."); break;
+            case ir::Instruction::Tag::Bindless: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Bindless' in function body."); break;
+            case ir::Instruction::Tag::Texture2D: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Texture2D' in function body."); break;
+            case ir::Instruction::Tag::Texture3D: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Texture3D' in function body."); break;
+            case ir::Instruction::Tag::Accel: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Accel' in function body."); break;
+            case ir::Instruction::Tag::Shared: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Shared' in function body."); break;
+            case ir::Instruction::Tag::Uniform: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Uniform' in function body."); break;
+            case ir::Instruction::Tag::Argument: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Argument' in function body."); break;
         }
         node_ref = node->next;
     }
@@ -162,7 +167,6 @@ ir2ast_convert_ray_ast_type_2_ir_type(FunctionBuilder *b, const Expression *expr
     auto ut = Type::of<uint>();
     auto at = Type::array(ft, 3u);
 
-
     auto u0 = b->literal(ut, 0u);
     auto u1 = b->literal(ut, 1u);
     auto u2 = b->literal(ut, 2u);
@@ -182,7 +186,7 @@ ir2ast_convert_ray_ast_type_2_ir_type(FunctionBuilder *b, const Expression *expr
     auto ray = b->local(rt);
     auto o_ = b->member(vt, ray, 0u);
     auto d_ = b->member(vt, ray, 2u);
-    
+
     b->assign(b->member(ft, o_, 0), ox);
     b->assign(b->member(ft, o_, 1), oy);
     b->assign(b->member(ft, o_, 2), oz);
@@ -257,7 +261,7 @@ ir2ast_convert_triangle_hit(FunctionBuilder *b, const Type *dst_ht, const Expres
         b->assign(ref, expr);
         expr = ref;
     }
-    auto bary = b->member(ft, expr, 2u);
+    auto bary = b->member(vt, expr, 2u);
     auto bary_x = b->access(ft, bary, b->literal(ut, 0u));
     auto bary_y = b->access(ft, bary, b->literal(ut, 1u));
     auto hit = b->local(dst_ht);
@@ -512,10 +516,14 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         case ir::Func::Tag::AccGrad: return builtin_func(2, CallOp::ACCUMULATE_GRADIENT);
         case ir::Func::Tag::Detach: return builtin_func(1, CallOp::DETACH);
         case ir::Func::Tag::Backward: return builtin_func(1, CallOp::BACKWARD);
+        case ir::Func::Tag::PropagateGrad: LUISA_NOT_IMPLEMENTED();// TODO
+        case ir::Func::Tag::OutputGrad: LUISA_NOT_IMPLEMENTED();   // TODO
         case ir::Func::Tag::RayTracingInstanceTransform: return builtin_func(2, CallOp::RAY_TRACING_INSTANCE_TRANSFORM);
+        case ir::Func::Tag::RayTracingInstanceUserId: return builtin_func(2, CallOp::RAY_TRACING_INSTANCE_USER_ID);
         case ir::Func::Tag::RayTracingSetInstanceTransform: return builtin_func(3, CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM);
         case ir::Func::Tag::RayTracingSetInstanceVisibility: return builtin_func(3, CallOp::RAY_TRACING_SET_INSTANCE_VISIBILITY);
         case ir::Func::Tag::RayTracingSetInstanceOpacity: return builtin_func(3, CallOp::RAY_TRACING_SET_INSTANCE_OPACITY);
+        case ir::Func::Tag::RayTracingSetInstanceUserId: return builtin_func(3, CallOp::RAY_TRACING_SET_INSTANCE_USER_ID);
         case ir::Func::Tag::RayTracingTraceClosest: return builtin_func(3, CallOp::RAY_TRACING_TRACE_CLOSEST);
         case ir::Func::Tag::RayTracingTraceAny: return builtin_func(3, CallOp::RAY_TRACING_TRACE_ANY);
         case ir::Func::Tag::RayTracingQueryAll: return builtin_func(3, CallOp::RAY_TRACING_QUERY_ALL);
@@ -683,6 +691,8 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         case ir::Func::Tag::Texture3dRead: return builtin_func(2, CallOp::TEXTURE_READ);
         case ir::Func::Tag::Texture2dWrite: return builtin_func(3, CallOp::TEXTURE_WRITE);
         case ir::Func::Tag::Texture3dWrite: return builtin_func(3, CallOp::TEXTURE_WRITE);
+        case ir::Func::Tag::Texture2dSize: return builtin_func(1, CallOp::TEXTURE_SIZE);
+        case ir::Func::Tag::Texture3dSize: return builtin_func(1, CallOp::TEXTURE_SIZE);
         case ir::Func::Tag::BindlessTexture2dSample: return builtin_func(3, CallOp::BINDLESS_TEXTURE2D_SAMPLE);
         case ir::Func::Tag::BindlessTexture2dSampleLevel: return builtin_func(4, CallOp::BINDLESS_TEXTURE2D_SAMPLE_LEVEL);
         case ir::Func::Tag::BindlessTexture2dSampleGrad: return builtin_func(5, CallOp::BINDLESS_TEXTURE2D_SAMPLE_GRAD);
@@ -699,7 +709,7 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         case ir::Func::Tag::BindlessTexture3dSize: return builtin_func(2, CallOp::BINDLESS_TEXTURE3D_SIZE);
         case ir::Func::Tag::BindlessTexture2dSizeLevel: return builtin_func(3, CallOp::BINDLESS_TEXTURE2D_SIZE_LEVEL);
         case ir::Func::Tag::BindlessTexture3dSizeLevel: return builtin_func(3, CallOp::BINDLESS_TEXTURE3D_SIZE_LEVEL);
-        case ir::Func::Tag::BindlessByteAdressBufferRead: return builtin_func(3, CallOp::BINDLESS_BYTE_BUFFER_READ);
+        case ir::Func::Tag::BindlessByteBufferRead: return builtin_func(3, CallOp::BINDLESS_BYTE_BUFFER_READ);
         case ir::Func::Tag::BindlessBufferRead: return builtin_func(3, CallOp::BINDLESS_BUFFER_READ);
         case ir::Func::Tag::BindlessBufferSize: return builtin_func(3, CallOp::BINDLESS_BUFFER_SIZE);
         case ir::Func::Tag::BindlessBufferType: return builtin_func(2, CallOp::BINDLESS_BUFFER_TYPE);
@@ -1240,6 +1250,7 @@ void IR2AST::_process_local_declarations(const ir::BasicBlock *bb) noexcept {
                 break;
             }
             case ir::Instruction::Tag::Comment: break;
+            case ir::Instruction::Tag::Print: break;
         }
     });
 }

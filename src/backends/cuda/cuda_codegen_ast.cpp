@@ -951,9 +951,11 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
             break;
         }
         case CallOp::RAY_TRACING_INSTANCE_TRANSFORM: _scratch << "lc_accel_instance_transform"; break;
+        case CallOp::RAY_TRACING_INSTANCE_USER_ID: _scratch << "lc_accel_set_instance_user_id"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM: _scratch << "lc_accel_set_instance_transform"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_VISIBILITY: _scratch << "lc_accel_set_instance_visibility"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_OPACITY: _scratch << "lc_accel_set_instance_opacity"; break;
+        case CallOp::RAY_TRACING_SET_INSTANCE_USER_ID: _scratch << "lc_accel_set_instance_user_id"; break;
         case CallOp::RAY_TRACING_TRACE_CLOSEST: _scratch << "lc_accel_trace_closest"; break;
         case CallOp::RAY_TRACING_TRACE_ANY: _scratch << "lc_accel_trace_any"; break;
         case CallOp::RAY_TRACING_QUERY_ALL: _scratch << "lc_accel_query_all"; break;
@@ -1024,6 +1026,10 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
         }
     } else {
         auto trailing_comma = false;
+        if (op == CallOp::UNREACHABLE) {
+            _scratch << "__FILE__, __LINE__, ";
+            trailing_comma = true;
+        }
         for (auto arg : expr->arguments()) {
             trailing_comma = true;
             arg->accept(*this);
@@ -1111,6 +1117,10 @@ void CUDACodegenAST::visit(const TypeIDExpr *expr) {
     _emit_type_name(expr->type());
     _scratch << ">(0ull)";
     // TODO: use type id
+}
+
+void CUDACodegenAST::visit(const StringIDExpr *expr) {
+    LUISA_NOT_IMPLEMENTED();
 }
 
 void CUDACodegenAST::visit(const BreakStmt *) {
@@ -1244,10 +1254,12 @@ void CUDACodegenAST::emit(Function f,
 
 void CUDACodegenAST::_emit_function(Function f) noexcept {
 
-    if (auto iter = std::find_if(_generated_functions.cbegin(),
-                                 _generated_functions.cend(), [&](auto &&other) noexcept { return other.hash() == f.hash(); });
+    if (auto iter = std::find_if(
+            _generated_functions.cbegin(),
+            _generated_functions.cend(),
+            [&](auto &&other) noexcept { return other == f.hash(); });
         iter != _generated_functions.cend()) { return; }
-    _generated_functions.emplace_back(f);
+    _generated_functions.emplace_back(f.hash());
 
     // ray tracing kernels use __constant__ args
     // note: this must go before any other

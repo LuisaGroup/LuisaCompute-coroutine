@@ -4,14 +4,18 @@ pub mod coroutine;
 pub mod ssa;
 // pub mod validate;
 pub mod vectorize;
-pub mod eval;
 
+// pub mod eval;
+pub mod fwd_autodiff;
 pub mod ref2ret;
 pub mod reg2mem;
 
-pub mod split;
+use bitflags::Flags;
 
-use crate::ir::{self, CallableModule, Module, KernelModule};
+pub mod split;
+pub mod coroutine_split;
+
+use crate::ir::{self, ModuleFlags, CallableModule, Module, KernelModule};
 
 pub trait Transform {
     fn transform_module(&self, module: Module) -> Module {
@@ -110,7 +114,7 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         "coroutine" => {
-            let transform = coroutine::Coroutine;
+            let transform = coroutine_split::Coroutine;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),
@@ -146,4 +150,18 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_destroy(pipeline: *mut Tra
     unsafe {
         std::mem::drop(Box::from_raw(pipeline));
     }
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_transform_auto(module: ir::Module) -> ir::Module {
+    let flags = module.flags;
+    // dbg!(flags);
+    let mut pipeline = TransformPipeline::new();
+    if flags.contains(ModuleFlags::REQUIRES_REV_AD_TRANSFORM) {
+        pipeline.add_transform(Box::new(autodiff::Autodiff));
+    }
+    if flags.contains(ModuleFlags::REQUIRES_FWD_AD_TRANSFORM) {
+        pipeline.add_transform(Box::new(fwd_autodiff::FwdAutodiff));
+    }
+    pipeline.transform_module(module)
 }

@@ -41,7 +41,7 @@ public:
             requires std::is_rvalue_reference_v<T &&> && is_stream_event_v<T>
         Stream &operator<<(T &&t) && noexcept {
             _commit();
-            luisa::invoke(std::forward<T>(t), _stream->device(), _stream->handle());
+            luisa::invoke(std::forward<T>(t), *_stream);
             return *_stream;
         }
         Stream &operator<<(CommandList::Commit &&commit) && noexcept;
@@ -85,7 +85,7 @@ public:
     template<typename T>
         requires std::is_rvalue_reference_v<T &&> && is_stream_event_v<T>
     Stream &operator<<(T &&t) noexcept {
-        luisa::invoke(std::forward<T>(t), device(), handle());
+        luisa::invoke(std::forward<T>(t), *this);
         return *this;
     }
     Stream &operator<<(CommandList::Commit &&commit) noexcept;

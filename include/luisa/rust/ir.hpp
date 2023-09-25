@@ -55,9 +55,45 @@ struct IrBuilder {
     NodeRef insert_point;
 };
 
+struct ModuleFlags {
+    uint32_t bits;
+
+    explicit operator bool() const {
+        return !!bits;
+    }
+    ModuleFlags operator~() const {
+        return ModuleFlags { static_cast<decltype(bits)>(~bits) };
+    }
+    ModuleFlags operator|(const ModuleFlags& other) const {
+        return ModuleFlags { static_cast<decltype(bits)>(this->bits | other.bits) };
+    }
+    ModuleFlags& operator|=(const ModuleFlags& other) {
+        *this = (*this | other);
+        return *this;
+    }
+    ModuleFlags operator&(const ModuleFlags& other) const {
+        return ModuleFlags { static_cast<decltype(bits)>(this->bits & other.bits) };
+    }
+    ModuleFlags& operator&=(const ModuleFlags& other) {
+        *this = (*this & other);
+        return *this;
+    }
+    ModuleFlags operator^(const ModuleFlags& other) const {
+        return ModuleFlags { static_cast<decltype(bits)>(this->bits ^ other.bits) };
+    }
+    ModuleFlags& operator^=(const ModuleFlags& other) {
+        *this = (*this ^ other);
+        return *this;
+    }
+};
+static const ModuleFlags ModuleFlags_NONE = ModuleFlags{ /* .bits = */ (uint32_t)0 };
+static const ModuleFlags ModuleFlags_REQUIRES_REV_AD_TRANSFORM = ModuleFlags{ /* .bits = */ (uint32_t)1 };
+static const ModuleFlags ModuleFlags_REQUIRES_FWD_AD_TRANSFORM = ModuleFlags{ /* .bits = */ (uint32_t)2 };
+
 struct Module {
     ModuleKind kind;
     Pooled<BasicBlock> entry;
+    ModuleFlags flags;
     CArc<ModulePools> pools;
 };
 
@@ -259,6 +295,10 @@ struct Func {
         WarpLaneId,
         DispatchId,
         DispatchSize,
+        /// (input, grads, ...) -> ()
+        PropagateGrad,
+        /// (var, idx) -> dvar/dinput_{idx}
+        OutputGrad,
         RequiresGradient,
         Backward,
         Gradient,
@@ -266,9 +306,11 @@ struct Func {
         AccGrad,
         Detach,
         RayTracingInstanceTransform,
+        RayTracingInstanceUserId,
         RayTracingSetInstanceTransform,
         RayTracingSetInstanceOpacity,
         RayTracingSetInstanceVisibility,
+        RayTracingSetInstanceUserId,
         RayTracingTraceClosest,
         RayTracingTraceAny,
         RayTracingQueryAll,
@@ -430,10 +472,14 @@ struct Func {
         Texture2dRead,
         /// (texture, coord, value) -> void
         Texture2dWrite,
+        /// (texture) -> uint2
+        Texture2dSize,
         /// (texture, coord) -> value
         Texture3dRead,
         /// (texture, coord, value) -> void
         Texture3dWrite,
+        /// (texture) -> uint3
+        Texture3dSize,
         ///(bindless_array, index: uint, uv: float2) -> float4
         BindlessTexture2dSample,
         ///(bindless_array, index: uint, uv: float2, level: float) -> float4
@@ -471,7 +517,7 @@ struct Func {
         /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
         BindlessBufferSize,
         BindlessBufferType,
-        BindlessByteAdressBufferRead,
+        BindlessByteBufferRead,
         Vec,
         Vec2,
         Vec3,
@@ -658,13 +704,13 @@ struct Instruction {
         Switch,
         AdScope,
         RayQuery,
+        Print,
         AdDetach,
         Comment,
         CoroSplitMark,
         CoroSuspend,
         CoroRegister,
         CoroResume,
-        CoroFrame,
     };
 
     struct Local_Body {
@@ -727,12 +773,19 @@ struct Instruction {
 
     struct AdScope_Body {
         Pooled<BasicBlock> body;
+        bool forward;
+        size_t n_forward_grads;
     };
 
     struct RayQuery_Body {
         NodeRef ray_query;
         Pooled<BasicBlock> on_triangle_hit;
         Pooled<BasicBlock> on_procedural_hit;
+    };
+
+    struct Print_Body {
+        CBoxedSlice<uint8_t> fmt;
+        CBoxedSlice<NodeRef> args;
     };
 
     struct AdDetach_Body {
@@ -761,11 +814,6 @@ struct Instruction {
         uint32_t token;
     };
 
-    struct CoroFrame_Body {
-        uint32_t token;
-        Pooled<BasicBlock> body;
-    };
-
     Tag tag;
     union {
         Local_Body local;
@@ -782,13 +830,13 @@ struct Instruction {
         Switch_Body switch_;
         AdScope_Body ad_scope;
         RayQuery_Body ray_query;
+        Print_Body print;
         AdDetach_Body ad_detach;
         Comment_Body comment;
         CoroSplitMark_Body coro_split_mark;
         CoroSuspend_Body coro_suspend;
         CoroRegister_Body coro_register;
         CoroResume_Body coro_resume;
-        CoroFrame_Body coro_frame;
     };
 };
 
@@ -888,6 +936,8 @@ void luisa_compute_ir_node_replace_with(NodeRef node_ref, const Node *new_node);
 CBoxedSlice<uint8_t> luisa_compute_ir_node_usage(const KernelModule *kernel);
 
 CArcSharedBlock<Type> *luisa_compute_ir_register_type(const Type *ty);
+
+Module luisa_compute_ir_transform_auto(Module module);
 
 void luisa_compute_ir_transform_pipeline_add_transform(TransformPipeline *pipeline,
                                                        const char *name);

@@ -231,9 +231,16 @@ impl KernelSerializer {
                     cases,
                 }
             }
-            Instruction::AdScope { body } => {
+            Instruction::AdScope {
+                body,
+                forward,
+                n_forward_grads: _,
+            } => {
                 let body = self.serialize_block(body);
-                SerializedInstruction::AdScope { body }
+                SerializedInstruction::AdScope {
+                    body,
+                    forward: *forward,
+                }
             }
             Instruction::AdDetach(b) => {
                 let b = self.serialize_block(b);
@@ -266,13 +273,6 @@ impl KernelSerializer {
             Instruction::CoroResume { token } => {
                 SerializedInstruction::CoroResume { token: *token }
             }
-            Instruction::CoroFrame { token, body } => {
-                let body = self.serialize_block(body);
-                SerializedInstruction::CoroFrame {
-                    token: *token,
-                    body,
-                }
-            }
             Instruction::CoroRegister { token, value, var } => {
                 let value = self.serialize_noderef(*value);
                 SerializedInstruction::CoroRegister {
@@ -281,6 +281,7 @@ impl KernelSerializer {
                     var: *var,
                 }
             }
+            _ => todo!(),
         }
     }
     fn serialize_func(&mut self, func: &Func) -> SerializedFunc {

@@ -95,8 +95,10 @@ static size_t AddHeader(CallOpSet const &ops, luisa::BinaryIO const *internalDat
         builder << CodegenUtility::ReadInternalHLSLFile("bindless_common", internalDataPath);
     }
     if (ops.test(CallOp::RAY_TRACING_INSTANCE_TRANSFORM) ||
+        ops.test(CallOp::RAY_TRACING_INSTANCE_USER_ID) ||
         ops.test(CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM) ||
         ops.test(CallOp::RAY_TRACING_SET_INSTANCE_OPACITY) ||
+        ops.test(CallOp::RAY_TRACING_SET_INSTANCE_USER_ID) ||
         ops.test(CallOp::RAY_TRACING_SET_INSTANCE_VISIBILITY)) {
         builder << CodegenUtility::ReadInternalHLSLFile("accel_header", internalDataPath);
     }
@@ -420,7 +422,7 @@ void CodegenUtility::GetFunctionDecl(Function func, vstd::StringBuilder &funcDec
     }
     {
         data += " custom_"sv;
-        vstd::to_string((opt->GetFuncCount(func.builder())), data);
+        vstd::to_string((opt->GetFuncCount(func)), data);
         if (func.arguments().empty()) {
             data += "()"sv;
         } else {
@@ -465,7 +467,7 @@ void CodegenUtility::GetFunctionDecl(Function func, vstd::StringBuilder &funcDec
              << data;
 }
 void CodegenUtility::GetFunctionName(Function callable, vstd::StringBuilder &result) {
-    result << "custom_"sv << vstd::to_string((opt->GetFuncCount(callable.builder())));
+    result << "custom_"sv << vstd::to_string((opt->GetFuncCount(callable)));
 }
 void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &str, StringStateVisitor &vis) {
     auto args = expr->arguments();
@@ -485,7 +487,7 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
     };
     switch (expr->op()) {
         case CallOp::CUSTOM:
-            str << "custom_"sv << vstd::to_string((opt->GetFuncCount(expr->custom().builder())));
+            str << "custom_"sv << vstd::to_string((opt->GetFuncCount(expr->custom())));
             str << '(';
             {
                 uint64 sz = 0;
@@ -1037,6 +1039,14 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             str << ')';
             return;
         }
+        case CallOp::RAY_TRACING_INSTANCE_USER_ID: {
+            str << "_InstId("sv;
+            args[0]->accept(vis);
+            str << "Inst,"sv;
+            args[1]->accept(vis);
+            str << ')';
+            return;
+        }
         case CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM: {
             str << "_SetAccelTransform("sv;
             args[0]->accept(vis);
@@ -1055,6 +1065,14 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         }
         case CallOp::RAY_TRACING_SET_INSTANCE_OPACITY: {
             str << "_SetAccelOpaque("sv;
+            args[0]->accept(vis);
+            str << "Inst,"sv;
+            PrintArgs(1);
+            str << ')';
+            return;
+        }
+        case CallOp::RAY_TRACING_SET_INSTANCE_USER_ID: {
+            str << "_SetUserId("sv;
             args[0]->accept(vis);
             str << "Inst,"sv;
             PrintArgs(1);
@@ -1366,7 +1384,6 @@ protected:
 };
 
 void CodegenUtility::CodegenFunction(Function func, vstd::StringBuilder &result, bool cbufferNonEmpty) {
-
     auto codegenOneFunc = [&](Function func) {
         auto constants = func.constants();
         for (auto &&i : constants) {
@@ -1441,12 +1458,11 @@ void main(uint3 thdId:SV_GroupThreadId,uint3 dspId:SV_DispatchThreadID,uint3 grp
         }
         result << "}\n"sv;
     };
-    vstd::unordered_set<void const *> callableMap;
+    vstd::unordered_set<uint64_t> callableMap;
     auto callable = [&](auto &&callable, Function func) -> void {
         for (auto &&i : func.custom_callables()) {
-            if (callableMap.emplace(i.get()).second) {
-                Function f(i.get());
-                callable(callable, f);
+            if (callableMap.emplace(i->hash()).second) {
+                callable(callable, i->function());
             }
         }
         codegenOneFunc(func);

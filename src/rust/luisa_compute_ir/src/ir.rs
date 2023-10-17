@@ -1015,6 +1015,12 @@ impl Const {
 #[repr(C)]
 pub struct NodeRef(pub usize);
 
+impl Default for NodeRef {
+    fn default() -> Self {
+        INVALID_REF
+    }
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct UserData {

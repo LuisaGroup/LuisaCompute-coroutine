@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::FrameTokenManager;
+use crate::context::register_type;
 use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType};
 
 struct ScopeBuilder {
@@ -63,13 +64,8 @@ struct New2OldMap {
 struct CallableModuleInfo {
     args: Vec<NodeRef>,
     captures: Vec<Capture>,
-}
-
-#[derive(Debug)]
-struct CoroFrame {
-    token: u32,
     frame_node: NodeRef,
-    frame_type: CArc<Type>,
+    old2frame_index: HashMap<NodeRef, u32>,
 }
 
 
@@ -82,6 +78,7 @@ pub(crate) struct SplitManager {
     // TODO: set private and add an API
     pub(crate) coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
     coro_callable_info: HashMap<u32, CallableModuleInfo>,
+    frame_type: CArc<Type>,
 }
 
 impl SplitManager {
@@ -92,6 +89,7 @@ impl SplitManager {
             new2old: Default::default(),
             coro_scopes: HashMap::new(),
             coro_callable_info: HashMap::new(),
+            frame_type: CArc::new(Type::Void),
         };
 
         // prepare
@@ -148,54 +146,58 @@ impl SplitManager {
         let pools = &callable.pools;
         let entry_token = self.frame_analyser.entry_token;
 
-        // self.preprocess_bb(bb, callable);
+        let mut frame_fields: Vec<CArc<Type>> = vec![];
+        let mut index_counter: u32 = 0;
 
-        // duplicate frames as args
+        // calculate frame state
         let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
         for token in token_vec.iter() {
-            let mut args = vec![];
-            let mut captures = vec![];
+            let mut args = self.duplicate_args(*token, pools, &callable.args);
+            let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
             let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
 
             for arg in callable.args.as_ref() {
-                if input_var.contains(arg) {
-                    input_var.remove(arg);
-                    let dup_arg = self.duplicate_arg(*token, pools, *arg);
-                    args.push(dup_arg);
-                }
+                input_var.remove(arg);
             }
             for capture in callable.captures.as_ref() {
-                if input_var.contains(&capture.node) {
-                    input_var.remove(&capture.node);
-                    let dup_capture = self.duplicate_capture(*token, pools, capture);
-                    captures.push(dup_capture);
-                }
+                input_var.remove(&capture.node);
             }
-
-            // create coro frame
-            let fields: Vec<_> = input_var.iter().map(|node_ref| {
-                let node = node_ref.get();
-                node.type_.clone()
-            }).collect();
-            let alignment = fields.iter().map(|type_| type_.alignment()).max().unwrap();
-            let size = fields.iter().map(|type_| type_.size()).sum();
-            let frame_type = crate::context::register_type(Type::Struct(StructType {
-                fields: CBoxedSlice::new(fields),
-                alignment,
-                size,
-            }));
-            // let coro_frame = CoroFrame {
-            //     token: *token,
-            //     frame_node:
-            //     frame_type,
-            // };
-            todo!();
 
             let callable_info = self.coro_callable_info.entry(*token).or_default();
             callable_info.args.extend(args.to_vec());
             callable_info.captures.extend(captures.to_vec());
 
-            // duplicate IN[B] as args
+            // create coro frame for Load
+            // TODO: relocation temp vars
+            let input_var: Vec<NodeRef> = input_var.iter().map(ToOwned::to_owned).collect();
+            let fields: Vec<_> = input_var.iter().map(|node_ref| {
+                let node = node_ref.get();
+                node.type_.clone()
+            }).collect();
+            for i in 0..fields.len() {
+                callable_info.old2frame_index.insert(input_var[i], index_counter + i as u32);
+            }
+            index_counter += fields.len() as u32;
+            frame_fields.extend(fields);
+        }
+
+        let alignment = frame_fields.iter().map(|type_| type_.alignment()).max().unwrap();
+        let size = frame_fields.iter().map(|type_| type_.size()).sum();
+        self.frame_type = register_type(Type::Struct(StructType {
+            fields: CBoxedSlice::new(frame_fields),
+            alignment,
+            size,
+        }));
+
+        for token in token_vec.iter() {
+            let callable_info = self.coro_callable_info.get_mut(token).unwrap();
+            let frame_node = Node::new(
+                CArc::new(Instruction::Argument { by_value: false }),
+                self.frame_type.clone(),
+            );
+            callable_info.frame_node = new_node(pools, frame_node);
+
+            callable_info.args.insert(0, callable_info.frame_node);
         }
 
         ScopeBuilder::new(entry_token, pools.clone())
@@ -313,6 +315,13 @@ impl SplitManager {
         scope_builder.finished = true;
         scope_builder
     }
+    fn coro_resume(&mut self, mut scope_builder: ScopeBuilder, token: u32) -> ScopeBuilder {
+        let callable_info = self.coro_callable_info.get(&token).unwrap();
+        for (old_node, index) in callable_info.old2frame_index.iter() {
+            // TODO: gep
+        }
+        scope_builder
+    }
     fn visit_branch_split(&mut self, pools: &CArc<ModulePools>, frame_token: u32,
                           branch: &Pooled<BasicBlock>, sb_after_vec: &mut Vec<ScopeBuilder>) -> ScopeBuilder {
         let scope_builder = ScopeBuilder::new(frame_token, pools.clone());
@@ -323,7 +332,6 @@ impl SplitManager {
     }
     fn visit_if(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
                 visit_state: VisitState, true_branch: &Pooled<BasicBlock>, false_branch: &Pooled<BasicBlock>, cond: &NodeRef) -> VisitResult {
-
         /*
 
         BLOCK A;

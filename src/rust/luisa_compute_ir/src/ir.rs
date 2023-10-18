@@ -2494,7 +2494,7 @@ impl IrBuilder {
             Instruction::Shared { .. } => {}
             Instruction::Call(func, _) => match func {
                 Func::GetElementPtr => {}
-                _ => panic!("not local or getelementptr"),
+                _ => panic!("not local or getelementptr: {:?}", var),
             },
             _ => panic!("not a var"),
         }

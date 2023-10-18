@@ -20,7 +20,7 @@ impl FrameTokenManager {
         let ftm = Self::get_instance();
         while ftm.frame_token_occupied.contains(&ftm.frame_token_counter) {
             assert_ne!(ftm.frame_token_counter, 0, "Frame token overflow");
-            ftm.frame_token_counter -= 1;
+            ftm.frame_token_counter += 1;
         }
         ftm.frame_token_occupied.insert(ftm.frame_token_counter);
         ftm.frame_token_counter
@@ -37,7 +37,7 @@ impl FrameTokenManager {
     pub(crate) fn get_instance() -> &'static mut Self {
         lazy_static!(
             static ref INSTANCE: FrameTokenManager = FrameTokenManager {
-                frame_token_counter: INVALID_FRAME_TOKEN_MASK - 1,
+                frame_token_counter: 0,
                 frame_token_occupied: HashSet::new(),
                 frame_token_temp: u32::MAX,
             };

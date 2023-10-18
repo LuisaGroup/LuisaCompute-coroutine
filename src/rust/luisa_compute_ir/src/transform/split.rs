@@ -248,7 +248,7 @@ impl SplitManager {
                     return sb_vec;
                 }
                 Instruction::CoroSuspend { token } => {
-                    let sb_before = self.visit_coro_suspend(scope_builder);
+                    let sb_before = self.visit_coro_suspend(scope_builder, *token);
                     return vec![sb_before];
                 }
                 Instruction::CoroResume { token } => {
@@ -300,34 +300,55 @@ impl SplitManager {
         vec![scope_builder]
     }
     fn visit_coro_split_mark(&mut self, mut sb_before: ScopeBuilder, token_next: u32, node_ref: NodeRef) -> (ScopeBuilder, ScopeBuilder) {
-        let mut builder = &mut sb_before.builder;
-
         // replace CoroSplitMark with CoroSuspend
-        let coro_suspend = builder.coro_suspend(token_next);
+        sb_before = self.coro_suspend(sb_before, token_next);
+        let coro_suspend = sb_before.builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
         // create a new scope builder for the next scope
         // the next frame must have a CoroResume
-        let mut sb_after = ScopeBuilder::new(token_next, builder.pools.clone());
+        let mut sb_after = ScopeBuilder::new(token_next, sb_before.builder.pools.clone());
         sb_after = self.coro_resume(sb_after);
         sb_before.finished = true;
         (sb_before, sb_after)
     }
-    fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder) -> ScopeBuilder {
+    fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
         scope_builder.finished = true;
         scope_builder
     }
     fn coro_resume(&mut self, mut scope_builder: ScopeBuilder) -> ScopeBuilder {
         let token = scope_builder.token;
-        scope_builder.builder.coro_resume(token);   // TODO: delete
-        let callable_info = self.coro_callable_info.get(&token).unwrap().clone();
-        for (old_node, index) in callable_info.old2frame_index.iter() {
-            let const_node = scope_builder.builder.const_(Const::Uint32(*index as u32));
-            let new_node = scope_builder.builder.gep_chained(
-                callable_info.frame_node,
+        let builder = &mut scope_builder.builder;
+        builder.coro_resume(token);   // TODO: delete
+        let old2frame_index = self.coro_callable_info.get(&token).unwrap().old2frame_index.clone();
+        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
+        for (old_node, index) in old2frame_index.iter() {
+            let const_node = builder.const_(Const::Uint32(*index as u32));
+            let gep = builder.gep_chained(
+                frame_node,
                 &[const_node],
                 self.frame_fields[*index].clone());
-            self.record_node_mapping(token, *old_node, new_node);
+            self.record_node_mapping(token, *old_node, gep);
+        }
+        scope_builder
+    }
+    fn coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
+        let token = scope_builder.token;
+        let old2frame_index = self.coro_callable_info.get(&token_next).unwrap().old2frame_index.clone();
+        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
+        for (old_node, index) in old2frame_index.iter() {
+            let const_node = scope_builder.builder.const_(Const::Uint32(*index as u32));
+            let gep = scope_builder.builder.gep_chained(
+                frame_node,
+                &[const_node],
+                self.frame_fields[*index].clone());
+            let value = self.old2new.nodes.get(old_node).unwrap().get(&token).unwrap().clone();
+            let value = if value.is_lvalue() {
+                scope_builder.builder.load(value)
+            } else {
+                value
+            };
+            scope_builder.builder.update(gep, value);
         }
         scope_builder
     }
@@ -920,8 +941,8 @@ impl SplitManager {
                 scope_builder.builder.ad_detach(dup_body)
             }
             Instruction::Comment(msg) => scope_builder.builder.comment(msg.clone()),
-            Instruction::CoroSplitMark { token } => scope_builder.builder.coro_split_mark(*token),
-            Instruction::CoroSuspend { token } => scope_builder.builder.coro_suspend(*token),
+            Instruction::CoroSplitMark { .. } |
+            Instruction::CoroSuspend { .. } |
             Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
             Instruction::Print { fmt, args } => {
                 let args = args

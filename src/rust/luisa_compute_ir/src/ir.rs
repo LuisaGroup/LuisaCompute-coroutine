@@ -10,13 +10,14 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
 use std::ops::Deref;
-use std::sync::atomic::AtomicU32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 #[derive(Serialize, Deserialize)]
 pub enum Primitive {
     Bool,
+    Int8,
+    Uint8,
     Int16,
     Uint16,
     Int32,
@@ -35,6 +36,8 @@ impl std::fmt::Display for Primitive {
             "{}",
             match self {
                 Self::Bool => "bool",
+                Self::Int8 => "i8",
+                Self::Uint8 => "u8",
                 Self::Int16 => "i16",
                 Self::Uint16 => "u16",
                 Self::Int32 => "i32",
@@ -76,6 +79,8 @@ impl VectorElementType {
     }
     pub fn is_int(&self) -> bool {
         match self {
+            VectorElementType::Scalar(Primitive::Int8) => true,
+            VectorElementType::Scalar(Primitive::Uint8) => true,
             VectorElementType::Scalar(Primitive::Int16) => true,
             VectorElementType::Scalar(Primitive::Uint16) => true,
             VectorElementType::Scalar(Primitive::Int32) => true,
@@ -210,6 +215,8 @@ impl Primitive {
     pub fn size(&self) -> usize {
         match self {
             Primitive::Bool => 1,
+            Primitive::Int8 => 1,
+            Primitive::Uint8 => 1,
             Primitive::Int16 => 2,
             Primitive::Uint16 => 2,
             Primitive::Int32 => 4,
@@ -498,7 +505,9 @@ impl Type {
     pub fn is_int(&self) -> bool {
         match self {
             Type::Primitive(p) => match p {
-                Primitive::Int16
+                Primitive::Int8
+                | Primitive::Uint8
+                | Primitive::Int16
                 | Primitive::Uint16
                 | Primitive::Int32
                 | Primitive::Uint32
@@ -514,7 +523,9 @@ impl Type {
     pub fn is_unsigned(&self) -> bool {
         match self {
             Type::Primitive(p) => match p {
-                Primitive::Uint16 | Primitive::Uint32 | Primitive::Uint64 => true,
+                Primitive::Uint8 | Primitive::Uint16 | Primitive::Uint32 | Primitive::Uint64 => {
+                    true
+                }
                 _ => false,
             },
             Type::Vector(v) => v.element.to_type().is_unsigned(),
@@ -525,8 +536,13 @@ impl Type {
     pub fn is_signed(&self) -> bool {
         match self {
             Type::Primitive(p) => match p {
-                Primitive::Int16 | Primitive::Int32 | Primitive::Int64 => true,
-                Primitive::Float16 | Primitive::Float32 | Primitive::Float64 => true,
+                Primitive::Int8
+                | Primitive::Int16
+                | Primitive::Int32
+                | Primitive::Int64
+                | Primitive::Float16
+                | Primitive::Float32
+                | Primitive::Float64 => true,
                 _ => false,
             },
             Type::Vector(v) => v.element.to_type().is_signed(),
@@ -611,6 +627,7 @@ pub enum Func {
 
     // (handle, instance_id) -> Mat4
     RayTracingInstanceTransform,
+    RayTracingInstanceVisibilityMask,
     RayTracingInstanceUserId,
     RayTracingSetInstanceTransform,
     RayTracingSetInstanceOpacity,
@@ -756,6 +773,7 @@ pub enum Func {
     LengthSquared,
     Normalize,
     Faceforward,
+    Distance,
     // reflect(i, n) => i - 2 * dot(n, i) * n
     Reflect,
 
@@ -864,12 +882,15 @@ pub enum Func {
     BindlessTexture3dSizeLevel,
     /// (bindless_array, index: uint, element: uint) -> T
     BindlessBufferRead,
+    /// (bindless_array, index: uint, element: uint, value: T) -> void
+    BindlessBufferWrite,
     /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
     BindlessBufferSize,
     // (bindless_array, index: uint) -> u64: returns the type of the buffer
     BindlessBufferType,
-    // (bindless_array, index: uint, element_bytes: uint) -> T
+    // (bindless_array, index: uint, offset_bytes: uint) -> T
     BindlessByteBufferRead,
+    // (bindless_array, index: uint, offset_bytes: uint, value: T) -> void
 
     // scalar -> vector, the resulting type is stored in node
     Vec,
@@ -920,6 +941,8 @@ pub enum Const {
     Zero(CArc<Type>),
     One(CArc<Type>),
     Bool(bool),
+    Int8(i8),
+    Uint8(u8),
     Int16(i16),
     Uint16(u16),
     Int32(i32),
@@ -938,6 +961,8 @@ impl std::fmt::Display for Const {
             Const::Zero(t) => write!(f, "0_{}", t),
             Const::One(t) => write!(f, "1_{}", t),
             Const::Bool(b) => write!(f, "{}", b),
+            Const::Int8(i) => write!(f, "{}", i),
+            Const::Uint8(u) => write!(f, "{}", u),
             Const::Int16(i) => write!(f, "{}", i),
             Const::Uint16(u) => write!(f, "{}", u),
             Const::Int32(i) => write!(f, "{}", i),
@@ -955,6 +980,8 @@ impl std::fmt::Display for Const {
 impl Const {
     pub fn get_i32(&self) -> i32 {
         match self {
+            Const::Int8(v) => *v as i32,
+            Const::Uint8(v) => *v as i32,
             Const::Int16(v) => *v as i32,
             Const::Uint16(v) => *v as i32,
             Const::Int32(v) => *v,
@@ -996,6 +1023,8 @@ impl Const {
             Const::Zero(ty) => ty.clone(),
             Const::One(ty) => ty.clone(),
             Const::Bool(_) => <bool as TypeOf>::type_(),
+            Const::Int8(_) => <i8 as TypeOf>::type_(),
+            Const::Uint8(_) => <u8 as TypeOf>::type_(),
             Const::Int16(_) => <i16 as TypeOf>::type_(),
             Const::Uint16(_) => <u16 as TypeOf>::type_(),
             Const::Int32(_) => <i32 as TypeOf>::type_(),
@@ -1011,13 +1040,24 @@ impl Const {
 }
 
 /// cbindgen:derive-eq
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, PartialOrd, Ord)]
 #[repr(C)]
 pub struct NodeRef(pub usize);
 
 impl Default for NodeRef {
     fn default() -> Self {
         INVALID_REF
+    }
+}
+
+impl Debug for NodeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        write!(
+            f,
+            "NodeRef({}, inst={:?})",
+            self.0,
+            self.get().instruction.as_ref()
+        )
     }
 }
 
@@ -1275,6 +1315,14 @@ pub struct BasicBlock {
     pub(crate) first: NodeRef,
     pub(crate) last: NodeRef,
 }
+impl BasicBlock {
+    pub fn first(&self) -> NodeRef {
+        self.first
+    }
+    pub fn last(&self) -> NodeRef {
+        self.last
+    }
+}
 
 #[derive(Serialize)]
 struct NodeRefAndNode<'a> {
@@ -1471,6 +1519,12 @@ impl NodeRef {
             _ => false,
         }
     }
+    pub fn is_atomic_ref(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Call(Func::AtomicRef, _) => true,
+            _ => false,
+        }
+    }
     pub fn is_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { .. } => true,
@@ -1486,6 +1540,12 @@ impl NodeRef {
     pub fn is_refernece_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { by_value } => !*by_value,
+            _ => false,
+        }
+    }
+    pub fn is_gep(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Call(Func::GetElementPtr, _) => true,
             _ => false,
         }
     }
@@ -2179,6 +2239,13 @@ impl IrBuilder {
     pub fn pools(&self) -> &CArc<ModulePools> {
         &self.pools
     }
+    pub fn new_without_bb(pools: CArc<ModulePools>) -> Self {
+        Self {
+            bb: Pooled::null(),
+            insert_point: INVALID_REF,
+            pools,
+        }
+    }
     pub fn new(pools: CArc<ModulePools>) -> Self {
         let bb = pools.bb_pool.alloc(BasicBlock::new(&pools));
         let insert_point = bb.first;
@@ -2188,8 +2255,21 @@ impl IrBuilder {
             pools,
         }
     }
+    pub fn bb(&self) -> Pooled<BasicBlock> {
+        self.bb
+    }
     pub fn set_insert_point(&mut self, node: NodeRef) {
+        assert!(node.valid());
         self.insert_point = node;
+    }
+    pub fn set_insert_point_to_end(&mut self) {
+        assert!(!self.bb.as_ptr().is_null());
+        while self.insert_point.get().next != self.bb.last {
+            self.insert_point = self.insert_point.get().next;
+        }
+    }
+    pub fn get_insert_point(&self) -> NodeRef {
+        self.insert_point
     }
     pub fn append(&mut self, node: NodeRef) {
         self.insert_point.insert_after_self(node);
@@ -2275,7 +2355,7 @@ impl IrBuilder {
         new_node
     }
     pub fn load(&mut self, var: NodeRef) -> NodeRef {
-        assert!(var.is_lvalue());
+        assert!(var.is_lvalue(), "{:?}", var.get().instruction.as_ref());
         let node = Node::new(
             CArc::new(Instruction::Call(Func::Load, CBoxedSlice::new(vec![var]))),
             var.type_().clone(),
@@ -2339,6 +2419,19 @@ impl IrBuilder {
         self.append(node.clone());
         node
     }
+    pub fn call_no_append(
+        &mut self,
+        func: Func,
+        args: &[NodeRef],
+        ret_type: CArc<Type>,
+    ) -> NodeRef {
+        let node = Node::new(
+            CArc::new(Instruction::Call(func, CBoxedSlice::new(args.to_vec()))),
+            ret_type,
+        );
+        let node = new_node(&self.pools, node);
+        node
+    }
     pub fn cast(&mut self, node: NodeRef, t: CArc<Type>) -> NodeRef {
         self.call(Func::Cast, &[node], t)
     }
@@ -2367,6 +2460,20 @@ impl IrBuilder {
             assert_eq!(e, t);
         }
         self.call(Func::GetElementPtr, &[&[this], indices].concat(), t)
+    }
+    // append the indices to this if it's a gep; otherwise behave like gep
+    pub fn gep_chained(&mut self, this: NodeRef, indices: &[NodeRef], t: CArc<Type>) -> NodeRef {
+        match this.get().instruction.as_ref() {
+            Instruction::Call(func, args) => match func {
+                Func::GetElementPtr => {
+                    let this = args[0];
+                    let indices = [&args[1..], indices].concat();
+                    self.gep(this, &indices, t)
+                }
+                _ => self.gep(this, indices, t),
+            },
+            _ => self.gep(this, indices, t),
+        }
     }
     pub fn update(&mut self, var: NodeRef, value: NodeRef) -> NodeRef {
         assert!(
@@ -2887,6 +2994,15 @@ pub mod debug {
         let j = j.to_string();
         let callable = ast2ir::convert_ast_to_ir_callable(j);
         CArc::into_raw(callable)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn luisa_compute_ir_ast_json_to_ir_type(
+        j: CBoxedSlice<u8>,
+    ) -> *mut CArcSharedBlock<Type> {
+        let j = j.to_string();
+        let ty = ast2ir::convert_ast_to_ir_type(j);
+        CArc::into_raw(ty)
     }
 }
 

@@ -905,6 +905,10 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
             _scratch << ">";
             break;
         }
+        case CallOp::BINDLESS_BUFFER_WRITE: {
+            _scratch << "lc_bindless_buffer_read";
+            break;
+        }
         case CallOp::BINDLESS_BYTE_BUFFER_READ: {
             _scratch << "lc_bindless_byte_buffer_read<";
             _emit_type_name(expr->type());
@@ -952,6 +956,8 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
         }
         case CallOp::RAY_TRACING_INSTANCE_TRANSFORM: _scratch << "lc_accel_instance_transform"; break;
         case CallOp::RAY_TRACING_INSTANCE_USER_ID: _scratch << "lc_accel_set_instance_user_id"; break;
+        // TODO
+        case CallOp::RAY_TRACING_INSTANCE_VISIBILITY_MASK: LUISA_NOT_IMPLEMENTED(); break;
         case CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM: _scratch << "lc_accel_set_instance_transform"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_VISIBILITY: _scratch << "lc_accel_set_instance_visibility"; break;
         case CallOp::RAY_TRACING_SET_INSTANCE_OPACITY: _scratch << "lc_accel_set_instance_opacity"; break;
@@ -1591,6 +1597,8 @@ void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
         case Type::Tag::FLOAT16: _scratch << "lc_half"; break;
         case Type::Tag::FLOAT32: _scratch << "lc_float"; break;
         case Type::Tag::FLOAT64: _scratch << "lc_double"; break;
+        case Type::Tag::INT8: _scratch << "lc_byte"; break;
+        case Type::Tag::UINT8: _scratch << "lc_ubyte"; break;
         case Type::Tag::INT16: _scratch << "lc_short"; break;
         case Type::Tag::UINT16: _scratch << "lc_ushort"; break;
         case Type::Tag::INT32: _scratch << "lc_int"; break;
@@ -1664,7 +1672,7 @@ void CUDACodegenAST::_emit_variable_decl(Function f, Variable v, bool force_cons
             if (readonly || force_const) {
                 _scratch << "const ";
                 _emit_type_name(v.type());
-                _scratch << " ";
+                _scratch << " &";
             } else {
                 _emit_type_name(v.type());
                 _scratch << " &";
@@ -1680,7 +1688,7 @@ void CUDACodegenAST::_emit_variable_decl(Function f, Variable v, bool force_cons
                 if (auto elem = v.type()->element()) {
                     _emit_type_name(elem);
                 } else {// void type marks a buffer of bytes
-                    _scratch << "lc_byte";
+                    _scratch << "lc_ubyte";
                 }
                 _scratch << "> ";
             }
@@ -1837,7 +1845,17 @@ void CUDACodegenAST::visit(const ForStmt *stmt) {
 }
 
 void CUDACodegenAST::visit(const CommentStmt *stmt) {
-    _scratch << "/* " << stmt->comment() << " */";
+    _scratch << "// ";
+    for (auto c : stmt->comment()) {
+        if (c == '\n') {
+            _scratch << "\n";
+            _emit_indent();
+            _scratch << "// ";
+        } else {
+            char s[] = {c, '\0'};
+            _scratch << s;
+        }
+    }
 }
 
 void CUDACodegenAST::_emit_variable_declarations(Function f) noexcept {

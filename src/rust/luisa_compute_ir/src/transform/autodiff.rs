@@ -1,7 +1,7 @@
 use indexmap::{IndexMap, IndexSet};
 
-use bitflags::Flags;
 use core::panic;
+use half::f16;
 use std::ops::Deref;
 use std::{
     cell::RefCell,
@@ -10,17 +10,16 @@ use std::{
 
 use crate::context::is_type_equal;
 use crate::ir::{
-    new_node, CallableModuleRef, Const, Instruction, ModuleFlags, ModulePools, PhiIncoming,
-    Primitive, SwitchCase,
+    new_node, Const, Instruction, ModuleFlags, ModulePools, PhiIncoming, Primitive, SwitchCase,
 };
 use crate::transform::ssa::ToSSA;
 use crate::{
-    context, ir,
+    context,
     ir::{
         ArrayType, BasicBlock, Func, IrBuilder, MatrixType, Module, ModuleKind, Node, NodeRef,
         StructType, Type, VectorElementType, VectorType,
     },
-    CBoxedSlice, TypeOf,
+    CBoxedSlice,
 };
 use crate::{CArc, Pooled};
 
@@ -80,6 +79,8 @@ fn _grad_type_of(type_: CArc<Type>) -> Option<GradTypeRecord> {
         Type::Void | Type::UserData => None,
         Type::Primitive(p) => match p {
             crate::ir::Primitive::Bool => None,
+            crate::ir::Primitive::Int8 => None,
+            crate::ir::Primitive::Uint8 => None,
             crate::ir::Primitive::Int16 => None,
             crate::ir::Primitive::Uint16 => None,
             crate::ir::Primitive::Int32 => None,
@@ -264,6 +265,17 @@ impl<'a> StoreIntermediate<'a> {
         if self.intermediate.contains_key(&node) {
             return;
         }
+        if node.is_const() {
+            let inst = node.get().instruction.as_ref();
+            match inst {
+                Instruction::Const(c) => {
+                    let c = self.builder.const_(c.clone());
+                    self.intermediate.insert(node, c);
+                    return;
+                }
+                _ => unreachable!(),
+            }
+        }
         // {
         //     println!("create intermediate");
         //     let debug = crate::ir::debug::luisa_compute_ir_dump_human_readable(&self.module);
@@ -396,8 +408,8 @@ impl<'a> StoreIntermediate<'a> {
                 }
             }
             Instruction::Phi(incomings) => {
-                for PhiIncoming { value, .. } in incomings.as_ref().iter() {
-                    if self.forward_reachable.contains(value) {
+                if self.backward_reachable.contains(&node) {
+                    for PhiIncoming { value, .. } in incomings.as_ref().iter() {
                         self.backward_reachable.insert(*value);
                     }
                 }
@@ -923,7 +935,7 @@ impl Backward {
     fn fp_constant(&mut self, t: CArc<Type>, x: f64, builder: &mut IrBuilder) -> NodeRef {
         return match t.deref() {
             Type::Primitive(p) => match p {
-                Primitive::Float16 => todo!(),
+                Primitive::Float16 => builder.const_(Const::Float16(f16::from_f64(x))),
                 Primitive::Float32 => builder.const_(Const::Float32(x as f32)),
                 Primitive::Float64 => builder.const_(Const::Float64(x)),
                 _ => panic!("fp_constant: invalid type: {:?}", t),
@@ -1116,7 +1128,7 @@ impl Backward {
         let instruction = &node.get().instruction;
         let type_ = &node.get().type_;
         let grad_type = grad_type_of(type_.clone());
-
+        // dbg!(node, instruction);
         match instruction.as_ref() {
             crate::ir::Instruction::Buffer => {}
             crate::ir::Instruction::Bindless => {}
@@ -1160,6 +1172,11 @@ impl Backward {
                     .collect::<Vec<_>>();
                 let node = self.get_intermediate(node);
                 let out_grad = out_grad.unwrap();
+                let out_grad = if out_grad.is_lvalue() {
+                    builder.load(out_grad)
+                } else {
+                    out_grad
+                };
                 match func {
                     Func::Add => {
                         let (lhs_grad, rhs_grad) =
@@ -1615,26 +1632,25 @@ impl Backward {
                         self.accumulate_grad(args[0], v_grad, builder);
                     }
                     Func::ExtractElement => {
+                        let indices = args[1..].to_vec();
                         let v_grad = builder.const_(Const::Zero(args[0].type_().clone()));
-                        let v_grad = builder.call(
-                            Func::InsertElement,
-                            &[v_grad, out_grad, original_args[1]],
-                            v_grad.type_().clone(),
-                        );
+                        let mut call_args = vec![v_grad, out_grad];
+                        call_args.extend(indices);
+                        let v_grad =
+                            builder.call(Func::InsertElement, &call_args, v_grad.type_().clone());
                         self.accumulate_grad(args[0], v_grad, builder);
                     }
                     Func::InsertElement => {
                         let zero = builder.const_(Const::Zero(args[1].type_().clone()));
-                        let v_grad = builder.call(
-                            Func::InsertElement,
-                            &[out_grad, zero, original_args[2]],
-                            args[0].type_().clone(),
-                        );
-                        let x_grad = builder.call(
-                            Func::ExtractElement,
-                            &[out_grad, original_args[2]],
-                            args[1].type_().clone(),
-                        );
+                        let indices = args[2..].to_vec();
+                        let mut call_args = vec![out_grad, zero];
+                        call_args.extend(indices.clone());
+                        let v_grad =
+                            builder.call(Func::InsertElement, &call_args, args[0].type_().clone());
+                        call_args = vec![out_grad];
+                        call_args.extend(indices);
+                        let x_grad =
+                            builder.call(Func::ExtractElement, &call_args, args[1].type_().clone());
                         self.accumulate_grad(args[0], v_grad, builder);
                         self.accumulate_grad(args[1], x_grad, builder);
                     }
@@ -1704,7 +1720,17 @@ impl Backward {
                 if grad_type.is_none() {
                     return;
                 }
-                let out_grad = self.grad(node).unwrap();
+
+                let out_grad = self.grad(node);
+                if out_grad.is_none() {
+                    return;
+                }
+                let out_grad = out_grad.unwrap();
+                let out_grad = if out_grad.is_local() {
+                    builder.call(Func::Load, &[out_grad], out_grad.type_().clone())
+                } else {
+                    out_grad
+                };
                 for PhiIncoming { value, .. } in incomings.as_ref() {
                     self.accumulate_grad(*value, out_grad, builder);
                 }
@@ -1762,7 +1788,6 @@ impl Backward {
         for node in block.nodes().iter().rev() {
             self.backward(*node, &mut builder);
         }
-
         builder.finish()
     }
     fn run(&mut self, block: &BasicBlock) -> (Pooled<BasicBlock>, HashMap<NodeRef, NodeRef>) {
@@ -1921,7 +1946,11 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
                             Instruction::Call(f, args) => {
                                 if *f == Func::Gradient {
                                     let grad = grads[&args[0]];
-                                    // assert!(grad.is_lvalue(), "{:?}", grad.get().instruction.as_ref());
+                                    assert!(
+                                        grad.is_lvalue(),
+                                        "{:?}. Please don't call grad(out).",
+                                        grad.get().instruction.as_ref()
+                                    );
                                     *inst =
                                         Instruction::Call(Func::Load, CBoxedSlice::new(vec![grad]));
                                 }

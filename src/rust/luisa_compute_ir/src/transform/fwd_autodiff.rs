@@ -2,12 +2,12 @@ use std::{collections::HashSet, ops::Deref};
 use bitflags::Flags;
 
 use indexmap::IndexMap;
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 
 use crate::{
     ir::{
         BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModuleFlags, ModuleKind,
-        ModulePools, Node, NodeRef, PhiIncoming, SwitchCase,
+        ModulePools, NodeRef, PhiIncoming, SwitchCase,
     },
     *,
 };
@@ -17,6 +17,7 @@ use super::Transform;
 type NodeVec = SmallVec<[NodeRef; 4]>;
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct Dual {
     var: NodeRef,
     grad: NodeVec,
@@ -538,8 +539,8 @@ impl ForwardAdTransform {
             ir::Instruction::Accel => {}
             ir::Instruction::Shared => todo!(),
             ir::Instruction::Uniform => todo!(),
-            ir::Instruction::Local { init } => todo!(),
-            ir::Instruction::Argument { by_value } => todo!(),
+            ir::Instruction::Local { init:_ } => todo!(),
+            ir::Instruction::Argument { by_value:_  } => todo!(),
             ir::Instruction::UserData(_) => todo!(),
             ir::Instruction::Invalid => todo!(),
             ir::Instruction::Const(_) => {
@@ -590,7 +591,7 @@ impl ForwardAdTransform {
             ir::Instruction::Break => {}
             ir::Instruction::Continue => {}
             ir::Instruction::If {
-                cond,
+                cond:_ ,
                 true_branch,
                 false_branch,
             } => {
@@ -598,7 +599,7 @@ impl ForwardAdTransform {
                 self.transform_block(false_branch, builder);
             }
             ir::Instruction::Switch {
-                value,
+                value:_ ,
                 default,
                 cases,
             } => {
@@ -613,7 +614,7 @@ impl ForwardAdTransform {
             ir::Instruction::RayQuery {
                 ..
             } => panic!("RayQuery not supported in AD. Please recompute ray intersection after the RayQuery result is obtained"),
-            ir::Instruction::AdDetach(block) => {
+            ir::Instruction::AdDetach(_) => {
                 todo!()
             }
             ir::Instruction::Comment(_) => {}

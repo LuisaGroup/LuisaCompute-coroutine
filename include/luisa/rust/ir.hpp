@@ -21,6 +21,8 @@ enum class ModuleKind {
 
 enum class Primitive {
     Bool,
+    Int8,
+    Uint8,
     Int16,
     Uint16,
     Int32,
@@ -306,6 +308,7 @@ struct Func {
         AccGrad,
         Detach,
         RayTracingInstanceTransform,
+        RayTracingInstanceVisibilityMask,
         RayTracingInstanceUserId,
         RayTracingSetInstanceTransform,
         RayTracingSetInstanceOpacity,
@@ -412,6 +415,7 @@ struct Func {
         LengthSquared,
         Normalize,
         Faceforward,
+        Distance,
         Reflect,
         Determinant,
         Transpose,
@@ -514,6 +518,8 @@ struct Func {
         BindlessTexture3dSizeLevel,
         /// (bindless_array, index: uint, element: uint) -> T
         BindlessBufferRead,
+        /// (bindless_array, index: uint, element: uint, value: T) -> void
+        BindlessBufferWrite,
         /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
         BindlessBufferSize,
         BindlessBufferType,
@@ -575,6 +581,8 @@ struct Const {
         Zero,
         One,
         Bool,
+        Int8,
+        Uint8,
         Int16,
         Uint16,
         Int32,
@@ -597,6 +605,14 @@ struct Const {
 
     struct Bool_Body {
         bool _0;
+    };
+
+    struct Int8_Body {
+        int8_t _0;
+    };
+
+    struct Uint8_Body {
+        uint8_t _0;
     };
 
     struct Int16_Body {
@@ -645,6 +661,8 @@ struct Const {
         Zero_Body zero;
         One_Body one;
         Bool_Body bool_;
+        Int8_Body int8;
+        Uint8_Body uint8;
         Int16_Body int16;
         Uint16_Body uint16;
         Int32_Body int32;
@@ -857,6 +875,8 @@ void luisa_compute_ir_append_node(IrBuilder *builder, NodeRef node_ref);
 CArcSharedBlock<CallableModule> *luisa_compute_ir_ast_json_to_ir_callable(CBoxedSlice<uint8_t> j);
 
 CArcSharedBlock<KernelModule> *luisa_compute_ir_ast_json_to_ir_kernel(CBoxedSlice<uint8_t> j);
+
+CArcSharedBlock<Type> *luisa_compute_ir_ast_json_to_ir_type(CBoxedSlice<uint8_t> j);
 
 NodeRef luisa_compute_ir_build_call(IrBuilder *builder,
                                     Func func,

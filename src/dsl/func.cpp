@@ -1,20 +1,12 @@
 #include <luisa/core/logging.h>
 #include <luisa/dsl/func.h>
-
-#ifdef LUISA_ENABLE_IR
-#include <luisa/ir/ir2ast.h>
 #include <luisa/ir/ast2ir.h>
-#endif
 
 namespace luisa::compute::detail {
 
 void CallableInvoke::_error_too_many_arguments() noexcept {
     LUISA_ERROR_WITH_LOCATION("Too many arguments for callable.");
 }
-
-}// namespace luisa::compute::detail
-
-namespace luisa::compute::detail {
 
 #ifdef LUISA_ENABLE_IR
 template<typename M>

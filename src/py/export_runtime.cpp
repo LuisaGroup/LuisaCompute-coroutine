@@ -1,3 +1,4 @@
+#include <fstream>
 #include <pybind11/pybind11.h>
 #include <pybind11/functional.h>
 #include <pybind11/stl.h>
@@ -23,7 +24,7 @@ using namespace luisa;
 using namespace luisa::compute;
 constexpr auto pyref = py::return_value_policy::reference;
 using luisa::compute::detail::FunctionBuilder;
-static vstd::vector<ASTEvaluator> analyzer;
+static vstd::vector<luisa::optional<ASTEvaluator>> analyzer;
 struct IntEval {
     int32_t value;
     bool exist;
@@ -78,6 +79,104 @@ struct AtomicAccessChain {
     using Node = luisa::compute::detail::AtomicRefNode;
     Node const *node{};
 };
+
+class UserBinaryIO : public BinaryIO {
+
+private:
+    std::filesystem::path _path;
+
+public:
+    UserBinaryIO() noexcept {
+
+#ifdef LUISA_PLATFORM_WINDOWS
+        auto home = getenv("USERPROFILE");
+#else
+        auto home = getenv("HOME");
+#endif
+        if (!home) {
+            LUISA_WARNING("Failed to get user home directory: environment variable not found.");
+        } else {
+            std::error_code ec;
+            auto p = std::filesystem::canonical(home, ec);
+            if (!ec) {
+                _path = p / ".luisa";
+            } else {
+                LUISA_WARNING("Failed to get user home directory: {}.", ec.message());
+            }
+        }
+        if (_path.empty()) {
+            LUISA_WARNING("Failed to get user home directory. Using temporary directory instead.");
+            _path = std::filesystem::temp_directory_path() / ".luisa";
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(_path, ec);
+        if (ec) {
+            LUISA_WARNING("Failed to create application data directory at '{}': {}.",
+                          _path.string(), ec.message());
+        }
+    }
+
+public:
+    unique_ptr<BinaryStream> read_shader_bytecode(luisa::string_view name) const noexcept override {
+        return luisa::make_unique<BinaryFileStream>(luisa::string{name});
+    }
+    unique_ptr<BinaryStream> read_shader_cache(luisa::string_view name) const noexcept override {
+        if (_path.empty()) { return {}; }
+        auto path = _path / "cache" / name;
+        return luisa::make_unique<BinaryFileStream>(luisa::string{path.string()});
+    }
+    unique_ptr<BinaryStream> read_internal_shader(luisa::string_view name) const noexcept override {
+        if (_path.empty()) { return {}; }
+        auto path = _path / "internal" / name;
+        return luisa::make_unique<BinaryFileStream>(luisa::string{path.string()});
+    }
+    filesystem::path write_shader_bytecode(luisa::string_view name, luisa::span<const std::byte> data) const noexcept override {
+        std::filesystem::path path{name};
+        if (std::ofstream file{path, std::ios::binary}) {
+            file.write(reinterpret_cast<const char *>(data.data()), data.size_bytes());
+            return path;
+        }
+        LUISA_WARNING("Failed to write shader bytecode to '{}'.", name);
+        return {};
+    }
+    filesystem::path write_shader_cache(luisa::string_view name, luisa::span<const std::byte> data) const noexcept override {
+        if (_path.empty()) { return {}; }
+        auto cache_path = _path / "cache";
+        std::error_code ec;
+        std::filesystem::create_directories(cache_path, ec);
+        if (ec) {
+            LUISA_WARNING("Failed to create application cache directory at '{}': {}.",
+                          cache_path.string(), ec.message());
+            return {};
+        }
+        auto path = cache_path / name;
+        if (std::ofstream file{path, std::ios::binary}) {
+            file.write(reinterpret_cast<const char *>(data.data()), data.size_bytes());
+            return path;
+        }
+        LUISA_WARNING("Failed to write shader cache to '{}'.", path.string());
+        return {};
+    }
+    filesystem::path write_internal_shader(luisa::string_view name, luisa::span<const std::byte> data) const noexcept override {
+        if (_path.empty()) { return {}; }
+        auto internal_path = _path / "internal";
+        std::error_code ec;
+        std::filesystem::create_directories(internal_path, ec);
+        if (ec) {
+            LUISA_WARNING("Failed to create application internal data directory at '{}': {}.",
+                          internal_path.string(), ec.message());
+            return {};
+        }
+        auto path = internal_path / name;
+        if (std::ofstream file{path, std::ios::binary}) {
+            file.write(reinterpret_cast<const char *>(data.data()), data.size_bytes());
+            return path;
+        }
+        LUISA_WARNING("Failed to write internal shader to '{}'.", path.string());
+        return {};
+    }
+};
+
 void export_runtime(py::module &m) {
     py::class_<ManagedMeshFormat>(m, "MeshFormat")
         .def(py::init<>())
@@ -101,7 +200,9 @@ void export_runtime(py::module &m) {
     py::class_<Context>(m, "Context")
         .def(py::init<luisa::string>())
         .def("create_device", [](Context &self, luisa::string_view backend_name) {
-            return ManagedDevice(self.create_device(backend_name));
+            static UserBinaryIO io;
+            DeviceConfig config{.binary_io = &io};
+            return ManagedDevice(self.create_device(backend_name, &config));
         })// TODO: support properties
         .def("set_shader_path", [](Context &self, std::string const &str) {
             std::filesystem::path p{str};
@@ -401,26 +502,35 @@ void export_runtime(py::module &m) {
             "execute", [](PyStream &self) { self.execute(); }, pyref);
 
     m.def("builder", &FunctionBuilder::current, pyref);
-    m.def("begin_analyzer", []() {
-        analyzer.emplace_back();
+    m.def("begin_analyzer", [](bool enabled) {
+        analyzer.emplace_back(enabled ? luisa::make_optional<ASTEvaluator>() : luisa::nullopt);
     });
     m.def("end_analyzer", []() {
         analyzer.pop_back();
     });
     m.def("begin_branch", [](bool is_loop) {
-        analyzer.back().begin_branch_scope(is_loop);
+        if (auto &&a = analyzer.back()) {
+            a->begin_branch_scope(is_loop);
+        }
     });
     m.def("end_branch", []() {
-        analyzer.back().end_branch_scope();
+        if (auto &&a = analyzer.back()) {
+            a->end_branch_scope();
+        }
     });
     m.def("begin_switch", [](SwitchStmt const *stmt) {
-        analyzer.back().begin_switch(stmt);
+        if (auto &&a = analyzer.back()) {
+            a->begin_switch(stmt);
+        }
     });
     m.def("end_switch", []() {
-        analyzer.back().end_switch();
+        if (auto &&a = analyzer.back()) {
+            a->end_switch();
+        }
     });
     m.def("analyze_condition", [](Expression const *expr) -> int32_t {
-        auto result = analyzer.back().try_eval(expr);
+        ASTEvaluator::Result result;
+        if (auto &&a = analyzer.back()) { result = a->try_eval(expr); }
         return visit(
             [&]<typename T>(T const &t) -> int32_t {
                 if constexpr (std::is_same_v<T, bool>) {
@@ -476,7 +586,8 @@ void export_runtime(py::module &m) {
             return 1;
         })
         .def("try_eval_int", [](FunctionBuilder &self, Expression const *expr) {
-            auto eval = analyzer.back().try_eval(expr);
+            ASTEvaluator::Result eval;
+            if (auto &&a = analyzer.back()) { eval = a->try_eval(expr); }
             return visit(
                 [&]<typename T>(T const &t) -> IntEval {
                     if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
@@ -566,11 +677,13 @@ void export_runtime(py::module &m) {
             "call", [](FunctionBuilder &self, const Type *type, CallOp call_op, const luisa::vector<const Expression *> &args) { return self.call(type, call_op, std::move(args)); }, pyref)
         .def(
             "call", [](FunctionBuilder &self, const Type *type, Function custom, const luisa::vector<const Expression *> &args) {
-                analyzer.back().check_call_ref(custom, args);
-                 return self.call(type, custom, std::move(args)); }, pyref)
+                if (auto &&a = analyzer.back()) { a->check_call_ref(custom, args); }
+                return self.call(type, custom, std::move(args));
+            },
+            pyref)
         .def("call", [](FunctionBuilder &self, CallOp call_op, const luisa::vector<const Expression *> &args) { self.call(call_op, std::move(args)); })
         .def("call", [](FunctionBuilder &self, Function custom, const luisa::vector<const Expression *> &args) {
-            analyzer.back().check_call_ref(custom, args);
+            if (auto &&a = analyzer.back()) { a->check_call_ref(custom, args); }
             self.call(custom, std::move(args));
         })
 
@@ -579,7 +692,8 @@ void export_runtime(py::module &m) {
         .def("return_", &FunctionBuilder::return_)
         .def(
             "assign", [](FunctionBuilder &self, Expression const *l, Expression const *r) {
-                auto result = analyzer.back().assign(l, r);
+                ASTEvaluator::Result result;
+                if (auto &&a = analyzer.back()) { result = a->assign(l, r); }
                 visit(
                     [&]<typename T>(T const &t) {
                         if constexpr (std::is_same_v<T, monostate>) {
@@ -603,7 +717,7 @@ void export_runtime(py::module &m) {
         .def(
             "for_", [](FunctionBuilder &self, const Expression *var, const Expression *condition, const Expression *update) {
                 auto ptr = self.for_(var, condition, update);
-                analyzer.back().execute_for(ptr);
+                if (auto &&a = analyzer.back()) { a->execute_for(ptr); }
                 return ptr;
             },
             pyref)

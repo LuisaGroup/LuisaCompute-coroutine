@@ -110,6 +110,8 @@ impl KernelSerializer {
             Const::Zero(t) => SerializedConst::Zero(self.serialize_type(t)),
             Const::One(t) => SerializedConst::One(self.serialize_type(t)),
             Const::Bool(v) => SerializedConst::Bool(*v),
+            Const::Int8(v) => SerializedConst::Int8(*v),
+            Const::Uint8(v) => SerializedConst::Uint8(*v),
             Const::Int16(v) => SerializedConst::Int16(*v),
             Const::Uint16(v) => SerializedConst::Uint16(*v),
             Const::Int32(v) => SerializedConst::Int32(*v),
@@ -293,6 +295,10 @@ impl KernelSerializer {
             Func::AccGrad => SerializedFunc::AccGrad,
             Func::Detach => SerializedFunc::Detach,
             Func::RayTracingInstanceTransform => SerializedFunc::RayTracingInstanceTransform,
+            Func::RayTracingInstanceUserId => SerializedFunc::RayTracingInstanceUserId,
+            Func::RayTracingInstanceVisibilityMask => {
+                SerializedFunc::RayTracingInstanceVisibilityMask
+            }
             Func::RayTracingSetInstanceTransform => SerializedFunc::RayTracingSetInstanceTransform,
             Func::RayTracingSetInstanceOpacity => SerializedFunc::RayTracingSetInstanceOpacity,
             Func::RayTracingSetInstanceVisibility => {

@@ -1,10 +1,13 @@
 #include <luisa/core/logging.h>
 #include <luisa/ast/variable.h>
 #include <luisa/ast/expression.h>
-#include <luisa/ast/statement.h>
 #include <luisa/ast/function_builder.h>
 
 namespace luisa::compute {
+
+Expression::Expression(Expression::Tag tag, const Type *type) noexcept
+    : _type{type}, _tag{tag},
+      _builder{detail::FunctionBuilder::current()} {}
 
 void Expression::mark(Usage usage) const noexcept {
     if (auto a = to_underlying(_usage), u = a | to_underlying(usage); a != u) {
@@ -28,8 +31,9 @@ uint64_t Expression::hash() const noexcept {
 }
 
 void RefExpr::_mark(Usage usage) const noexcept {
-    detail::FunctionBuilder::current()->mark_variable_usage(
-        _variable.uid(), usage);
+    if (auto fb = detail::FunctionBuilder::current(); fb == builder()) {
+        fb->mark_variable_usage(_variable.uid(), usage);
+    }
 }
 
 uint64_t RefExpr::_compute_hash() const noexcept {
@@ -40,6 +44,7 @@ void CallExpr::_mark() const noexcept {
     if (is_builtin()) {
         switch (_op) {
             case CallOp::BUFFER_WRITE:
+            case CallOp::BINDLESS_BUFFER_WRITE:
             case CallOp::BYTE_BUFFER_WRITE:
             case CallOp::TEXTURE_WRITE:
             case CallOp::RAY_TRACING_SET_INSTANCE_TRANSFORM:

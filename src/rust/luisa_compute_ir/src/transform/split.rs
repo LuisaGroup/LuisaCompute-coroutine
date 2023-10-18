@@ -65,7 +65,7 @@ struct CallableModuleInfo {
     args: Vec<NodeRef>,
     captures: Vec<Capture>,
     frame_node: NodeRef,
-    old2frame_index: HashMap<NodeRef, u32>,
+    old2frame_index: HashMap<NodeRef, usize>,
 }
 
 
@@ -150,7 +150,7 @@ impl SplitManager {
         let entry_token = self.frame_analyser.entry_token;
 
         let mut frame_fields: Vec<CArc<Type>> = vec![];
-        let mut index_counter: u32 = 0;
+        let mut index_counter: usize = 0;
 
         // calculate frame state
         let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
@@ -176,9 +176,9 @@ impl SplitManager {
                 node.type_.clone()
             }).collect();
             for i in 0..fields.len() {
-                callable_info.old2frame_index.insert(input_var[i], index_counter + i as u32);
+                callable_info.old2frame_index.insert(input_var[i], index_counter + i);
             }
-            index_counter += fields.len() as u32;
+            index_counter += fields.len();
             frame_fields.extend(fields);
         }
 
@@ -322,11 +322,11 @@ impl SplitManager {
         scope_builder.builder.coro_resume(token);   // TODO: delete
         let callable_info = self.coro_callable_info.get(&token).unwrap().clone();
         for (old_node, index) in callable_info.old2frame_index.iter() {
-            let const_node = scope_builder.builder.const_(Const::Uint32(*index));
+            let const_node = scope_builder.builder.const_(Const::Uint32(*index as u32));
             let new_node = scope_builder.builder.gep_chained(
                 callable_info.frame_node,
                 &[const_node],
-                self.frame_fields[*index as usize].clone());
+                self.frame_fields[*index].clone());
             self.record_node_mapping(token, *old_node, new_node);
         }
         scope_builder
@@ -465,7 +465,7 @@ impl SplitManager {
             } else {
                 self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, false_branch)
             };
-            let dup_cond = self.find_duplicated_node(scope_builder.token, *cond);
+            let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
             scope_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch);
             scope_builder.finished |= all_branches_finished;
 
@@ -537,7 +537,7 @@ impl SplitManager {
             } else {
                 self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, default)
             };
-            let dup_value = self.find_duplicated_node(scope_builder.token, *value);
+            let dup_value = self.find_duplicated_node(&mut scope_builder, *value);
             scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default);
             scope_builder.finished |= all_branches_finished;
 
@@ -679,9 +679,19 @@ impl SplitManager {
     fn find_duplicated_block(&mut self, frame_token: u32, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
         self.old2new.blocks.get(&bb.as_ptr()).unwrap().get(&frame_token).unwrap().clone()
     }
-    fn find_duplicated_node(&mut self, frame_token: u32, node: NodeRef) -> NodeRef {
+    fn find_duplicated_node(&mut self, scope_builder: &mut ScopeBuilder, node: NodeRef) -> NodeRef {
         if !node.valid() { return INVALID_REF; }
-        self.old2new.nodes.get(&node).unwrap().get(&frame_token).unwrap().clone()
+        let frame_token = scope_builder.token;
+        if self.old2new.nodes.get(&node).unwrap().contains_key(&frame_token) {
+            self.old2new.nodes.get(&node).unwrap().get(&frame_token).unwrap().clone()
+        } else {
+            // FIXME: this is a temporary solution, local_zero_init
+            let type_ = node.type_().clone();
+            let local = scope_builder.builder.local_zero_init(type_);
+            self.record_node_mapping(frame_token, node, local);
+            self.old2new.nodes.get_mut(&node).unwrap().insert(frame_token, local.clone());
+            local
+        }
     }
     fn record_node_mapping(&mut self, frame_token: u32, old: NodeRef, new: NodeRef) {
         let mut old_original = old;
@@ -783,7 +793,7 @@ impl SplitManager {
         dup_callable
     }
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
-        assert!(!self.old2new.blocks.get(&bb.as_ptr()).unwrap().contains_key(&frame_token),
+        assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
                 "Basic block {:?} has already been duplicated", bb);
         let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
         bb.iter().for_each(|node| {
@@ -807,7 +817,6 @@ impl SplitManager {
     fn duplicate_node(&mut self, scope_builder: &mut ScopeBuilder, node_ref: NodeRef) -> NodeRef {
         if !node_ref.valid() { return INVALID_REF; }
         let frame_token = scope_builder.token;
-        let mut builder = &mut scope_builder.builder;
         let node = node_ref.get();
         assert!(!self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token),
                 "Node {:?} has already been duplicated", node);
@@ -824,16 +833,16 @@ impl SplitManager {
             Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
 
             Instruction::Local { init } => {
-                let dup_init = self.find_duplicated_node(frame_token, *init);
-                builder.local(dup_init)
+                let dup_init = self.find_duplicated_node(scope_builder, *init);
+                scope_builder.builder.local(dup_init)
             }
-            Instruction::UserData(data) => builder.userdata(data.clone()),
-            Instruction::Const(const_) => builder.const_(const_.clone()),
+            Instruction::UserData(data) => scope_builder.builder.userdata(data.clone()),
+            Instruction::Const(const_) => scope_builder.builder.const_(const_.clone()),
             Instruction::Update { var, value } => {
                 // unreachable if SSA
-                let dup_var = self.find_duplicated_node(frame_token, *var);
-                let dup_value = self.find_duplicated_node(frame_token, *value);
-                builder.update(dup_var, dup_value)
+                let dup_var = self.find_duplicated_node(scope_builder, *var);
+                let dup_value = self.find_duplicated_node(scope_builder, *value);
+                scope_builder.builder.update(dup_var, dup_value)
             }
             Instruction::Call(func, args) => {
                 let dup_func = match func {
@@ -844,82 +853,82 @@ impl SplitManager {
                     _ => func.clone()
                 };
                 let dup_args: Vec<_> = args.iter().map(|arg| {
-                    let dup_arg = self.find_duplicated_node(frame_token, *arg);
+                    let dup_arg = self.find_duplicated_node(scope_builder, *arg);
                     dup_arg
                 }).collect();
-                builder.call(dup_func, dup_args.as_slice(), node.type_.clone())
+                scope_builder.builder.call(dup_func, dup_args.as_slice(), node.type_.clone())
             }
             Instruction::Phi(incomings) => {
                 let dup_incomings: Vec<_> = incomings.iter().map(|incoming| {
                     let dup_block = self.find_duplicated_block(frame_token, &incoming.block);
-                    let dup_value = self.find_duplicated_node(frame_token, incoming.value);
+                    let dup_value = self.find_duplicated_node(scope_builder, incoming.value);
                     PhiIncoming {
                         value: dup_value,
                         block: dup_block,
                     }
                 }).collect();
-                builder.phi(dup_incomings.as_slice(), node.type_.clone())
+                scope_builder.builder.phi(dup_incomings.as_slice(), node.type_.clone())
             }
             Instruction::Return(value) => {
-                let dup_value = self.find_duplicated_node(frame_token, *value);
-                builder.return_(dup_value)
+                let dup_value = self.find_duplicated_node(scope_builder, *value);
+                scope_builder.builder.return_(dup_value)
             }
             Instruction::Loop { body, cond } => {
-                let dup_body = self.duplicate_block(frame_token, &builder.pools, body);
-                let dup_cond = self.find_duplicated_node(frame_token, *cond);
-                builder.loop_(dup_body, dup_cond)
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                let dup_cond = self.find_duplicated_node(scope_builder, *cond);
+                scope_builder.builder.loop_(dup_body, dup_cond)
             }
             Instruction::GenericLoop { prepare, cond, body, update } => {
-                let dup_prepare = self.duplicate_block(frame_token, &builder.pools, prepare);
-                let dup_body = self.duplicate_block(frame_token, &builder.pools, body);
-                let dup_update = self.duplicate_block(frame_token, &builder.pools, update);
-                let dup_cond = self.find_duplicated_node(frame_token, *cond);
-                builder.generic_loop(dup_prepare, dup_cond, dup_body, dup_update)
+                let dup_prepare = self.duplicate_block(frame_token, &scope_builder.builder.pools, prepare);
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                let dup_update = self.duplicate_block(frame_token, &scope_builder.builder.pools, update);
+                let dup_cond = self.find_duplicated_node(scope_builder, *cond);
+                scope_builder.builder.generic_loop(dup_prepare, dup_cond, dup_body, dup_update)
             }
-            Instruction::Break => builder.break_(),
-            Instruction::Continue => builder.continue_(),
+            Instruction::Break => scope_builder.builder.break_(),
+            Instruction::Continue => scope_builder.builder.continue_(),
             Instruction::If { cond, true_branch, false_branch } => {
-                let dup_cond = self.find_duplicated_node(frame_token, *cond);
-                let dup_true_branch = self.duplicate_block(frame_token, &builder.pools, true_branch);
-                let dup_false_branch = self.duplicate_block(frame_token, &builder.pools, false_branch);
-                builder.if_(dup_cond, dup_true_branch, dup_false_branch)
+                let dup_cond = self.find_duplicated_node(scope_builder, *cond);
+                let dup_true_branch = self.duplicate_block(frame_token, &scope_builder.builder.pools, true_branch);
+                let dup_false_branch = self.duplicate_block(frame_token, &scope_builder.builder.pools, false_branch);
+                scope_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch)
             }
             Instruction::Switch { value, cases, default } => {
-                let dup_value = self.find_duplicated_node(frame_token, *value);
+                let dup_value = self.find_duplicated_node(scope_builder, *value);
                 let dup_cases: Vec<_> = cases.iter().map(|case| {
-                    let dup_block = self.duplicate_block(frame_token, &builder.pools, &case.block);
+                    let dup_block = self.duplicate_block(frame_token, &scope_builder.builder.pools, &case.block);
                     SwitchCase {
                         value: case.value,
                         block: dup_block,
                     }
                 }).collect();
-                let dup_default = self.duplicate_block(frame_token, &builder.pools, default);
-                builder.switch(dup_value, dup_cases.as_slice(), dup_default)
+                let dup_default = self.duplicate_block(frame_token, &scope_builder.builder.pools, default);
+                scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default)
             }
             Instruction::AdScope { body, .. } => {
-                let dup_body = self.duplicate_block(frame_token, &builder.pools, body);
-                builder.ad_scope(dup_body)
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                scope_builder.builder.ad_scope(dup_body)
             }
             Instruction::RayQuery { ray_query, on_triangle_hit, on_procedural_hit } => {
-                let dup_ray_query = self.find_duplicated_node(frame_token, *ray_query);
-                let dup_on_triangle_hit = self.duplicate_block(frame_token, &builder.pools, on_triangle_hit);
-                let dup_on_procedural_hit = self.duplicate_block(frame_token, &builder.pools, on_procedural_hit);
-                builder.ray_query(dup_ray_query, dup_on_triangle_hit, dup_on_procedural_hit, node.type_.clone())
+                let dup_ray_query = self.find_duplicated_node(scope_builder, *ray_query);
+                let dup_on_triangle_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_triangle_hit);
+                let dup_on_procedural_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_procedural_hit);
+                scope_builder.builder.ray_query(dup_ray_query, dup_on_triangle_hit, dup_on_procedural_hit, node.type_.clone())
             }
             Instruction::AdDetach(body) => {
-                let dup_body = self.duplicate_block(frame_token, &builder.pools, body);
-                builder.ad_detach(dup_body)
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                scope_builder.builder.ad_detach(dup_body)
             }
-            Instruction::Comment(msg) => builder.comment(msg.clone()),
-            Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
-            Instruction::CoroSuspend { token } => builder.coro_suspend(*token),
+            Instruction::Comment(msg) => scope_builder.builder.comment(msg.clone()),
+            Instruction::CoroSplitMark { token } => scope_builder.builder.coro_split_mark(*token),
+            Instruction::CoroSuspend { token } => scope_builder.builder.coro_suspend(*token),
             Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
             Instruction::Print { fmt, args } => {
                 let args = args
                     .iter()
-                    .map(|x| self.find_duplicated_node(frame_token, *x))
+                    .map(|x| self.find_duplicated_node(scope_builder, *x))
                     .collect::<Vec<_>>();
-                builder.print(fmt.clone(), &args)
+                scope_builder.builder.print(fmt.clone(), &args)
             }
         };
         // insert the duplicated node into the map

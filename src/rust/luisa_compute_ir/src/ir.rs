@@ -1852,11 +1852,15 @@ impl NodeCollector {
     }
 }
 
+pub fn collect_nodes(block: Pooled<BasicBlock>) -> Vec<NodeRef> {
+    let mut collector = NodeCollector::new();
+    collector.visit_block(block);
+    collector.nodes
+}
+
 impl Module {
     pub fn collect_nodes(&self) -> Vec<NodeRef> {
-        let mut collector = NodeCollector::new();
-        collector.visit_block(self.entry);
-        collector.nodes
+        collect_nodes(self.entry)
     }
 }
 

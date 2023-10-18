@@ -30,7 +30,7 @@ impl Transform for Coroutine {
         println!("{:-^40}", "After split");
         for (token, sb) in sm.coro_scopes.iter() {
             let result = DisplayIR::new().display_ir_bb(sb, 0, false);
-            println!("CoroScope {}:\n{}", token, result);
+            println!("{:-^40}\n{}", format!("CoroScope {}:", token), result);
         }
 
         unimplemented!("Coroutine split");

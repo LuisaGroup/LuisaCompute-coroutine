@@ -5,6 +5,7 @@ use crate::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
+use crate::ir::collect_nodes;
 
 pub struct DisplayIR {
     output: String,
@@ -35,13 +36,11 @@ impl DisplayIR {
 
     pub fn display_ir(&mut self, module: &Module) -> String {
         self.clear();
-        self.defs = module.collect_nodes().into_iter().collect();
         self.display_ir_bb(&module.entry, 0, false)
     }
 
     pub fn display_ir_kernel(&mut self, kernel: &KernelModule) -> String {
         self.clear();
-        self.defs = kernel.module.collect_nodes().into_iter().collect();
         self.defs.extend(kernel.args.iter().clone());
         self.defs.extend(kernel.shared.iter().clone());
         self.defs.extend(kernel.captures.iter().map(|arg| arg.node));
@@ -63,7 +62,6 @@ impl DisplayIR {
 
     pub fn display_ir_callable(&mut self, callable: &CallableModule) -> String {
         self.clear();
-        self.defs = callable.module.collect_nodes().into_iter().collect();
         self.defs.extend(callable.args.iter().clone());
         self.defs.extend(callable.captures.iter().map(|arg| arg.node));
         self.output += &format!("\n{:-^40}\n", "Args");
@@ -79,6 +77,7 @@ impl DisplayIR {
     }
 
     pub fn display_ir_bb(&mut self, bb: &Pooled<BasicBlock>, ident: usize, no_new_line: bool) -> String {
+        self.defs.extend(collect_nodes(bb.clone()).into_iter());
         for node in bb.nodes().iter() {
             self.display(*node, ident, no_new_line);
         }
@@ -276,10 +275,10 @@ impl DisplayIR {
                 for SwitchCase { value, block } in cases.as_ref() {
                     self.add_ident(ident + 1);
                     let temp = format!("{} => {{\n", value);
-                    self.add_ident(ident);
+                    self.output += temp.as_str();
+                    self.add_ident(ident + 1);
                     let case_label = self.block_label(*block);
                     writeln!(self.output, "{}:", case_label).unwrap();
-                    self.output += temp.as_str();
                     for node in block.nodes().iter() {
                         self.display(*node, ident + 2, false);
                     }
@@ -288,7 +287,7 @@ impl DisplayIR {
                 }
                 self.add_ident(ident + 1);
                 self.output += "default => {\n";
-                self.add_ident(ident);
+                self.add_ident(ident + 1);
                 let default_label = self.block_label(*default);
                 writeln!(self.output, "{}:", default_label).unwrap();
                 for node in default.nodes().iter() {

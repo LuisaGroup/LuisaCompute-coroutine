@@ -213,7 +213,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                     }
                     "REFERENCE" => {
                         let t = self._convert_type(v_type);
-                        assert_eq!(
+                        assert_ne!(
                             self._curr_ctx().j_tag,
                             "KERNEL",
                             "Kernels may not have reference variables."

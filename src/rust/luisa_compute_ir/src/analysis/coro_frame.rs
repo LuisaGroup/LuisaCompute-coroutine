@@ -494,8 +494,11 @@ impl CoroFrameAnalyser {
                 Instruction::Const(_) => {
                     active_var.record_def(visit_state.present);
                 }
+
+                // ref and def
                 Instruction::Update { var, value } => {
                     active_var.record_use(*value);
+                    active_var.record_use(*var);
                     active_var.record_def(*var);
                 }
                 Instruction::Call(func, args) => {
@@ -503,6 +506,7 @@ impl CoroFrameAnalyser {
                         active_var.record_use(*arg);
                     }
                     if !is_type_equal(type_, &Type::void()) {
+                        active_var.record_use(visit_state.present);
                         active_var.record_def(visit_state.present);
                     }
                 }
@@ -510,8 +514,10 @@ impl CoroFrameAnalyser {
                     for phi_incoming in phi.as_ref() {
                         active_var.record_use(phi_incoming.value);
                     }
+                    active_var.record_use(visit_state.present);
                     active_var.record_def(visit_state.present);
                 }
+
                 Instruction::Return(value) => {
                     if !is_type_equal(type_, &Type::void()) {
                         active_var.record_use(*value);

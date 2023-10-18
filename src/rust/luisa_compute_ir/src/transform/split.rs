@@ -7,7 +7,7 @@ use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::FrameTokenManager;
 use crate::context::register_type;
-use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType};
+use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const};
 
 struct ScopeBuilder {
     token: u32,
@@ -60,7 +60,7 @@ struct New2OldMap {
     blocks: HashMap<*const BasicBlock, *const BasicBlock>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct CallableModuleInfo {
     args: Vec<NodeRef>,
     captures: Vec<Capture>,
@@ -79,6 +79,7 @@ pub(crate) struct SplitManager {
     pub(crate) coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
     coro_callable_info: HashMap<u32, CallableModuleInfo>,
     frame_type: CArc<Type>,
+    frame_fields: Vec<CArc<Type>>,
 }
 
 impl SplitManager {
@@ -90,12 +91,14 @@ impl SplitManager {
             coro_scopes: HashMap::new(),
             coro_callable_info: HashMap::new(),
             frame_type: CArc::new(Type::Void),
+            frame_fields: vec![],
         };
 
         // prepare
         let pools = &callable.pools;
-        let scope_builder = sm.preprocess(callable);
         let bb = &callable.module.entry;
+        let mut scope_builder = sm.preprocess(callable);
+        scope_builder = sm.coro_resume(scope_builder);
 
         // visit
         let mut sb_vec = sm.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
@@ -156,12 +159,10 @@ impl SplitManager {
             let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
             let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
 
-            for arg in callable.args.as_ref() {
-                input_var.remove(arg);
-            }
-            for capture in callable.captures.as_ref() {
-                input_var.remove(&capture.node);
-            }
+            input_var = input_var.difference(&callable.args.as_ref().iter()
+                .map(|arg| *arg).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
+            input_var = input_var.difference(&callable.captures.as_ref().iter()
+                .map(|capture| capture.node).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
 
             let callable_info = self.coro_callable_info.entry(*token).or_default();
             callable_info.args.extend(args.to_vec());
@@ -183,6 +184,7 @@ impl SplitManager {
 
         let alignment = frame_fields.iter().map(|type_| type_.alignment()).max().unwrap();
         let size = frame_fields.iter().map(|type_| type_.size()).sum();
+        self.frame_fields = frame_fields.clone();
         self.frame_type = register_type(Type::Struct(StructType {
             fields: CBoxedSlice::new(frame_fields),
             alignment,
@@ -307,7 +309,7 @@ impl SplitManager {
         // create a new scope builder for the next scope
         // the next frame must have a CoroResume
         let mut sb_after = ScopeBuilder::new(token_next, builder.pools.clone());
-        sb_after.builder.coro_resume(token_next);
+        sb_after = self.coro_resume(sb_after);
         sb_before.finished = true;
         (sb_before, sb_after)
     }
@@ -315,10 +317,17 @@ impl SplitManager {
         scope_builder.finished = true;
         scope_builder
     }
-    fn coro_resume(&mut self, mut scope_builder: ScopeBuilder, token: u32) -> ScopeBuilder {
-        let callable_info = self.coro_callable_info.get(&token).unwrap();
+    fn coro_resume(&mut self, mut scope_builder: ScopeBuilder) -> ScopeBuilder {
+        let token = scope_builder.token;
+        scope_builder.builder.coro_resume(token);   // TODO: delete
+        let callable_info = self.coro_callable_info.get(&token).unwrap().clone();
         for (old_node, index) in callable_info.old2frame_index.iter() {
-            // TODO: gep
+            let const_node = scope_builder.builder.const_(Const::Uint32(*index));
+            let new_node = scope_builder.builder.gep_chained(
+                callable_info.frame_node,
+                &[const_node],
+                self.frame_fields[*index as usize].clone());
+            self.record_node_mapping(token, *old_node, new_node);
         }
         scope_builder
     }

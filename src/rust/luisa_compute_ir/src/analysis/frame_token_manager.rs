@@ -21,7 +21,7 @@ impl FrameTokenManager {
     pub(crate) fn get_new_token() -> u32 {
         let ftm = Self::get_instance();
         while ftm.frame_token_occupied.contains(&ftm.frame_token_counter) {
-            assert_ne!(ftm.frame_token_counter, 0, "Frame token overflow");
+            assert_ne!(ftm.frame_token_counter, INVALID_FRAME_TOKEN_MASK, "Frame token overflow");
             ftm.frame_token_counter += 1;
         }
         ftm.frame_token_occupied.insert(ftm.frame_token_counter);

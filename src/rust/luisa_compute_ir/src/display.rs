@@ -13,7 +13,7 @@ pub struct DisplayIR {
     cnt: usize,
     block_cnt: usize,
     block_labels: HashMap<*const BasicBlock, String>,
-    defs:HashSet<NodeRef>,
+    defs: HashSet<NodeRef>,
 }
 
 impl DisplayIR {
@@ -24,7 +24,7 @@ impl DisplayIR {
             cnt: 0,
             block_labels: HashMap::new(),
             block_cnt: 0,
-            defs:HashSet::new(),
+            defs: HashSet::new(),
         }
     }
 
@@ -111,12 +111,16 @@ impl DisplayIR {
     }
 
     fn get(&self, node: &NodeRef) -> usize {
-        self.map
-            .get(&node.0)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                panic!("{:?} not found in map", node)
-            })
+        if node.valid() {
+            self.map
+                .get(&node.0)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    panic!("{:?} not found in map", node)
+                })
+        } else {
+            usize::MAX
+        }
     }
 
     fn add_ident(&mut self, ident: usize) {
@@ -222,11 +226,10 @@ impl DisplayIR {
                     .collect::<Vec<_>>()
                     .join(", ");
                 if let Func::Assert(_) = func {
-                    self.output += format!("Call Assert({})", args,).as_str();
-                }else{
-                    self.output += format!("Call {:?}({})", func, args,).as_str();
+                    self.output += format!("Call Assert({})", args, ).as_str();
+                } else {
+                    self.output += format!("Call {:?}({})", func, args, ).as_str();
                 }
-                
             }
             Instruction::Phi(incomings) => {
                 let n = self.get_or_insert(&node);
@@ -388,7 +391,11 @@ impl DisplayIR {
                 self.output += format!("CoroResume({})", token).as_str();
             }
             Instruction::Return(v) => {
-                let temp = format!("return ${}", self.get_or_insert(v));
+                let temp = if is_type_equal(type_, &Type::void()) {
+                    String::from("return")
+                } else {
+                    format!("return ${}", self.get(v))
+                };
                 self.output += temp.as_str();
             }
             Instruction::Print { .. } => {}

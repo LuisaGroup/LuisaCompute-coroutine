@@ -7,7 +7,10 @@ use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::FrameTokenManager;
 use crate::context::register_type;
-use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const};
+use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType};
+
+const STATE_INDEX_DISPATCH_ID: usize = 0;
+const STATE_INDEX_FRAME_TOKEN: usize = 1;
 
 struct ScopeBuilder {
     token: u32,
@@ -97,8 +100,8 @@ impl SplitManager {
         // prepare
         let pools = &callable.pools;
         let bb = &callable.module.entry;
-        let mut scope_builder = sm.preprocess(callable);
-        scope_builder = sm.coro_resume(scope_builder);
+        let scope_builder = sm.preprocess(callable);
+        // coroutine cannot return to entry scope, so do not resume here
 
         // visit
         let mut sb_vec = sm.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
@@ -149,8 +152,13 @@ impl SplitManager {
         let pools = &callable.pools;
         let entry_token = self.frame_analyser.entry_token;
 
-        let mut frame_fields: Vec<CArc<Type>> = vec![];
-        let mut index_counter: usize = 0;
+        let dispatch_id_type = Type::Vector(VectorType {
+            element: VectorElementType::Scalar(Primitive::Uint32),
+            length: 3,
+        });
+        let token_type = Type::Primitive(Primitive::Uint32);
+        let mut frame_fields: Vec<CArc<Type>> = vec![CArc::new(dispatch_id_type), CArc::new(token_type)];
+        let mut index_counter: usize = frame_fields.len();
 
         // calculate frame state
         let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
@@ -226,6 +234,56 @@ impl SplitManager {
         sb_ans_vec
     }
 
+
+    fn coro_resume(&mut self, mut scope_builder: ScopeBuilder) -> ScopeBuilder {
+        let token = scope_builder.token;
+        let builder = &mut scope_builder.builder;
+        builder.coro_resume(token);   // TODO: delete
+        let old2frame_index = self.coro_callable_info.get(&token).unwrap().old2frame_index.clone();
+        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
+        for (old_node, index) in old2frame_index.iter() {
+            let index_node = builder.const_(Const::Uint32(*index as u32));
+            let gep = builder.gep_chained(
+                frame_node,
+                &[index_node],
+                self.frame_fields[*index].clone());
+            self.record_node_mapping(token, *old_node, gep);
+        }
+        scope_builder
+    }
+    fn coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
+        let token = scope_builder.token;
+        let builder = &mut scope_builder.builder;
+        let old2frame_index = self.coro_callable_info.get(&token_next).unwrap().old2frame_index.clone();
+        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
+        // store frame state
+        for (old_node, index) in old2frame_index.iter() {
+            let index_node = builder.const_(Const::Uint32(*index as u32));
+            let gep = builder.gep_chained(
+                frame_node,
+                &[index_node],
+                self.frame_fields[*index].clone());
+            let value = self.old2new.nodes.get(old_node).unwrap().get(&token).unwrap().clone();
+            let value = if value.is_lvalue() {
+                builder.load(value)
+            } else {
+                value
+            };
+            builder.update(gep, value);
+        }
+        // change frame token
+        {
+            let index_node = builder.const_(Const::Uint32(STATE_INDEX_FRAME_TOKEN as u32));
+            let gep = builder.gep_chained(
+                frame_node,
+                &[index_node],
+                self.frame_fields[STATE_INDEX_FRAME_TOKEN].clone());
+            let value = builder.const_(Const::Uint32(token_next));
+            builder.update(gep, value);
+        }
+        scope_builder
+    }
+
     fn visit_bb(&mut self, pools: &CArc<ModulePools>, visit_state: VisitState, mut scope_builder: ScopeBuilder) -> Vec<ScopeBuilder> {
         assert!(!scope_builder.finished);
 
@@ -234,7 +292,6 @@ impl SplitManager {
             let node = node_ref_present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            println!("{:?}: {:?}", visit_state.present, instruction);
 
             match instruction {
                 // coroutine related instructions
@@ -314,42 +371,6 @@ impl SplitManager {
     }
     fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
         scope_builder.finished = true;
-        scope_builder
-    }
-    fn coro_resume(&mut self, mut scope_builder: ScopeBuilder) -> ScopeBuilder {
-        let token = scope_builder.token;
-        let builder = &mut scope_builder.builder;
-        builder.coro_resume(token);   // TODO: delete
-        let old2frame_index = self.coro_callable_info.get(&token).unwrap().old2frame_index.clone();
-        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
-        for (old_node, index) in old2frame_index.iter() {
-            let const_node = builder.const_(Const::Uint32(*index as u32));
-            let gep = builder.gep_chained(
-                frame_node,
-                &[const_node],
-                self.frame_fields[*index].clone());
-            self.record_node_mapping(token, *old_node, gep);
-        }
-        scope_builder
-    }
-    fn coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
-        let token = scope_builder.token;
-        let old2frame_index = self.coro_callable_info.get(&token_next).unwrap().old2frame_index.clone();
-        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
-        for (old_node, index) in old2frame_index.iter() {
-            let const_node = scope_builder.builder.const_(Const::Uint32(*index as u32));
-            let gep = scope_builder.builder.gep_chained(
-                frame_node,
-                &[const_node],
-                self.frame_fields[*index].clone());
-            let value = self.old2new.nodes.get(old_node).unwrap().get(&token).unwrap().clone();
-            let value = if value.is_lvalue() {
-                scope_builder.builder.load(value)
-            } else {
-                value
-            };
-            scope_builder.builder.update(gep, value);
-        }
         scope_builder
     }
     fn visit_branch_split(&mut self, pools: &CArc<ModulePools>, frame_token: u32,

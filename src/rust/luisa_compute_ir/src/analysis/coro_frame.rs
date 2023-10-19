@@ -167,7 +167,6 @@ impl CoroFrameAnalyser {
         self.preprocess_bb(&callable.module.entry);
 
         let entry_token = FrameTokenManager::get_new_token();
-        FrameTokenManager::register_frame_token(entry_token);
         self.entry_token = entry_token;
         let active_var = self.active_vars.entry(entry_token).or_insert(ActiveVar::new(entry_token));
 

@@ -273,6 +273,16 @@ public:
         static_cast<void>((invoke << ... << args));
         return invoke;
     }
+
+    template<typename... Pre>
+    [[nodiscard]] auto partial_invoke(detail::prototype_to_shader_invocation_t<Pre>... args) const noexcept {
+        _check_is_valid();
+        using invoke_type = detail::ShaderInvoke<dimension>;
+        auto arg_count = (0u + ... + detail::shader_argument_encode_count<Args>::value);
+        invoke_type invoke{handle(), arg_count, _uniform_size};
+        static_cast<void>((invoke << ... << args));
+        return invoke;
+    }
     [[nodiscard]] uint3 block_size() const noexcept {
         _check_is_valid();
         return make_uint3(_block_size[0], _block_size[1], _block_size[2]);

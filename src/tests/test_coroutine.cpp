@@ -9,7 +9,7 @@
 #include <luisa/luisa-compute.h>
 #include <luisa/ir/ast2ir.h>
 #include <luisa/ir/ir2ast.h>
-
+//#include <luisa/coro/coro_dispatcher.h>
 using namespace luisa;
 using namespace luisa::compute;
 struct alignas(4) CoroFrame {
@@ -70,7 +70,9 @@ int main(int argc, char *argv[]) {
     Coroutine test_coro = [](Var<CoroFrame> &frame, BufferFloat x_buffer, UInt id) noexcept {
         auto i = id;
         auto x = x_buffer.read(i);
-        $suspend(1u, std::make_pair(x, "x"));
+        $suspend(1u, std::make_pair(x, "x"), std::make_pair(x + i, "y"));
+        
+
         x += 10;
         x_buffer.write(i, x);
         $suspend(2u);
@@ -82,6 +84,7 @@ int main(int argc, char *argv[]) {
     auto test = (Type::of<CoroFrame>())->tag();
     auto frame_buffer = device.create_buffer<CoroFrame>(n);
     auto frame_soa = device.create_soa<CoroFrame>(n);
+    //auto a = coro::WavefrontDispatcher{&test_coro, device};
     Kernel1D gen = [&](BufferFloat x_buffer) noexcept {
         auto id = dispatch_x();
         auto frame = frame_soa->read(dispatch_x());

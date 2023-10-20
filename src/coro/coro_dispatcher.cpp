@@ -1,18 +1,18 @@
 #include <luisa/coro/coro_dispatcher.h>
 
 namespace luisa::compute::inline coro {
-template<typename Frame,typename... T>
-void CoroDispatcherBase<void(Frame,T...)>::_await_all(Stream &stream) noexcept {
+template<typename Frame, typename... T>
+void CoroDispatcherBase<void(Frame, T...)>::_await_all(Stream &stream) noexcept {
     while (!this->all_dispatched()) {
         this->_await_step(stream);
     }
 }
-template<typename Frame,typename... T>
-CoroAwait<void(Frame,T...)> CoroDispatcherBase<void(Frame,T...)>::await_step() noexcept {
+template<typename Frame, typename... T>
+CoroAwait<void(Frame, T...)> CoroDispatcherBase<void(Frame, T...)>::await_step() noexcept {
     return CoroAwait<T>{CoroAwait::Tag::AWAIT_STEP, this};
 }
-template<typename Frame,typename ...T>
-CoroAwait<void(Frame, T...)> CoroDispatcherBase<void(Frame,T...)>::await_all() noexcept {
+template<typename Frame, typename... T>
+CoroAwait<void(Frame, T...)> CoroDispatcherBase<void(Frame, T...)>::await_all() noexcept {
     return CoroAwait<T>{CoroAwait::Tag::AWAIT_ALL, this};
 }
 
@@ -42,6 +42,5 @@ template<typename FrameRef, typename... Args>
 bool WavefrontCoroDispatcher<FrameRef, Args...>::all_finished() const noexcept {
     return all_dispatched() && _host_empty;
 };
-
 
 }// namespace luisa::compute::inline coro

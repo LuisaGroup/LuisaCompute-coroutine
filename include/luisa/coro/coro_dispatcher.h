@@ -17,13 +17,13 @@ template<typename T>
 class CoroDispatcherBase {
     static_assert(always_false_v<T>);
 };
-template<typename FrameRef,typename... Args>
-class CoroDispatcherBase<void(FrameRef,Args...)> : public concepts::Noncopyable {
+template<typename FrameRef, typename... Args>
+class CoroDispatcherBase<void(FrameRef, Args...)> : public concepts::Noncopyable {
 public:
 
     luisa::queue<luisa::unique_ptr<ShaderDispatchCommand>> _dispatcher;
 protected:
-    using FuncType=void(FrameRef,Args...);
+    using FuncType = void(FrameRef, Args...);
     std::tuple<Args...> _args;
     Coroutine<FuncType> *_coro;
     virtual void _await_step(Stream &stream) noexcept = 0;
@@ -31,9 +31,9 @@ protected:
 
 protected:
 public:
-    CoroDispatcherBase(Coroutine<FuncType> *coro, Args&&... args) noexcept
+    CoroDispatcherBase(Coroutine<FuncType> *coro, Args &&...args) noexcept
         : _coro{std::move(coro)},
-        _args {std::make_tuple(std::move(args))}{
+          _args{std::make_tuple(std::move(args))} {
     }
     [[nodiscard]] virtual bool all_dispatched() const noexcept = 0;
     [[nodiscard]] virtual bool all_finished() const noexcept = 0;
@@ -42,7 +42,7 @@ public:
 };
 
 template<typename FrameRef, typename... Args>
-class WavefrontCoroDispatcher : public CoroDispatcherBase<void(FrameRef,Args...)> {
+class WavefrontCoroDispatcher : public CoroDispatcherBase<void(FrameRef, Args...)> {
 private:
     using FrameType = std::remove_reference_t<FrameRef>;
     Shader1D<> _gen_shader;
@@ -62,7 +62,7 @@ public:
     bool all_dispatched() const noexcept;
     bool all_finished() const noexcept;
 
-    WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)>* coro,
+    WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coro,
                             Device &device, uint max_frame_count = 2000000) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coro},
           _max_frame_count{max_frame_count},
@@ -88,7 +88,6 @@ public:
                 uint frame_id = index->read(x);
                 FrameType frame = frame.read(index);
                 (*coro)[i](frame);
-                
             };
             _resume_shaders[i] = device.compile(resume_kernel);
         }
@@ -126,7 +125,6 @@ public:
 };
 
 }// namespace coro
-
 
 template<typename T>
 struct luisa::compute::detail::is_stream_event_impl<coro::CoroAwait<T>> : std::true_type {};

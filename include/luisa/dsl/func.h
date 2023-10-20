@@ -489,8 +489,8 @@ class Coroutine {
 
 template<typename T>
 struct is_callable<Coroutine<T>> : std::true_type {};
-template<typename FrameType,typename... Args>
-class Coroutine<void(FrameType,Args...)> {
+template<typename FrameType, typename... Args>
+class Coroutine<void(FrameType, Args...)> {
     static_assert(std::negation_v<std::disjunction<std::is_pointer<Args>...>>);
 
 private:
@@ -509,18 +509,18 @@ public:
         auto ast = detail::FunctionBuilder::define_coroutine([&f] {
             static_assert(std::is_invocable_v<Def, detail::prototype_to_creation_t<FrameType>, detail::prototype_to_creation_t<Args>...>);
             auto create = []<size_t... i>(auto &&def, std::index_sequence<i...>) noexcept {
-                using arg_tuple = std::tuple<FrameType,Args...>;
+                using arg_tuple = std::tuple<FrameType, Args...>;
                 using var_tuple = std::tuple<Var<std::remove_cvref_t<FrameType>>,
                                              Var<std::remove_cvref_t<Args>>...>;
-                using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<FrameType>,detail::prototype_to_creation_tag_t<Args>...>;
+                using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<FrameType>, detail::prototype_to_creation_tag_t<Args>...>;
                 auto args = detail::create_argument_definitions<var_tuple, tag_tuple>(std::tuple<>{});
-                static_assert(std::tuple_size_v<decltype(args)> == 1+sizeof...(Args));
+                static_assert(std::tuple_size_v<decltype(args)> == 1 + sizeof...(Args));
                 return luisa::invoke(std::forward<decltype(def)>(def),
                                      static_cast<detail::prototype_to_creation_t<
                                          std::tuple_element_t<i, arg_tuple>> &&>(std::get<i>(args))...);
             };
             //static_assert(std::is_same_v<Ret, void>, "coroutine should return void");
-            create(std::forward<Def>(f), std::index_sequence_for<FrameType,Args...>{});
+            create(std::forward<Def>(f), std::index_sequence_for<FrameType, Args...>{});
             detail::FunctionBuilder::current()->return_(nullptr);// to check if any previous $return called with non-void types
         });
         Type *frame = const_cast<Type *>(Type::of<expr_value_t<FrameType>>());
@@ -535,12 +535,12 @@ public:
 
     /// Get the underlying AST
     [[nodiscard]] auto function() const noexcept { return Function{_builder.get()}; }
-    [[nodiscard]] auto const &function_builder() const &noexcept { return _builder; }
-    [[nodiscard]] auto &&function_builder() &&noexcept { return std::move(_builder); }
+    [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
+    [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
 
     //Call from start of coroutine
-    auto operator()(detail::prototype_to_callable_invocation_t<FrameType>type,
-        detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+    auto operator()(detail::prototype_to_callable_invocation_t<FrameType> type,
+                    detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
 
         detail::CallableInvoke invoke;
         static_cast<void>((invoke << type));

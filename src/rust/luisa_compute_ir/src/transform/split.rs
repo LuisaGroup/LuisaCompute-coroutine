@@ -288,20 +288,20 @@ impl SplitManager {
     fn visit_bb(&mut self, pools: &CArc<ModulePools>, visit_state: VisitState, mut scope_builder: ScopeBuilder) -> Vec<ScopeBuilder> {
         assert!(!scope_builder.finished);
 
-        let mut node_ref_present = visit_state.start;
-        while node_ref_present != visit_state.end {
-            let node = node_ref_present.get();
+        let mut visit_state = visit_state;
+        while visit_state.present != visit_state.end {
+            let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            println!("Visit: {:?}", instruction);
+            println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
 
             match instruction {
                 // coroutine related instructions
                 Instruction::CoroSplitMark { token } => {
                     // TODO: different behaviors for loop/if
                     println!("fuck rust");
-                    let (sb_before, sb_after) = self.visit_coro_split_mark(scope_builder, *token, node_ref_present.clone());
-                    let visit_state_after = VisitState::new(visit_state.get_bb_ref(), Some(node_ref_present.get().next), None, None);
+                    let (sb_before, sb_after) = self.visit_coro_split_mark(scope_builder, *token, visit_state.present.clone());
+                    let visit_state_after = VisitState::new(visit_state.get_bb_ref(), Some(visit_state.present.get().next), None, None);
                     let mut sb_vec = self.visit_bb(pools, visit_state_after, sb_after);
                     // index 0 for the scope block before coro split mark
                     sb_vec.insert(0, sb_before);
@@ -317,9 +317,7 @@ impl SplitManager {
 
                 // 3 Instructions after CCF
                 Instruction::Loop { body, cond } => {
-                    let mut visit_state_after = visit_state.clone();
-                    visit_state_after.present = node_ref_present;
-                    let mut visit_result = self.visit_loop(pools, scope_builder, visit_state_after, body, cond);
+                    let mut visit_result = self.visit_loop(pools, scope_builder, visit_state.clone(), body, cond);
                     if visit_result.split_possibly {
                         return visit_result.result;
                     } else {
@@ -328,9 +326,7 @@ impl SplitManager {
                     }
                 }
                 Instruction::If { cond, true_branch, false_branch } => {
-                    let mut visit_state_after = visit_state.clone();
-                    visit_state_after.present = node_ref_present;
-                    let mut visit_result = self.visit_if(pools, scope_builder, visit_state_after, true_branch, false_branch, cond);
+                    let mut visit_result = self.visit_if(pools, scope_builder, visit_state.clone(), true_branch, false_branch, cond);
                     if visit_result.split_possibly {
                         return visit_result.result;
                     } else {
@@ -339,9 +335,7 @@ impl SplitManager {
                     }
                 }
                 Instruction::Switch { value, cases, default } => {
-                    let mut visit_state_after = visit_state.clone();
-                    visit_state_after.present = node_ref_present;
-                    let mut visit_result = self.visit_switch(pools, scope_builder, visit_state_after, value, cases, default);
+                    let mut visit_result = self.visit_switch(pools, scope_builder, visit_state.clone(), value, cases, default);
                     if visit_result.split_possibly {
                         return visit_result.result;
                     } else {
@@ -350,12 +344,16 @@ impl SplitManager {
                     }
                 }
 
+                Instruction::Return(..) => {
+                    println!("visit Return");
+                }
+
                 // other instructions, just deep clone and change the node_ref to new ones
                 _ => {
-                    self.duplicate_node(&mut scope_builder, node_ref_present);
+                    self.duplicate_node(&mut scope_builder, visit_state.present);
                 }
             }
-            node_ref_present = node.next;
+            visit_state.present = node.next;
         }
         vec![scope_builder]
     }
@@ -611,6 +609,7 @@ impl SplitManager {
         let split_poss = self.frame_analyser.split_possibility.get(&body.as_ptr()).unwrap();
 
         if split_poss.possibly {
+            visit_result.split_possibly = true;
             // if split_poss.definitely {
             if false {
                 /*
@@ -725,11 +724,12 @@ impl SplitManager {
                 scope_builder.builder.loop_(body_before_split, dup_cond);
                 scope_builder.finished |= sb_before.finished;
 
-                // process next bb
-                sb_after_vec.insert(0, scope_builder);
-
                 let mut visit_state_after = visit_state.clone();
                 visit_state_after.present = visit_state.present.get().next;
+
+                // process next bb
+                visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), scope_builder));
+
                 for mut sb_after in sb_after_vec {
                     if sb_after.finished {
                         visit_result.result.push(sb_after);
@@ -870,7 +870,7 @@ impl SplitManager {
     }
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
         assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
-                "Basic block {:?} has already been duplicated", bb);
+                "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
         let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
         for node in bb.iter() {
             self.duplicate_node(&mut scope_builder, node);
@@ -898,8 +898,13 @@ impl SplitManager {
         if !node_ref.valid() { return INVALID_REF; }
         let frame_token = scope_builder.token;
         let node = node_ref.get();
+        // TODO: for DEBUG
+        if self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token) {
+            println!("\n{:?}\n", self.old2new.nodes.get(&node_ref).unwrap());
+            panic!("Frame token {}, noderef {:?}, node {:?} has already been duplicated", frame_token, node_ref, node);
+        }
         assert!(!self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token),
-                "Node {:?} has already been duplicated", node);
+                "Frame token {}, node {:?} has already been duplicated", frame_token, node);
         let instruction = node.instruction.as_ref();
         let dup_node = match instruction {
             Instruction::Buffer

@@ -1122,7 +1122,7 @@ pub struct SwitchCase {
 }
 
 #[repr(C)]
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub enum Instruction {
     Buffer,
     Bindless,
@@ -1226,6 +1226,74 @@ pub enum Instruction {
     CoroResume {
         token: u32,
     },
+}
+
+impl Debug for Instruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::Buffer => { write!(f, "Buffer") }
+            Instruction::Bindless => { write!(f, "Bindless") }
+            Instruction::Texture2D => { write!(f, "Texture2D") }
+            Instruction::Texture3D => { write!(f, "Texture3D") }
+            Instruction::Accel => { write!(f, "Accel") }
+            Instruction::Shared => { write!(f, "Shared") }
+            Instruction::Uniform => { write!(f, "Uniform") }
+            Instruction::Local { init } => { write!(f, "Local({:?})", init) }
+            Instruction::Argument { by_value } => { write!(f, "{}Argument", if *by_value {""} else {"&"}) }
+            Instruction::UserData(_) => { write!(f, "UserData") }
+            Instruction::Invalid => { write!(f, "Invalid") }
+            Instruction::Const(c) => { write!(f, "Const({})", c) }
+            Instruction::Update { var, value } => { write!(f, "Update {} = {}", var.0, value.0) }
+            Instruction::Call(func, args) => {
+                let args = args.iter().map(|node| format!("{}", node.0)).collect::<Vec<_>>();
+                // use ", " to join args
+                let args = args.join(", ");
+                write!(f, "Call {:?}({})", func, args)
+            }
+            Instruction::Phi(incomings) => {
+                let incomings = incomings.iter().map(|i| format!("{:?}", i)).collect::<Vec<_>>();
+                let incomings = incomings.join(", ");
+                write!(f, "Phi({})", incomings)
+            }
+            Instruction::Return(value) => {
+                if value.valid() {
+                    write!(f, "Return {:?}", value)
+                } else {
+                    write!(f, "Return")
+                }
+            }
+            Instruction::Loop { body, cond } => { write!(f, "Loop {{ {:?} }} Cond({:?})", body.as_ptr(), cond) }
+            Instruction::GenericLoop { prepare, cond, body, update } => {
+                write!(f, "GenericLoop Prepare({:?}) Cond({}) Body({:?}) Update({:?})", prepare.as_ptr(), cond.0, body.as_ptr(), update.as_ptr())
+            }
+            Instruction::Break => { write!(f, "Break") }
+            Instruction::Continue => { write!(f, "Continue") }
+            Instruction::If { cond, true_branch, false_branch } => {
+                write!(f, "If Cond({}) True({:?}) False({:?})", cond.0, true_branch.as_ptr(), false_branch.as_ptr())
+            }
+            Instruction::Switch { value, default, cases } => {
+                let cases = cases.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>();
+                let cases = cases.join(", ");
+                write!(f, "Switch Value({}) Default({:?}) Cases({})", value.0, default.as_ptr(), cases)
+            }
+            Instruction::AdScope { body, forward, n_forward_grads } => {
+                write!(f, "AdScope Body({:?}) Forward({}) n_forward_grads({})", body.as_ptr(), forward, n_forward_grads)
+            }
+            Instruction::RayQuery { ray_query, on_triangle_hit, on_procedural_hit } => {
+                write!(f, "RayQuery RayQuery({}) OnTriangleHit({:?}) OnProceduralHit({:?})", ray_query.0, on_triangle_hit.as_ptr(), on_procedural_hit.as_ptr())
+            }
+            Instruction::Print { fmt, args } => {
+                let args = args.iter().map(|a| format!("{:?}", a)).collect::<Vec<_>>();
+                let args = args.join(", ");
+                write!(f, "Print Fmt({}) Args({})", fmt.to_string(), args)
+            }
+            Instruction::AdDetach(body) => { write!(f, "AdDetach Body({:?})", body.as_ptr()) }
+            Instruction::Comment(comment) => { write!(f, "Comment: {:?}", comment.to_string()) }
+            Instruction::CoroSplitMark { token } => { write!(f, "CoroSplitMark({})", token) }
+            Instruction::CoroSuspend { token } => { write!(f, "CoroSuspend({})", token) }
+            Instruction::CoroResume { token } => { write!(f, "CoroResume({})", token) }
+        }
+    }
 }
 
 extern "C" fn eq_impl<T: UserNodeData>(a: *const u8, b: *const u8) -> bool {

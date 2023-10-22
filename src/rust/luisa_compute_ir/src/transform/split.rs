@@ -293,6 +293,7 @@ impl SplitManager {
             let node = node_ref_present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
+            println!("Visit: {:?}", instruction);
 
             match instruction {
                 // coroutine related instructions
@@ -500,6 +501,7 @@ impl SplitManager {
                 all_branches_finished &= sb_true.finished;
                 sb_true.builder.finish()
             } else {
+                all_branches_finished = false;
                 self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, true_branch)
             };
             let dup_false_branch = if split_poss_false.possibly {
@@ -507,6 +509,7 @@ impl SplitManager {
                 all_branches_finished &= sb_false.finished;
                 sb_false.builder.finish()
             } else {
+                all_branches_finished = false;
                 self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, false_branch)
             };
             let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
@@ -566,6 +569,7 @@ impl SplitManager {
                     all_branches_finished &= sb_case.finished;
                     sb_case.builder.finish()
                 } else {
+                    all_branches_finished = false;
                     self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, &case.block)
                 };
                 SwitchCase {

@@ -37,14 +37,19 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n) noexcept {
         auto x = x_buffer.read(id);
         auto user = def<User>(20u, 1000.0f);
-        $for(depth, 10u) {
+        auto i = def(0u);
+        $while (i >= 3u) {
             $switch (1u) {
                 $case (1u) {
                     $if (id < 5u) {
                         x_buffer.write(id, x + 1000u);
-                        $suspend(1u);
+                        $if (i == 0u) {
+                            $suspend(1u);
+                        };
                         x = x_buffer.read(id);
-                        $suspend(2u);
+                        $if (i == 1u) {
+                            $suspend(2u);
+                        };
                         x = x;
                         x_buffer.write(id, x + n);
                     }
@@ -56,6 +61,7 @@ int main(int argc, char *argv[]) {
                     x_buffer.write(id, x + 3000u);
                 };
             };
+            i += 1u;
         };
         x_buffer.write(id, x + 10000u + user.age);
     };

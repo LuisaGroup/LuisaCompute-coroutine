@@ -298,6 +298,7 @@ impl DisplayIR {
                 }
                 self.add_ident(ident + 1);
                 self.output += "}\n";
+                self.add_ident(ident);
                 self.output += "}";
             }
             Instruction::RayQuery {
@@ -380,7 +381,12 @@ impl DisplayIR {
                 self.add_ident(ident);
                 self.output += "}";
             }
-            Instruction::Comment(_) => {}
+            Instruction::Comment(msg) => {
+                let msg = msg.as_ref();
+                let msg = std::str::from_utf8(msg).unwrap();
+                self.output += format!("Comment: {}", msg).as_str();
+                // self.output += "Comment: ...";
+            }
             Instruction::CoroSplitMark { token } => {
                 self.output += format!("CoroSplitMark({})", token).as_str();
             }

@@ -17,7 +17,7 @@ impl CoroutineImpl {
 
 impl Transform for Coroutine {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
-        println!("{:-^40}", "Before split");
+        println!("{:-^40}", " Before split ");
         let mut display_ir = DisplayIR::new();
         let result = display_ir.display_ir_callable(&callable);
         println!("{}", result);
@@ -27,10 +27,10 @@ impl Transform for Coroutine {
         println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
 
         let mut sm = SplitManager::split(coro_frame_analyser, &callable);
-        println!("{:-^40}", "After split");
+        println!("{:-^40}", " After split ");
         for (token, sb) in sm.coro_scopes.iter() {
             let result = DisplayIR::new().display_ir_bb(sb, 0, false);
-            println!("{:-^40}\n{}", format!("CoroScope {}:", token), result);
+            println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
         }
 
         unimplemented!("Coroutine split");

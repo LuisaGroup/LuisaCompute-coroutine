@@ -117,7 +117,7 @@ impl SplitManager {
         ScopeBuilder::new(FrameTokenManager::get_temp_token(), pools)
     }
 
-    // fn preprocess_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
+    // fn pre_process_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
     //     bb.iter().for_each(|node_ref_present| {
     //         let node = node_ref_present.get();
     //         match node.instruction.as_ref() {
@@ -239,6 +239,7 @@ impl SplitManager {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
         builder.coro_resume(token);   // TODO: delete
+        builder.comment(CBoxedSlice::from("CoroResume Start".as_bytes()));   // TODO: for DEBUG
         let old2frame_index = self.coro_callable_info.get(&token).unwrap().old2frame_index.clone();
         let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
         for (old_node, index) in old2frame_index.iter() {
@@ -249,11 +250,13 @@ impl SplitManager {
                 self.frame_fields[*index].clone());
             self.record_node_mapping(token, *old_node, gep);
         }
+        builder.comment(CBoxedSlice::from("CoroResume End".as_bytes()));   // TODO: for DEBUG
         scope_builder
     }
     fn coro_suspend(&mut self, scope_builder: &mut ScopeBuilder, token_next: u32) {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
+        builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes()));   // TODO: for DEBUG
         let old2frame_index = self.coro_callable_info.get(&token_next).unwrap().old2frame_index.clone();
         let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
         // store frame state
@@ -279,6 +282,7 @@ impl SplitManager {
             self.frame_fields[STATE_INDEX_FRAME_TOKEN].clone());
         let value = builder.const_(Const::Uint32(token_next));
         builder.update(gep, value);
+        builder.comment(CBoxedSlice::from("CoroSuspend End".as_bytes()));   // TODO: for DEBUG
     }
 
     fn visit_bb(&mut self, pools: &CArc<ModulePools>, visit_state: VisitState, mut scope_builder: ScopeBuilder) -> Vec<ScopeBuilder> {
@@ -294,6 +298,7 @@ impl SplitManager {
                 // coroutine related instructions
                 Instruction::CoroSplitMark { token } => {
                     // TODO: different behaviors for loop/if
+                    println!("fuck rust");
                     let (sb_before, sb_after) = self.visit_coro_split_mark(scope_builder, *token, node_ref_present.clone());
                     let visit_state_after = VisitState::new(visit_state.get_bb_ref(), Some(node_ref_present.get().next), None, None);
                     let mut sb_vec = self.visit_bb(pools, visit_state_after, sb_after);
@@ -355,7 +360,7 @@ impl SplitManager {
     }
     fn visit_coro_split_mark(&mut self, mut sb_before: ScopeBuilder, token_next: u32, node_ref: NodeRef) -> (ScopeBuilder, ScopeBuilder) {
         // replace CoroSplitMark with CoroSuspend
-        self.coro_suspend(&mut sb_before, token_next);    // TODO: or move to post-processing
+        self.coro_suspend(&mut sb_before, token_next);
         let coro_suspend = sb_before.builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
@@ -712,10 +717,8 @@ impl SplitManager {
 
                 let mut sb_after_vec = vec![];
                 let sb_before = self.visit_branch_split(pools, scope_builder.token, body, &mut sb_after_vec);
-                let bb_body_before_split = sb_before.builder.finish();
-                let mut sb_loop = ScopeBuilder::new(scope_builder.token, pools.clone());
-                sb_loop.builder.loop_(bb_body_before_split, dup_cond);
-                let bb_loop = sb_loop.builder.finish();
+                let body_before_split = sb_before.builder.finish();
+                scope_builder.builder.loop_(body_before_split, dup_cond);
                 scope_builder.finished |= sb_before.finished;
 
                 // process next bb
@@ -727,9 +730,9 @@ impl SplitManager {
                     if sb_after.finished {
                         visit_result.result.push(sb_after);
                     } else {
-                        self.duplicate_block(sb_after.token, &pools, body);
                         let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
-                        sb_after.builder.loop_(bb_loop, dup_cond);
+                        let dup_body = self.duplicate_block(sb_after.token, &pools, body);
+                        sb_after.builder.loop_(dup_body, dup_cond);
                         visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
                     }
                 }
@@ -865,15 +868,13 @@ impl SplitManager {
         assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
                 "Basic block {:?} has already been duplicated", bb);
         let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
-        bb.iter().for_each(|node| {
+        for node in bb.iter() {
             self.duplicate_node(&mut scope_builder, node);
             match node.get().instruction.as_ref() {
-                Instruction::CoroSuspend { token } => {
-                    self.coro_suspend(&mut scope_builder, *token);
-                }
+                Instruction::CoroSuspend { .. } => { break; }
                 _ => {}
             }
-        });
+        }
         let dup_bb = scope_builder.builder.finish();
         // insert the duplicated block into the map
         self.record_block_mapping(frame_token, bb, &dup_bb);

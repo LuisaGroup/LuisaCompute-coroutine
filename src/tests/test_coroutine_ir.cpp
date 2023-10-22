@@ -37,22 +37,24 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n) noexcept {
         auto x = x_buffer.read(id);
         auto user = def<User>(20u, 1000.0f);
-        $switch (1u) {
-            $case (1u) {
-                $if (id < 5u) {
-                    x_buffer.write(id, x + 1000u);
-                    $suspend(1u);
-                    x = x_buffer.read(id);
-                    $suspend(2u);
-                    x = x;
-                    x_buffer.write(id, x + n);
-                }
-                $else {
-                    x_buffer.write(id, x + 2000u);
+        $for(depth, 10u) {
+            $switch (1u) {
+                $case (1u) {
+                    $if (id < 5u) {
+                        x_buffer.write(id, x + 1000u);
+                        $suspend(1u);
+                        x = x_buffer.read(id);
+                        $suspend(2u);
+                        x = x;
+                        x_buffer.write(id, x + n);
+                    }
+                    $else {
+                        x_buffer.write(id, x + 2000u);
+                    };
                 };
-            };
-            $default {
-                x_buffer.write(id, x + 3000u);
+                $default {
+                    x_buffer.write(id, x + 3000u);
+                };
             };
         };
         x_buffer.write(id, x + 10000u + user.age);

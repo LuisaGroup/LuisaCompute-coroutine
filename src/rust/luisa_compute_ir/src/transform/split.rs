@@ -100,7 +100,7 @@ impl SplitManager {
         // prepare
         let pools = &callable.pools;
         let bb = &callable.module.entry;
-        let scope_builder = sm.preprocess(callable);
+        let scope_builder = sm.pre_process(callable);
         // coroutine cannot return to entry scope, so do not resume here
 
         // visit
@@ -148,7 +148,7 @@ impl SplitManager {
     //         }
     //     });
     // }
-    fn preprocess(&mut self, callable: &CallableModule) -> ScopeBuilder {
+    fn pre_process(&mut self, callable: &CallableModule) -> ScopeBuilder {
         let pools = &callable.pools;
         let entry_token = self.frame_analyser.entry_token;
 
@@ -251,7 +251,7 @@ impl SplitManager {
         }
         scope_builder
     }
-    fn coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
+    fn coro_suspend(&mut self, scope_builder: &mut ScopeBuilder, token_next: u32) {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
         let old2frame_index = self.coro_callable_info.get(&token_next).unwrap().old2frame_index.clone();
@@ -272,16 +272,13 @@ impl SplitManager {
             builder.update(gep, value);
         }
         // change frame token
-        {
-            let index_node = builder.const_(Const::Uint32(STATE_INDEX_FRAME_TOKEN as u32));
-            let gep = builder.gep_chained(
-                frame_node,
-                &[index_node],
-                self.frame_fields[STATE_INDEX_FRAME_TOKEN].clone());
-            let value = builder.const_(Const::Uint32(token_next));
-            builder.update(gep, value);
-        }
-        scope_builder
+        let index_node = builder.const_(Const::Uint32(STATE_INDEX_FRAME_TOKEN as u32));
+        let gep = builder.gep_chained(
+            frame_node,
+            &[index_node],
+            self.frame_fields[STATE_INDEX_FRAME_TOKEN].clone());
+        let value = builder.const_(Const::Uint32(token_next));
+        builder.update(gep, value);
     }
 
     fn visit_bb(&mut self, pools: &CArc<ModulePools>, visit_state: VisitState, mut scope_builder: ScopeBuilder) -> Vec<ScopeBuilder> {
@@ -358,7 +355,7 @@ impl SplitManager {
     }
     fn visit_coro_split_mark(&mut self, mut sb_before: ScopeBuilder, token_next: u32, node_ref: NodeRef) -> (ScopeBuilder, ScopeBuilder) {
         // replace CoroSplitMark with CoroSuspend
-        sb_before = self.coro_suspend(sb_before, token_next);
+        self.coro_suspend(&mut sb_before, token_next);    // TODO: or move to post-processing
         let coro_suspend = sb_before.builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
@@ -528,6 +525,8 @@ impl SplitManager {
     }
     fn visit_switch(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
                     visit_state: VisitState, value: &NodeRef, cases: &CBoxedSlice<SwitchCase>, default: &Pooled<BasicBlock>) -> VisitResult {
+        let mut visit_result = VisitResult::new();
+
         // split in cases/default
         let cases_ref = cases.as_ref();
         let mut split_poss_case_vec = Vec::with_capacity(cases_ref.len());
@@ -543,8 +542,6 @@ impl SplitManager {
             split_poss_cases.possibly |= split_poss_case.possibly;
             split_poss_cases.definitely &= split_poss_case.definitely;
         }
-
-        let mut visit_result = VisitResult::new();
 
         if !split_poss_cases.possibly && !split_poss_default.possibly {
             // no split, duplicate the node
@@ -600,120 +597,150 @@ impl SplitManager {
     }
     fn visit_loop(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
                   visit_state: VisitState, body: &Pooled<BasicBlock>, cond: &NodeRef) -> VisitResult {
+        let mut visit_result = VisitResult::new();
+
         let split_poss = self.frame_analyser.split_possibility.get(&body.as_ptr()).unwrap();
-        assert_eq!(split_poss.possibly, true);
 
-        if split_poss.definitely {
-            /*
-            BLOCK A;
-            loop {
-                BLOCK B;
-                if (cond_0) {
-                    BLOCK E;
-                    split(1);
-                    BLOCK F;
-                } else {
-                    BLOCK G;
-                    split(2);
-                    BLOCK H;
+        if split_poss.possibly {
+            // if split_poss.definitely {
+            if false {
+                /*
+                BLOCK A;
+                loop {
+                    BLOCK B;
+                    if (cond_0) {
+                        BLOCK E;
+                        split(1);
+                        BLOCK F;
+                    } else {
+                        BLOCK G;
+                        split(2);
+                        BLOCK H;
+                    }
+                    BLOCK C;
+                } cond(cond_1);
+                BLOCK D;
+
+
+                ----------------------
+                | BLOCK A;           |
+                | BLOCK B;           |
+                | if (cond_0) {      |
+                |     BLOCK E;       |
+                |     suspend(1);    |----
+                | } else {           |   |
+                |     BLOCK G;       |   |
+                |     suspend(2);    |---|------------------------------
+                | }                  |   |                             |
+                ----------------------   |                             |
+                                         |                             |
+                          ----------------                             |
+                          |                                            |
+                          |                          ----------------->|<--------------------
+                          |                          |                 |                    |
+                          |<-------------------- <---------------------|-----------------   |
+                          |                    |     |                 |                |   |
+                          V                    |     |                 V                |   |
+                --------------------------     |     |      --------------------------  |   |
+                | resume(1);             |     |     |      | resume(2);             |  |   |
+                | BLOCK F;               |     |     |      | BLOCK H;               |  |   |
+                | BLOCK C;               |     |     |      | BLOCK C;               |  |   |
+                | if (cond_1) {          |     |     |      | if (cond_1) {          |  |   |
+                |     loop {             |     |     |      |     loop {             |  |   |
+                |         BLOCK B;       |     |     |      |         BLOCK B;       |  |   |
+                |         if (cond_0) {  |     |     |      |         if (cond_0) {  |  |   |
+                |             BLOCK E;   |     |     |      |             BLOCK E;   |  |   |
+                |             suspend(1);|------     |      |             suspend(1);|---   |
+                |         } else {       |           |      |         } else {       |      |
+                |             BLOCK G;   |           |      |             BLOCK G;   |      |
+                |             suspend(2);|------------      |             suspend(2);|-------
+                |         }              |                  |         }              |
+                |     } cond(cond_1)     |                  |     } cond(cond_1)     |
+                | }                      |                  | }                      |
+                | BLOCK D;               |                  | BLOCK D;               |
+                --------------------------                  --------------------------
+                 */
+            } else {
+                /*
+                BLOCK A;
+                loop {
+                    BLOCK B;
+                    if (cond_0) {
+                        BLOCK E;
+                        split(1);
+                        BLOCK F;
+                    }
+                    BLOCK C;
+                } cond(cond_1);
+                BLOCK D;
+
+                ----------------------
+                | BLOCK A;           |
+                | loop {             |
+                |     BLOCK B;       |
+                |     if (cond_0) {  |
+                |         BLOCK E;   |
+                |         suspend(1);|
+                |     }              |
+                |     BLOCK C;       |
+                | } cond(cond_1)     |
+                | BLOCK D;           |
+                ----------------------
+                          |
+                          |<--------------------
+                          |                    |
+                          V                    |
+                --------------------------     |
+                | resume(1);             |     |
+                | BLOCK F;               |     |
+                | BLOCK C;               |     |
+                | if (cond_1) {          |     |
+                |     loop {             |     |
+                |         BLOCK B;       |     |
+                |         if (cond_0) {  |     |
+                |             BLOCK E;   |     |
+                |             suspend(1);|------
+                |         }              |
+                |         BLOCK C;       |
+                |     } cond(cond_1)     |
+                | }                      |
+                | BLOCK D;               |
+                --------------------------
+                 */
+
+                let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
+
+                let mut sb_after_vec = vec![];
+                let sb_before = self.visit_branch_split(pools, scope_builder.token, body, &mut sb_after_vec);
+                let bb_body_before_split = sb_before.builder.finish();
+                let mut sb_loop = ScopeBuilder::new(scope_builder.token, pools.clone());
+                sb_loop.builder.loop_(bb_body_before_split, dup_cond);
+                let bb_loop = sb_loop.builder.finish();
+                scope_builder.finished |= sb_before.finished;
+
+                // process next bb
+                sb_after_vec.insert(0, scope_builder);
+
+                let mut visit_state_after = visit_state.clone();
+                visit_state_after.present = visit_state.present.get().next;
+                for mut sb_after in sb_after_vec {
+                    if sb_after.finished {
+                        visit_result.result.push(sb_after);
+                    } else {
+                        self.duplicate_block(sb_after.token, &pools, body);
+                        let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
+                        sb_after.builder.loop_(bb_loop, dup_cond);
+                        visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
+                    }
                 }
-                BLOCK C;
-            } cond(cond_1);
-            BLOCK D;
-
-
-            ----------------------
-            | BLOCK A;           |
-            | BLOCK B;           |
-            | if (cond_0) {      |
-            |     BLOCK E;       |
-            |     suspend(1);    |----
-            | } else {           |   |
-            |     BLOCK G;       |   |
-            |     suspend(2);    |---|------------------------------
-            | }                  |   |                             |
-            ----------------------   |                             |
-                                     |                             |
-                      ----------------                             |
-                      |                                            |
-                      |                          ----------------->|<--------------------
-                      |                          |                 |                    |
-                      |<-------------------- <---------------------|-----------------   |
-                      |                    |     |                 |                |   |
-                      V                    |     |                 V                |   |
-            --------------------------     |     |      --------------------------  |   |
-            | resume(1);             |     |     |      | resume(2);             |  |   |
-            | BLOCK F;               |     |     |      | BLOCK H;               |  |   |
-            | BLOCK C;               |     |     |      | BLOCK C;               |  |   |
-            | if (cond_1) {          |     |     |      | if (cond_1) {          |  |   |
-            |     loop {             |     |     |      |     loop {             |  |   |
-            |         BLOCK B;       |     |     |      |         BLOCK B;       |  |   |
-            |         if (cond_0) {  |     |     |      |         if (cond_0) {  |  |   |
-            |             BLOCK E;   |     |     |      |             BLOCK E;   |  |   |
-            |             suspend(1);|------     |      |             suspend(1);|---   |
-            |         } else {       |           |      |         } else {       |      |
-            |             BLOCK G;   |           |      |             BLOCK G;   |      |
-            |             suspend(2);|------------      |             suspend(2);|-------
-            |         }              |                  |         }              |
-            |     } cond(cond_1)     |                  |     } cond(cond_1)     |
-            | }                      |                  | }                      |
-            | BLOCK D;               |                  | BLOCK D;               |
-            --------------------------                  --------------------------
-             */
+            }
         } else {
-            /*
-            BLOCK A;
-            loop {
-                BLOCK B;
-                if (cond_0) {
-                    BLOCK E;
-                    split(1);
-                    BLOCK F;
-                }
-                BLOCK C;
-            } cond(cond_1);
-            BLOCK D;
-
-            ----------------------
-            | BLOCK A;           |
-            | loop {             |
-            |     BLOCK B;       |
-            |     if (cond_0) {  |
-            |         BLOCK E;   |
-            |         suspend(1);|
-            |     }              |
-            |     BLOCK C;       |
-            | } cond(cond_1)     |
-            | BLOCK D;           |
-            ----------------------
-                      |
-                      |<--------------------
-                      |                    |
-                      V                    |
-            --------------------------     |
-            | resume(1);             |     |
-            | BLOCK F;               |     |
-            | BLOCK C;               |     |
-            | if (cond_1) {          |     |
-            |     loop {             |     |
-            |         BLOCK B;       |     |
-            |         if (cond_0) {  |     |
-            |             BLOCK E;   |     |
-            |             suspend(1);|------
-            |         }              |
-            |         BLOCK C;       |
-            |     } cond(cond_1)     |
-            | }                      |
-            | BLOCK D;               |
-            --------------------------
-             */
-            // let sb_temp = self.create_scope_builder_temp(pools.clone());
-            // let mut sb_vec = self.visit_bb(pools, VisitState::new_whole(body), sb_temp);
-            //
-            // let dup_cond = self.find_duplicated_node(scope_builder.token, *cond);
-            // scope_builder.builder.loop_(bb_body_before_split, dup_cond);
+            // no split, duplicate the node
+            self.duplicate_node(&mut scope_builder, visit_state.present);
+            visit_result.split_possibly = false;
+            visit_result.result.push(scope_builder);
         }
-        todo!()
+        visit_result
     }
 
 
@@ -840,6 +867,12 @@ impl SplitManager {
         let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
         bb.iter().for_each(|node| {
             self.duplicate_node(&mut scope_builder, node);
+            match node.get().instruction.as_ref() {
+                Instruction::CoroSuspend { token } => {
+                    self.coro_suspend(&mut scope_builder, *token);
+                }
+                _ => {}
+            }
         });
         let dup_bb = scope_builder.builder.finish();
         // insert the duplicated block into the map
@@ -911,14 +944,24 @@ impl SplitManager {
                 }).collect();
                 scope_builder.builder.phi(dup_incomings.as_slice(), node.type_.clone())
             }
+            Instruction::AdScope { body, .. } => {
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                scope_builder.builder.ad_scope(dup_body)
+            }
+            Instruction::RayQuery { ray_query, on_triangle_hit, on_procedural_hit } => {
+                let dup_ray_query = self.find_duplicated_node(scope_builder, *ray_query);
+                let dup_on_triangle_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_triangle_hit);
+                let dup_on_procedural_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_procedural_hit);
+                scope_builder.builder.ray_query(dup_ray_query, dup_on_triangle_hit, dup_on_procedural_hit, node.type_.clone())
+            }
+            Instruction::AdDetach(body) => {
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                scope_builder.builder.ad_detach(dup_body)
+            }
+            Instruction::Comment(msg) => scope_builder.builder.comment(msg.clone()),
             Instruction::Return(value) => {
                 let dup_value = self.find_duplicated_node(scope_builder, *value);
                 scope_builder.builder.return_(dup_value)
-            }
-            Instruction::Loop { body, cond } => {
-                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
-                let dup_cond = self.find_duplicated_node(scope_builder, *cond);
-                scope_builder.builder.loop_(dup_body, dup_cond)
             }
             Instruction::GenericLoop { prepare, cond, body, update } => {
                 let dup_prepare = self.duplicate_block(frame_token, &scope_builder.builder.pools, prepare);
@@ -929,6 +972,12 @@ impl SplitManager {
             }
             Instruction::Break => scope_builder.builder.break_(),
             Instruction::Continue => scope_builder.builder.continue_(),
+
+            Instruction::Loop { body, cond } => {
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                let dup_cond = self.find_duplicated_node(scope_builder, *cond);
+                scope_builder.builder.loop_(dup_body, dup_cond)
+            }
             Instruction::If { cond, true_branch, false_branch } => {
                 let dup_cond = self.find_duplicated_node(scope_builder, *cond);
                 let dup_true_branch = self.duplicate_block(frame_token, &scope_builder.builder.pools, true_branch);
@@ -947,24 +996,12 @@ impl SplitManager {
                 let dup_default = self.duplicate_block(frame_token, &scope_builder.builder.pools, default);
                 scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default)
             }
-            Instruction::AdScope { body, .. } => {
-                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
-                scope_builder.builder.ad_scope(dup_body)
+
+            Instruction::CoroSuspend { token: token_next } => {
+                scope_builder.builder.coro_suspend(*token_next)
             }
-            Instruction::RayQuery { ray_query, on_triangle_hit, on_procedural_hit } => {
-                let dup_ray_query = self.find_duplicated_node(scope_builder, *ray_query);
-                let dup_on_triangle_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_triangle_hit);
-                let dup_on_procedural_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_procedural_hit);
-                scope_builder.builder.ray_query(dup_ray_query, dup_on_triangle_hit, dup_on_procedural_hit, node.type_.clone())
-            }
-            Instruction::AdDetach(body) => {
-                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
-                scope_builder.builder.ad_detach(dup_body)
-            }
-            Instruction::Comment(msg) => scope_builder.builder.comment(msg.clone()),
-            Instruction::CoroSplitMark { .. } |
-            Instruction::CoroSuspend { .. } |
-            Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
+            Instruction::CoroSplitMark { .. }
+            | Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
             Instruction::Print { fmt, args } => {
                 let args = args
                     .iter()

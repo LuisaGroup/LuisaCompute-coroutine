@@ -96,14 +96,18 @@ void FunctionBuilder::return_(const Expression *expr) noexcept {
     }
 }
 
-void FunctionBuilder::suspend_(const uint suspend_id) noexcept {
-    _create_and_append_statement<SuspendStmt>(suspend_id);
+uint FunctionBuilder::suspend_(const luisa::string suspend_id) noexcept {
+    uint id = _suspend_ids.size() + 1;
+    _suspend_ids.insert(std::make_pair(suspend_id, id));
+    _create_and_append_statement<SuspendStmt>(id);
     _direct_builtin_callables.mark(CallOp::SUSPEND);
     _propagated_builtin_callables.mark(CallOp::SUSPEND);
+    return id;
 }
 void FunctionBuilder::bind_promise_(const uint suspend_id, const Expression *expr, const luisa::string &name) noexcept {
-    auto type = expr->type();
+    auto type = _arguments[0].type();
     auto res = const_cast<Type *>(type)->add_member(name);
+    LUISA_ASSERT(res!=-1,"error! Adding member failed!");
     _create_and_append_statement<CoroBindStmt>(suspend_id, expr, res);
     _direct_builtin_callables.mark(CallOp::SUSPEND);
     _propagated_builtin_callables.mark(CallOp::SUSPEND);

@@ -71,15 +71,15 @@ int main(int argc, char *argv[]) {
         coro_id();
         auto i = id;
         auto x = x_buffer.read(i);
-        $suspend(1u, std::make_pair(x, "x"), std::make_pair(x + i, "y"));
+        $suspend("1", std::make_pair(x, "x"), std::make_pair(x + i, "y"));
 
         x += 10;
         x_buffer.write(i, x);
-        $suspend(2u);
+        $suspend("2");
         x += 100;
         x_buffer.write(i, x);
-        $suspend(3u);
-        $suspend(4u);
+        $suspend("3u");
+        $suspend("4u");
     };
     auto test = (Type::of<CoroFrame>())->tag();
     auto frame_buffer = device.create_buffer<CoroFrame>(n);

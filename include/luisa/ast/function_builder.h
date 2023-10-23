@@ -92,6 +92,7 @@ private:
     luisa::vector<Usage> _variable_usages;
     luisa::vector<std::pair<std::byte *, size_t /* alignment */>> _temporary_data;
     luisa::vector<CpuCallback> _cpu_callbacks;
+    luisa::unordered_map<luisa::string, uint> _suspend_ids;
     CallOpSet _direct_builtin_callables;
     CallOpSet _propagated_builtin_callables;
     uint64_t _hash;
@@ -350,7 +351,7 @@ public:
     /// Add assign statement
     void assign(const Expression *lhs, const Expression *rhs) noexcept;
     /// Add suspend statement
-    void suspend_(uint suspend_id) noexcept;
+    uint suspend_(luisa::string suspend_id) noexcept;
     ///bind local to promise
     void bind_promise_(uint suspend_id, const Expression *var, const luisa::string &name) noexcept;
     ///read local from promise

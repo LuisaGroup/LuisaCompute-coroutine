@@ -384,7 +384,7 @@ template<typename Tb, typename Te, typename Ts>
 }
 
 template<typename S, typename... Args>
-[[nodiscard]] inline auto dynamic_range_with_comment(S &&s, Args &&... args) noexcept {
+[[nodiscard]] inline auto dynamic_range_with_comment(S &&s, Args &&...args) noexcept {
     luisa::compute::detail::comment(std::forward<S>(s));
     return dynamic_range(std::forward<Args>(args)...);
 }
@@ -461,20 +461,21 @@ inline void return_(T &&t) noexcept {
 }
 
 auto get_var_list() noexcept {
-	return luisa::vector<std::pair<const Expression*, luisa::string>>{};
+    return luisa::vector<std::pair<const Expression *, luisa::string>>{};
 }
-template<typename U,typename V,typename... Args>
+template<typename U, typename V, typename... Args>
 auto get_var_list(std::pair<U, V> &&p, Args &&...args) noexcept {
-	auto rets = get_var_list(std::forward<Args>(args)...);
+    auto rets = get_var_list(std::forward<Args>(args)...);
     rets.push_back(std::make_pair(detail::extract_expression(p.first), luisa::string{p.second}));
-	return rets;
+    return rets;
 }
 template<typename... Args>
-inline void suspend(uint &&suspend_id, Args&&...args) noexcept {
+inline void suspend(luisa::string &&suspend_id, Args &&...args) noexcept {
     auto rets = get_var_list(std::forward<Args>(args)...);
+    auto id = detail::FunctionBuilder::current()->suspend_(suspend_id);
     for (auto &ret : rets) {
         detail::FunctionBuilder::current()->bind_promise_(
-            suspend_id, ret.first, ret.second);
+            id, ret.first, ret.second);
     }
 }
 template<typename T, typename S>

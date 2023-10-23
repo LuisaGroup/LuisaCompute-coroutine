@@ -513,6 +513,7 @@ public:
                 using var_tuple = std::tuple<Var<std::remove_cvref_t<FrameType>>,
                                              Var<std::remove_cvref_t<Args>>...>;
                 using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<FrameType>, detail::prototype_to_creation_tag_t<Args>...>;
+                
                 auto args = detail::create_argument_definitions<var_tuple, tag_tuple>(std::tuple<>{});
                 static_assert(std::tuple_size_v<decltype(args)> == 1 + sizeof...(Args));
                 return luisa::invoke(std::forward<decltype(def)>(def),

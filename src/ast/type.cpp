@@ -210,7 +210,7 @@ void _update(Type *dst, const Type *src) {
     dst_inst->members.push_back(src);
     //dst_inst->description = src_inst->description;
 }
-const size_t _add_member(Type *type, const luisa::string &name) {
+size_t _add_member(Type *type, const luisa::string &name) {
     auto inst = static_cast<TypeImpl *>(type);
     size_t id = inst->member_names.size();
     auto ret = inst->member_names.insert(std::make_pair(name, id));
@@ -672,11 +672,11 @@ const Type *Type::coroframe(luisa::string_view name) noexcept {
 void Type::update_from(const Type *type) {
     detail::_update(this, type);
 }
-const size_t Type::add_member(const luisa::string &name) noexcept {
+size_t Type::add_member(const luisa::string &name) noexcept {
     return detail::_add_member(this, name);
 }
 
-const size_t Type::member(const luisa::string &name) const noexcept {
+size_t Type::member(const luisa::string &name) const noexcept {
     auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;
     auto it = map.find(name);
     if (it == map.end()) {

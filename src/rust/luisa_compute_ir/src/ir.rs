@@ -1743,6 +1743,12 @@ pub struct Module {
 #[derive(Debug, Serialize, Clone)]
 pub struct CallableModuleRef(pub CArc<CallableModule>);
 
+impl CallableModuleRef {
+    pub fn as_ref(&self) -> &CallableModule {
+        self.0.as_ref()
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Serialize)]
 pub struct CallableModule {

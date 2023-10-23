@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use super::Transform;
 
 use crate::{*, display::DisplayIR};
@@ -26,29 +27,14 @@ impl Transform for Coroutine {
         coro_frame_analyser.analyse_callable(&callable);
         println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
 
-        let callables = SplitManager::split(coro_frame_analyser, &callable);
+        let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
         println!("{:-^40}", " After split ");
-        for (token, coro) in callables.iter() {
-            let result = DisplayIR::new().display_ir_callable(coro);
+        for (token, coro) in coroutine_entry.subroutine_ids.iter().zip(coroutine_entry.subroutines.iter()) {
+            let result = DisplayIR::new().display_ir_callable(coro.as_ref());
             println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
         }
 
-        unimplemented!("Coroutine split");
-
-        // let mut entry = module.entry;
-        // // *entry.get_mut() = todo!();
-        // let ret=Module {
-        //     kind: module.kind,
-        //     entry,
-        //     pools: module.pools,
-        // };
-        // callable.args[0].get_mut().type_=imp.corostate_type;
-        // CallableModule {
-        //     module:ret,
-        //     args:callable.args,
-        //     subroutine_ids:CBoxedSlice::new(vec![]),
-        //     subroutines:CBoxedSlice::new(vec![]),
-        //     ..callable
-        // }
+        coroutine_entry
+        // unimplemented!("Coroutine split");
     }
 }

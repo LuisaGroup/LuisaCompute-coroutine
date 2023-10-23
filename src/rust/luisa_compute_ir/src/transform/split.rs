@@ -7,7 +7,7 @@ use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::FrameTokenManager;
 use crate::context::register_type;
-use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType};
+use crate::ir::{SwitchCase, Instruction, BasicBlock, KernelModule, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType, ModuleFlags, ModuleKind};
 
 const STATE_INDEX_DISPATCH_ID: usize = 0;
 const STATE_INDEX_FRAME_TOKEN: usize = 1;
@@ -86,7 +86,7 @@ pub(crate) struct SplitManager {
 }
 
 impl SplitManager {
-    pub(crate) fn split(frame_analyser: CoroFrameAnalyser, callable: &CallableModule) -> Self {
+    pub(crate) fn split(frame_analyser: CoroFrameAnalyser, callable: &CallableModule) -> HashMap<u32, CallableModule> {
         let mut sm = Self {
             frame_analyser,
             old2new: Default::default(),
@@ -109,12 +109,29 @@ impl SplitManager {
             let scope_builder = sb_vec.remove(0);
             sm.build_scope(scope_builder, true);
         }
-        sm
+        sm.build_coroutines(callable)
     }
 
-
-    fn create_scope_builder_temp(&mut self, pools: CArc<ModulePools>) -> ScopeBuilder {
-        ScopeBuilder::new(FrameTokenManager::get_temp_token(), pools)
+    fn build_coroutines(&self, callable: &CallableModule) -> HashMap<u32, CallableModule> {
+        self.coro_callable_info.iter().map(|(token, callable_info)| {
+            let scope = self.coro_scopes.get(token).unwrap();
+            let coroutine = CallableModule {
+                module: Module {
+                    kind: ModuleKind::Function,
+                    entry: *scope,
+                    flags: ModuleFlags::NONE,   // TODO: auto diff not allowed
+                    pools: callable.pools.clone(),
+                },
+                ret_type: CArc::new(Type::Void),    // TODO: coroutine return type: only void allowed
+                args: CBoxedSlice::from(callable_info.args.as_slice()),
+                captures: CBoxedSlice::from(callable_info.captures.as_slice()),
+                subroutines: callable.subroutines.clone(),
+                subroutine_ids: callable.subroutine_ids.clone(),
+                cpu_custom_ops: callable.cpu_custom_ops.clone(),
+                pools: callable.pools.clone(),
+            };
+            (*token, coroutine)
+        }).collect()
     }
 
     // fn pre_process_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {

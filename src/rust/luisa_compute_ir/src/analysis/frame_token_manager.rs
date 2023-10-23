@@ -5,7 +5,6 @@ use lazy_static::lazy_static;
 pub(crate) struct FrameTokenManager {
     frame_token_counter: u32,
     frame_token_occupied: HashSet<u32>,
-    frame_token_temp: u32,
 }
 
 pub(crate) static INVALID_FRAME_TOKEN_MASK: u32 = 0x8000_0000;
@@ -28,20 +27,11 @@ impl FrameTokenManager {
         ftm.frame_token_counter
     }
 
-    pub(crate) fn get_temp_token() -> u32 {
-        let ftm = Self::get_instance();
-        let token = ftm.frame_token_temp;
-        assert!(token >= INVALID_FRAME_TOKEN_MASK, "Temp frame token overflow");
-        ftm.frame_token_temp -= 1;
-        token
-    }
-
     pub(crate) fn get_instance() -> &'static mut Self {
         lazy_static!(
             static ref INSTANCE: FrameTokenManager = FrameTokenManager {
                 frame_token_counter: 0,
                 frame_token_occupied: HashSet::new(),
-                frame_token_temp: u32::MAX,
             };
         );
         let p: *const FrameTokenManager = INSTANCE.deref();

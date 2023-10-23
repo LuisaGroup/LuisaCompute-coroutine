@@ -397,7 +397,8 @@ impl DisplayIR {
                 self.output += format!("CoroResume({})", token).as_str();
             }
             Instruction::Return(v) => {
-                let temp = if is_type_equal(type_, &Type::void()) {
+                let v_type = if v.valid() {v.type_().clone()} else {Type::void()};
+                let temp = if is_type_equal(&v_type, &Type::void()) {
                     String::from("return")
                 } else {
                     format!("return ${}", self.get(v))

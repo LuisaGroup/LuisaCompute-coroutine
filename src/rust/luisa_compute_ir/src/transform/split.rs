@@ -293,13 +293,11 @@ impl SplitManager {
             let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
+            // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
 
             match instruction {
                 // coroutine related instructions
                 Instruction::CoroSplitMark { token } => {
-                    // TODO: different behaviors for loop/if
-                    println!("fuck rust");
                     let (sb_before, sb_after) = self.visit_coro_split_mark(scope_builder, *token, visit_state.present.clone());
                     let visit_state_after = VisitState::new(visit_state.get_bb_ref(), Some(visit_state.present.get().next), None, None);
                     let mut sb_vec = self.visit_bb(pools, visit_state_after, sb_after);
@@ -344,9 +342,7 @@ impl SplitManager {
                     }
                 }
 
-                Instruction::Return(..) => {
-                    println!("visit Return");
-                }
+                Instruction::Return(..) => {}
 
                 // other instructions, just deep clone and change the node_ref to new ones
                 _ => {
@@ -363,6 +359,10 @@ impl SplitManager {
         let coro_suspend = sb_before.builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
+        // create a void type node for termination
+        // TODO: now use Instruction::Return for termination
+        sb_before.builder.return_(INVALID_REF);
+
         // create a new scope builder for the next scope
         // the next frame must have a CoroResume
         let mut sb_after = ScopeBuilder::new(token_next, sb_before.builder.pools.clone());
@@ -371,6 +371,12 @@ impl SplitManager {
         (sb_before, sb_after)
     }
     fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
+        // create a void type node for termination
+        self.coro_suspend(&mut scope_builder, token_next);
+        scope_builder.builder.coro_suspend(token_next);
+        // TODO: now use Instruction::Return for termination
+        scope_builder.builder.return_(INVALID_REF);
+
         scope_builder.finished = true;
         scope_builder
     }
@@ -869,10 +875,12 @@ impl SplitManager {
         dup_callable
     }
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
-        assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
-                "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
+        // // FIXME: multiple duplication in loop transformation
+        // assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
+        //         "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
         let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
         for node in bb.iter() {
+            // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, node.0, node.get().instruction);
             self.duplicate_node(&mut scope_builder, node);
             match node.get().instruction.as_ref() {
                 Instruction::CoroSuspend { .. } => { break; }
@@ -894,17 +902,18 @@ impl SplitManager {
         }
     }
 
-    fn duplicate_node(&mut self, scope_builder: &mut ScopeBuilder, node_ref: NodeRef) -> NodeRef {
+    fn duplicate_node(&mut self, mut scope_builder: &mut ScopeBuilder, node_ref: NodeRef) -> NodeRef {
         if !node_ref.valid() { return INVALID_REF; }
         let frame_token = scope_builder.token;
         let node = node_ref.get();
-        // TODO: for DEBUG
-        if self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token) {
-            println!("\n{:?}\n", self.old2new.nodes.get(&node_ref).unwrap());
-            panic!("Frame token {}, noderef {:?}, node {:?} has already been duplicated", frame_token, node_ref, node);
-        }
-        assert!(!self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token),
-                "Frame token {}, node {:?} has already been duplicated", frame_token, node);
+        // // TODO: for DEBUG
+        // if self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token) {
+        //     println!("\n{:?}\n", self.old2new.nodes.get(&node_ref).unwrap());
+        //     panic!("Frame token {}, noderef {:?}, node {:?} has already been duplicated", frame_token, node_ref, node);
+        // }
+        // // FIXME: multiple duplication in loop transformation
+        // assert!(!self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token),
+        //         "Frame token {}, node {:?} has already been duplicated", frame_token, node);
         let instruction = node.instruction.as_ref();
         let dup_node = match instruction {
             Instruction::Buffer
@@ -1008,7 +1017,14 @@ impl SplitManager {
             }
 
             Instruction::CoroSuspend { token: token_next } => {
-                scope_builder.builder.coro_suspend(*token_next)
+                self.coro_suspend(&mut scope_builder, *token_next);
+                let node_new = scope_builder.builder.coro_suspend(*token_next);
+
+                // create a void type node for termination
+                // TODO: now use Instruction::Return for termination
+                scope_builder.builder.return_(INVALID_REF);
+
+                node_new
             }
             Instruction::CoroSplitMark { .. }
             | Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),

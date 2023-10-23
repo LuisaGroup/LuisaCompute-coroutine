@@ -190,8 +190,11 @@ const RefExpr *FunctionBuilder::kernel_id() noexcept { return _builtin(Type::of<
 const RefExpr *FunctionBuilder::object_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::OBJECT_ID); }
 const RefExpr *FunctionBuilder::warp_lane_count() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_COUNT); }
 const RefExpr *FunctionBuilder::warp_lane_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_ID); }
-
+const RefExpr *FunctionBuilder::coro_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::CORO_ID); }
 inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag tag) noexcept {
+    if (tag == Variable::Tag::CORO_ID) [[unlikely]] {
+        LUISA_ASSERT(_tag == Function::Tag::COROUTINE, "Can only use coro_id in a coroutine!");
+    }
     if (auto iter = std::find_if(
             _builtin_variables.cbegin(), _builtin_variables.cend(),
             [tag](auto &&v) noexcept { return v.tag() == tag; });
@@ -202,8 +205,10 @@ inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag 
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
     if (_tag == Function::Tag::CALLABLE || _tag == Function::Tag::COROUTINE) [[unlikely]] {
-        _arguments.emplace_back(v);
-        _bound_arguments.emplace_back();
+        if (tag != Variable::Tag::CORO_ID) {
+            _arguments.emplace_back(v);
+            _bound_arguments.emplace_back();
+        }
     }
     return _ref(v);
 }
@@ -644,7 +649,7 @@ void FunctionBuilder::set_block_size(uint3 size) noexcept {
             LUISA_ERROR("Func block size must be larger than 0, Current block size is: [{}, {}, {}].",
                         size.x, size.y, size.z);
         }
-        if(size.z > 64)[[unlikely]]{
+        if (size.z > 64) [[unlikely]] {
             LUISA_ERROR("Func block z-axis's size must be less or equal than 64, Current block size is: {}.",
                         size.z);
         }

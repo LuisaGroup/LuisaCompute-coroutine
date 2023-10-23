@@ -294,7 +294,9 @@ struct Func {
         WarpSize,
         WarpLaneId,
         DispatchId,
+        CoroId,
         DispatchSize,
+        CoroInitializer,
         /// (input, grads, ...) -> ()
         PropagateGrad,
         /// (var, idx) -> dvar/dinput_{idx}

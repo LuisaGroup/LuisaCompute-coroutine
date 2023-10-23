@@ -498,7 +498,7 @@ private:
     static_assert(std::is_lvalue_reference_v<FrameType>);
     static_assert(is_coroframe_struct_v<expr_value_t<std::remove_cvref_t<FrameType>>>);
     luisa::shared_ptr<const detail::FunctionBuilder> _builder;
-    luisa::unordered_map<CoroID, Callable<void(FrameType)>> _sub_callables;
+    luisa::unordered_map<CoroID, Callable<void(FrameType, Args...)>> _sub_callables;
     uint _uniform_size;
 
 public:
@@ -529,7 +529,7 @@ public:
         _sub_callables.clear();
         _uniform_size = ShaderDispatchCmdEncoder::compute_uniform_size(_builder->function().unbound_arguments());
         for (auto v : sub_builder) {
-            _sub_callables.insert(std::make_pair(v.first, Callable<void(FrameType)>(v.second)));
+            _sub_callables.insert(std::make_pair(v.first, Callable<void(FrameType, Args...)>(v.second)));
         }
     }
 

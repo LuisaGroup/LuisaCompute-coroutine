@@ -262,7 +262,8 @@ public:
     [[nodiscard]] const RefExpr *warp_lane_count() noexcept;
     /// Return warp lane count
     [[nodiscard]] const RefExpr *warp_lane_id() noexcept;
-
+    /// Return coroutine id in coroframe
+    [[nodiscard]] const RefExpr *coro_id() noexcept;
     // variables
     /// Add local variable of type
     [[nodiscard]] const RefExpr *local(const Type *type) noexcept;

@@ -57,6 +57,7 @@ int main(int argc, char *argv[]) {
             };
             return make_float3(x_grad, y_grad);
         };
+        sin(x);
         auto grad = callable(x, y);
         x_grad_buffer.write(i, grad.x);
         y_grad_buffer.write(i, grad.yz());

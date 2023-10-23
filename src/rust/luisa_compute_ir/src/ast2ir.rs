@@ -278,6 +278,12 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                         let v = builder.call(Func::WarpSize, &[], t);
                         builder.local(v)
                     }
+                    "CORO_ID" => {
+                        let t = <u32 as TypeOf>::type_();
+                        let (builder, _, _) = self.unwrap_ctx();
+                        let v = builder.call(Func::CoroId, &[], t);
+                        builder.local(v)
+                    }
                     "WARP_LANE_ID" => {
                         let t = <u32 as TypeOf>::type_();
                         let (builder, _, _) = self.unwrap_ctx();
@@ -955,6 +961,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "INDIRECT_SET_DISPATCH_KERNEL" => Func::IndirectDispatchSetKernel,
             "INDIRECT_SET_DISPATCH_COUNT" => Func::IndirectDispatchSetCount,
             "SHADER_EXECUTION_REORDER" => Func::ShaderExecutionReorder,
+            "INITIALIZE_COROFRAME" => Func::CoroInitializer,
             _ => panic!("Invalid built-in function: {}.", f),
         };
 

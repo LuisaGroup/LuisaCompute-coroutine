@@ -68,10 +68,10 @@ int main(int argc, char *argv[]) {
            << synchronize();
     static constexpr auto f = [](auto x, auto y) noexcept { return x * sin(y); };
     Coroutine test_coro = [](Var<CoroFrame> &frame, BufferFloat x_buffer, UInt id) noexcept {
+        coro_id();
         auto i = id;
         auto x = x_buffer.read(i);
         $suspend(1u, std::make_pair(x, "x"), std::make_pair(x + i, "y"));
-        
 
         x += 10;
         x_buffer.write(i, x);
@@ -88,6 +88,7 @@ int main(int argc, char *argv[]) {
     Kernel1D gen = [&](BufferFloat x_buffer) noexcept {
         auto id = dispatch_x();
         auto frame = frame_soa->read(dispatch_x());
+        initialize_coroframe(frame, id);
         test_coro(frame, x_buffer, id);
         if ($read_promise(frame, x) == 0u) {
             frame_buffer->write(dispatch_x(), frame);

@@ -590,8 +590,9 @@ pub enum Func {
     WarpSize,
     WarpLaneId,
     DispatchId,
+    CoroId,
     DispatchSize,
-
+    CoroInitializer,
     // Forward AD
     /// (input, grads, ...) -> ()
     PropagateGrad,

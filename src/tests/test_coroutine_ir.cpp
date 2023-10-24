@@ -51,6 +51,7 @@ int main(int argc, char *argv[]) {
                             $suspend(2u);
                         };
                         x = x;
+                        $suspend(3u);   // TODO: without if, unwrap bug may occur
                         x_buffer.write(id, x + n);
                     }
                     $else {

@@ -11,13 +11,7 @@ pub struct Coroutine;
 struct CoroutineImpl {}
 
 impl CoroutineImpl {
-    fn new(model: &Module, state: NodeRef) -> Self {
-        Self {}
-    }
-}
-
-impl Transform for Coroutine {
-    fn transform_callable(&self, callable: CallableModule) -> CallableModule {
+    fn split_coroutine(callable: CallableModule) -> CallableModule {
         println!("{:-^40}", " Before split ");
         let mut display_ir = DisplayIR::new();
         let result = display_ir.display_ir_callable(&callable);
@@ -37,5 +31,11 @@ impl Transform for Coroutine {
 
         coroutine_entry
         // unimplemented!("Coroutine split");
+    }
+}
+
+impl Transform for Coroutine {
+    fn transform_callable(&self, callable: CallableModule) -> CallableModule {
+        CoroutineImpl::split_coroutine(callable)
     }
 }

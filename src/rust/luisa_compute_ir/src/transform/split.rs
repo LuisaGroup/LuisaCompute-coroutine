@@ -205,6 +205,7 @@ impl SplitManager {
 
         // calculate frame state
         let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
+        let mut free_fields: HashMap<CArc<Type>, Vec<usize>> = HashMap::new();
         for token in token_vec.iter() {
             let mut args = self.duplicate_args(*token, pools, &callable.args);
             let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
@@ -226,11 +227,35 @@ impl SplitManager {
                 let node = node_ref.get();
                 node.type_.clone()
             }).collect();
+
+            // TODO: join all fields together or reuse fields of the same type?
+            // reuse fields of the same type
+            let mut used: HashSet<usize> = HashSet::from([0, 1]);
+            let mut new_fields = Vec::new();
             for i in 0..fields.len() {
-                callable_info.old2frame_index.insert(input_var[i], index_counter + i);
+                let field = &fields[i];
+                let free_field = free_fields.entry(field.clone()).or_default();
+                let index = free_field.iter().find(|index| !used.contains(index));
+                let index = if let Some(index) = index {
+                    *index
+                } else {
+                    let index = index_counter;
+                    index_counter += 1;
+                    free_field.push(index);
+                    new_fields.push(field.clone());
+                    index
+                };
+                used.insert(index);
+                callable_info.old2frame_index.insert(input_var[i], index);
             }
-            index_counter += fields.len();
-            frame_fields.extend(fields);
+            frame_fields.extend(new_fields);
+
+            // // join all fields together
+            // for i in 0..fields.len() {
+            //     callable_info.old2frame_index.insert(input_var[i], index_counter + i);
+            // }
+            // index_counter += fields.len();
+            // frame_fields.extend(fields);
         }
 
         let alignment = frame_fields.iter().map(|type_| type_.alignment()).max().unwrap();

@@ -1581,7 +1581,7 @@ void CUDACodegenAST::visit(const Type *type) noexcept {
         type != _ray_query_any_type){
             _scratch<< "using ";
             _emit_type_name(type);
-            _scratch<<" = ";
+            _scratch<<" = struct ";
             _emit_type_name(type->members()[0]);
             _scratch<<";\n\n";
     }

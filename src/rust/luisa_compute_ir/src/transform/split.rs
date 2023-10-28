@@ -299,7 +299,7 @@ impl SplitManager {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
         builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes()));   // TODO: for DEBUG
-        let old2frame_index = self.coro_callable_info.get(&token_next).unwrap().old2frame_index.clone();
+        let old2frame_index = &self.coro_callable_info.get(&token_next).unwrap().old2frame_index;
         let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
         // store frame state
         for (old_node, index) in old2frame_index.iter() {
@@ -308,7 +308,8 @@ impl SplitManager {
                 frame_node,
                 &[index_node],
                 self.frame_fields[*index].clone());
-            let value = self.old2new.nodes.get(old_node).unwrap().get(&token).unwrap().clone();
+            let old2new_map = self.old2new.nodes.get(old_node).unwrap();
+            let value = old2new_map.get(&token).unwrap().clone();
             let value = if value.is_lvalue() {
                 builder.load(value)
             } else {
@@ -335,7 +336,7 @@ impl SplitManager {
             let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
+            println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
 
             match instruction {
                 // coroutine related instructions

@@ -26,6 +26,7 @@ impl Transform for Coroutine {
         let mut coro_frame_analyser = CoroFrameAnalyser::new();
         coro_frame_analyser.analyse_callable(&callable);
         println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
+        println!("{}", coro_frame_analyser.display_continuations());
 
         let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
         println!("{:-^40}", " After split ");

@@ -192,6 +192,16 @@ impl CoroFrameAnalyser {
         output
     }
 
+    pub(crate) fn display_continuations(&self) -> String {
+        let mut output = String::from("Continuations: {\n");
+        let continuation_str: Vec<_> = self.continuations.iter().map(|(token, continuation)| {
+            format!("\t{:?} => {} => {:?}", continuation.prev, token, continuation.next)
+        }).collect();
+        output += &continuation_str.join("\n");
+        output += "\n}";
+        output
+    }
+
     fn calculate_frame(&mut self) {
         let mut changed = true;
         while changed {
@@ -289,7 +299,29 @@ impl CoroFrameAnalyser {
 
                 Instruction::CoroSuspend { .. }
                 | Instruction::CoroResume { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),
-                _ => {}
+
+                Instruction::Return(_) => {
+                    // TODO
+                }
+                Instruction::GenericLoop { .. }
+                | Instruction::Break
+                | Instruction::Continue => {
+                    // TODO
+                    // unreachable!("{:?} should no longer exist after CCF", instruction)
+                }
+
+                Instruction::Local { .. }
+                | Instruction::UserData(_)
+                | Instruction::Const(_)
+                | Instruction::Update { .. }
+                | Instruction::Call(_, _)
+                | Instruction::Phi(_)
+                | Instruction::RayQuery { .. }
+                | Instruction::Print { .. }
+                | Instruction::Comment(_) => {}
+
+                Instruction::AdDetach(_)
+                | Instruction::AdScope { .. } => unimplemented!("Auto-differentiate is not compatible with Coroutine"),
             }
         });
         self.split_possibility.insert(bb.as_ptr(), split_poss);
@@ -300,15 +332,15 @@ impl CoroFrameAnalyser {
         self.visited_coro_split_mark.insert(node_ref);
         fb_before.finished = true;
 
+        // record continuation
+        self.continuations.entry(fb_before.token).or_insert(Continuation::new(fb_before.token)).next.insert(token_next);
+        self.continuations.entry(token_next).or_insert(Continuation::new(token_next)).prev.insert(fb_before.token);
+
         if visited {
             // coro suspend
             vec![fb_before]
         } else {
             // coro split mark
-            // record continuation
-            self.continuations.entry(fb_before.token).or_insert(Continuation::new(fb_before.token)).next.insert(token_next);
-            self.continuations.entry(token_next).or_insert(Continuation::new(token_next)).prev.insert(fb_before.token);
-
             // create a new frame builder for the next scope
             let fb_next = FrameBuilder::new(token_next);
             vec![fb_before, fb_next]
@@ -363,18 +395,21 @@ impl CoroFrameAnalyser {
 
         let mut visit_result = VisitResult::new();
 
+        let split_poss_true = self.split_possibility.get(&true_branch.as_ptr()).unwrap().clone();
+        let split_poss_false = self.split_possibility.get(&false_branch.as_ptr()).unwrap().clone();
+
         // split in true/false_branch
-        visit_result.split_possibly = true;
+        visit_result.split_possibly = split_poss_true.possibly || split_poss_false.possibly;
         let mut fb_after_vec = vec![];
 
         let mut all_branches_finished = true;
         // process true branch
         let fb_true = self.visit_branch_split(frame_builder.token, true_branch, &mut fb_after_vec);
-        assert_eq!(fb_true.finished, self.split_possibility.get(&true_branch.as_ptr()).unwrap().definitely);
+        assert_eq!(fb_true.finished, split_poss_true.definitely);
         all_branches_finished &= fb_true.finished;
         // process false branch
         let fb_false = self.visit_branch_split(frame_builder.token, false_branch, &mut fb_after_vec);
-        assert_eq!(fb_false.finished, self.split_possibility.get(&false_branch.as_ptr()).unwrap().definitely);
+        assert_eq!(fb_false.finished, split_poss_false.definitely);
         all_branches_finished &= fb_false.finished;
         frame_builder.finished |= all_branches_finished;
 
@@ -427,11 +462,6 @@ impl CoroFrameAnalyser {
             }
         }
         visit_result
-    }
-    fn visit_bb_no_split(&mut self, mut frame_builder: FrameBuilder, visit_state: VisitState) -> FrameBuilder {
-        let mut fb_vec = self.visit_bb(frame_builder, visit_state);
-        assert_eq!(fb_vec.len(), 1);
-        fb_vec.remove(0)
     }
     fn visit_bb(&mut self, mut frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
         while visit_state.present != visit_state.end {

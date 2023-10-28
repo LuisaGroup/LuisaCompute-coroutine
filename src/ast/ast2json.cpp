@@ -629,6 +629,7 @@ private:
                     t["element"] = _type_index(type->element());
                     break;
                 }
+                case Type::Tag::COROFRAME:
                 case Type::Tag::CUSTOM: {
                     t["id"] = type->description();
                     break;
@@ -921,6 +922,7 @@ private:
             case Statement::Tag::RAY_QUERY: _convert_ray_query_stmt(j, static_cast<const RayQueryStmt *>(stmt)); break;
             case Statement::Tag::AUTO_DIFF: _convert_autodiff_stmt(j, static_cast<const AutoDiffStmt *>(stmt)); break;
             case Statement::Tag::SUSPEND: _convert_suspend_stmt(j, static_cast<const SuspendStmt *>(stmt)); break;
+            case Statement::Tag::COROBIND: _convert_corobind_stmt(j, static_cast<const CoroBindStmt *>(stmt)); break;
         }
         return j;
     }
@@ -999,6 +1001,11 @@ private:
     }
     void _convert_suspend_stmt(JSON &j, const SuspendStmt *stmt) noexcept {
         j["id"] = stmt->id();
+    }
+    void _convert_corobind_stmt(JSON &j, const CoroBindStmt *stmt) noexcept {
+        j["suspend_id"] = stmt->suspend_id();
+        j["var_id"] = stmt->var_id();
+        j["expression"] = _convert_expr(stmt->expression());
     }
 
 public:

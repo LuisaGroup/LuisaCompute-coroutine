@@ -68,13 +68,13 @@ template<typename T>
 struct is_custom_struct : std::false_type {};
 
 template<typename T>
-struct is_internal_custom_struct : std::false_type {};
+struct is_coroframe_struct : std::false_type {};
 
 template<typename T>
 constexpr auto is_custom_struct_v = is_custom_struct<T>::value;
 
 template<typename T>
-constexpr auto is_internal_custom_struct_v = is_internal_custom_struct<T>::value;
+constexpr auto is_coroframe_struct_v = is_coroframe_struct<T>::value;
 
 namespace detail {
 
@@ -305,6 +305,7 @@ public:
         BINDLESS_ARRAY,
         ACCEL,
 
+        COROFRAME,
         CUSTOM
     };
 
@@ -366,6 +367,9 @@ public:
     /// Return custom type with the specified name
     [[nodiscard]] static const Type *custom(luisa::string_view name) noexcept;
 
+    /// Return custom type for coroframe
+    [[nodiscard]] static const Type *coroframe(luisa::string_view name) noexcept;
+
     /// Construct Type object from description
     /// @param description Type description in the following syntax: \n
     ///   TYPE := DATA | RESOURCE | CUSTOM \n
@@ -410,10 +414,13 @@ public:
     [[nodiscard]] uint dimension() const noexcept;
     [[nodiscard]] luisa::span<const Type *const> members() const noexcept;
     [[nodiscard]] const Type *element() const noexcept;
-    
+    [[nodiscard]] const Type *corotype() const noexcept;
     ///change the corresponding Type to another Type in registery
     void update_from(const Type *type);
-
+    /// add a member with name and type
+    size_t add_member(const luisa::string &name) noexcept;
+    /// get member index with string
+    [[nodiscard]] size_t member(const luisa::string &name) const noexcept;
     /// Scalar = bool || float || int || uint
     [[nodiscard]] bool is_scalar() const noexcept;
     [[nodiscard]] bool is_bool() const noexcept;
@@ -449,6 +456,7 @@ public:
     [[nodiscard]] bool is_accel() const noexcept;
     [[nodiscard]] bool is_resource() const noexcept;
     [[nodiscard]] bool is_custom() const noexcept;
+    [[nodiscard]] bool is_coroframe() const noexcept;
 };
 
 }// namespace luisa::compute

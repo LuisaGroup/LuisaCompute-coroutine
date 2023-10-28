@@ -44,14 +44,14 @@ int main(int argc, char *argv[]) {
                     $if (id < 5u) {
                         x_buffer.write(id, x + 1000u);
                         $if (i == 0u) {
-                            $suspend(1u);
+                            $suspend("1");
                         };
                         x = x_buffer.read(id);
                         $if (i == 1u) {
-                            $suspend(2u);
+                            $suspend("2");
                         };
                         x = x;
-                        $suspend(3u);// TODO: without if, unwrap bug may occur
+                        $suspend("3u");// TODO: without if, unwrap bug may occur
                         x_buffer.write(id, x + n);
                     }
                     $else {

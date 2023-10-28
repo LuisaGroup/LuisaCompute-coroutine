@@ -1572,19 +1572,6 @@ void CUDACodegenAST::visit(const Type *type) noexcept {
         }
         _scratch << "}\n\n";
     }
-    if(type->is_custom() &&
-        type != _ray_type &&
-        type != _triangle_hit_type &&
-        type != _procedural_hit_type &&
-        type != _committed_hit_type &&
-        type != _ray_query_all_type &&
-        type != _ray_query_any_type){
-            _scratch<< "using ";
-            _emit_type_name(type);
-            _scratch<<" = struct ";
-            _emit_type_name(type->members()[0]);
-            _scratch<<";\n\n";
-    }
 }
 
 void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
@@ -1642,13 +1629,15 @@ void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
                 _scratch << "LCRayQueryAny";
             } else if (type == _indirect_buffer_type) {
                 _scratch << "LCIndirectBuffer";
-            } else if (!type->members().empty()) {
-                _scratch << type->description();
-            } else {
+            }  else {
                 LUISA_ERROR_WITH_LOCATION(
                     "Unsupported custom type: {}.",
                     type->description());
             }
+            break;
+        }
+        case Type::Tag::COROFRAME:{
+            _emit_type_name(type->corotype());
             break;
         }
         default: break;

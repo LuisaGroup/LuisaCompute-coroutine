@@ -126,6 +126,9 @@ impl UsageDetector {
                 self.detect_block(on_procedural_hit);
                 self.detect_block(on_triangle_hit);
             }
+            crate::ir::Instruction::CoroRegister { token, value, var } => {
+                self.mark(*value, UsageMark::READ);
+            }
             crate::ir::Instruction::GenericLoop {
                 prepare,
                 cond,
@@ -167,9 +170,10 @@ impl UsageDetector {
             }
             crate::ir::Instruction::Comment(_) => {}
 
-            crate::ir::Instruction::CoroSplitMark{..} => {}
-            crate::ir::Instruction::CoroSuspend{..}
-            | crate::ir::Instruction::CoroResume{..} => {
+            crate::ir::Instruction::CoroSplitMark { .. } => {}
+            crate::ir::Instruction::CoroRegister { .. } => {}
+            crate::ir::Instruction::CoroSuspend { .. }
+            | crate::ir::Instruction::CoroResume { .. } => {
                 unreachable!("Unexpected coroutine instruction in UsageDetector::detect_node");
             }
             crate::ir::Instruction::Print { .. } => {}

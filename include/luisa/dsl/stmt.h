@@ -1,6 +1,7 @@
 #pragma once
 
 #include "luisa/core/basic_traits.h"
+#include "luisa/core/concepts.h"
 #include <cassert>
 #include <luisa/dsl/var.h>
 #include <luisa/dsl/operators.h>
@@ -34,26 +35,26 @@ public:
 
     /// Add statement to false branch. f is a function.
     template<typename False>
-    void else_(False &&f) && noexcept {
+    void else_(False &&f) &&noexcept {
         FunctionBuilder::current()->with(_stmt->false_branch(), std::forward<False>(f));
     }
 
     /// Add statement to true branch. t is a function. Return this.
     template<typename True>
-    auto operator%(True &&t) && noexcept {
+    auto operator%(True &&t) &&noexcept {
         FunctionBuilder::current()->with(_stmt->true_branch(), std::forward<True>(t));
         return *this;
     }
 
     /// Add statement to false branch. Same as else_ but no return.
     template<typename False>
-    void operator/(False &&f) && noexcept {
+    void operator/(False &&f) &&noexcept {
         IfStmtBuilder{*this}.else_(std::forward<False>(f));
     }
 
     /// Add else-if branch. Return builder of else-if statement.
     template<typename LazyElIfCond>
-    [[nodiscard]] auto operator*(LazyElIfCond &&elif_cond) && noexcept {
+    [[nodiscard]] auto operator*(LazyElIfCond &&elif_cond) &&noexcept {
         return FunctionBuilder::current()->with(_stmt->false_branch(), [&elif_cond] {
             return IfStmtBuilder{elif_cond()};
         });
@@ -77,7 +78,7 @@ public:
 
     /// Add body statement. body is a function. Return this.
     template<typename Body>
-    auto operator/(Body &&body) && noexcept {
+    auto operator/(Body &&body) &&noexcept {
         FunctionBuilder::current()->with(
             _stmt->body(), std::forward<Body>(body));
         return *this;
@@ -85,7 +86,7 @@ public:
 
     /// Add body statement. Same as operator/, but no return.
     template<typename Body>
-    void operator%(Body &&body) && noexcept {
+    void operator%(Body &&body) &&noexcept {
         LoopStmtBuilder{*this} / std::forward<Body>(body);
     }
 };
@@ -108,7 +109,7 @@ public:
 
     /// Add body statement
     template<typename Body>
-    void operator%(Body &&body) && noexcept {
+    void operator%(Body &&body) &&noexcept {
         FunctionBuilder::current()->with(
             _stmt->body(), std::forward<Body>(body));
     }
@@ -134,7 +135,7 @@ public:
 
     /// Add body of case statement. Will automatically add break at the end.
     template<typename Body>
-    void operator%(Body &&body) && noexcept {
+    void operator%(Body &&body) &&noexcept {
         FunctionBuilder::current()->with(_stmt->body(), [&body] {
             body();
             FunctionBuilder::current()->break_();
@@ -160,7 +161,7 @@ public:
 
     /// Add body of default statement. Will automatically add break at the end.
     template<typename Body>
-    void operator%(Body &&body) && noexcept {
+    void operator%(Body &&body) &&noexcept {
         FunctionBuilder::current()->with(_stmt->body(), [&body] {
             body();
             FunctionBuilder::current()->break_();
@@ -191,7 +192,7 @@ public:
 
     /// Add case statement. Return this
     template<typename T, typename Body>
-    auto case_(T &&case_cond, Body &&case_body) && noexcept {
+    auto case_(T &&case_cond, Body &&case_body) &&noexcept {
         FunctionBuilder::current()->with(_stmt->body(), [&case_cond, &case_body] {
             SwitchCaseStmtBuilder{case_cond} % std::forward<Body>(case_body);
         });
@@ -200,7 +201,7 @@ public:
 
     /// Add default statement.
     template<typename Default>
-    auto default_(Default &&d) && noexcept {
+    auto default_(Default &&d) &&noexcept {
         FunctionBuilder::current()->with(_stmt->body(), [&d] {
             SwitchDefaultStmtBuilder{} % std::forward<Default>(d);
         });
@@ -208,7 +209,7 @@ public:
 
     /// Set body
     template<typename Body>
-    void operator%(Body &&body) && noexcept {
+    void operator%(Body &&body) &&noexcept {
         FunctionBuilder::current()->with(_stmt->body(), std::forward<Body>(body));
     }
 };
@@ -216,7 +217,7 @@ public:
 /// Invoke statement body
 struct StmtBodyInvoke {
     template<typename F>
-    void operator%(F &&body) && noexcept {
+    void operator%(F &&body) &&noexcept {
         luisa::invoke(std::forward<F>(body));
     }
 };
@@ -459,11 +460,29 @@ inline void return_(T &&t) noexcept {
         detail::extract_expression(std::forward<T>(t)));
 }
 
-inline void suspend(uint suspend_id) noexcept {
-    detail::FunctionBuilder::current()->suspend_(
-        suspend_id);
+auto get_var_list() noexcept {
+    return luisa::vector<std::pair<const Expression *, luisa::string>>{};
 }
-
+template<typename U, typename V, typename... Args>
+auto get_var_list(std::pair<U, V> &&p, Args &&...args) noexcept {
+    auto rets = get_var_list(std::forward<Args>(args)...);
+    rets.push_back(std::make_pair(detail::extract_expression(p.first), luisa::string{p.second}));
+    return rets;
+}
+template<typename... Args>
+inline void suspend(luisa::string &&suspend_id, Args &&...args) noexcept {
+    auto rets = get_var_list(std::forward<Args>(args)...);
+    auto id = detail::FunctionBuilder::current()->suspend_(suspend_id);
+    for (auto &ret : rets) {
+        detail::FunctionBuilder::current()->bind_promise_(
+            id, ret.first, ret.second);
+    }
+}
+template<typename T, typename S>
+inline auto read_promise(T &&t, S &&name) noexcept {
+    return detail::FunctionBuilder::current()->read_promise_(
+        detail::extract_expression(std::forward<T>(t)), std::forward<S>(name));
+}
 inline void return_() noexcept {
     detail::FunctionBuilder::current()->return_();
 }

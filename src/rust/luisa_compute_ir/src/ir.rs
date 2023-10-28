@@ -606,7 +606,9 @@ pub enum Func {
     WarpSize,
     WarpLaneId,
     DispatchId,
+    CoroId,
     DispatchSize,
+    CoroInitializer,
 
     // Forward AD
     /// (input, grads, ...) -> ()
@@ -1226,6 +1228,11 @@ pub enum Instruction {
     CoroResume {
         token: u32,
     },
+    CoroRegister {
+        token: u32,
+        value: NodeRef,
+        var: u32,
+    },
 }
 
 impl Debug for Instruction {
@@ -1292,6 +1299,7 @@ impl Debug for Instruction {
             Instruction::CoroSplitMark { token } => { write!(f, "CoroSplitMark({})", token) }
             Instruction::CoroSuspend { token } => { write!(f, "CoroSuspend({})", token) }
             Instruction::CoroResume { token } => { write!(f, "CoroResume({})", token) }
+            Instruction::CoroRegister{ token,value,var} =>{ write!(f, "CoroSuspend(at:{},val:{},var:{})",token,value.0,var)}
         }
     }
 }
@@ -2205,6 +2213,7 @@ impl ModuleDuplicator {
             Instruction::Comment(msg) => builder.comment(msg.clone()),
             Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
             Instruction::CoroSuspend { .. }
+            | Instruction::CoroRegister { .. }
             | Instruction::CoroResume { .. } => {
                 unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
             }
@@ -2739,6 +2748,15 @@ impl IrBuilder {
         );
         self.append(new_node);
         new_node
+    }
+    pub fn coro_register(&mut self, token: u32, value: NodeRef, var: u32) -> NodeRef {
+        let node = Node::new(
+            CArc::new(Instruction::CoroRegister { token, value, var }),
+            Type::void(),
+        );
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
     }
     pub fn coro_resume(&mut self, token: u32) -> NodeRef {
         let new_node = new_node(

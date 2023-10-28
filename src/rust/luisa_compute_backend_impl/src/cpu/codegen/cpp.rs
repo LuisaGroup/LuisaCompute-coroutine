@@ -1,7 +1,8 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ffi::CString, default,
+    default,
+    ffi::CString,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -1785,6 +1786,12 @@ impl<'a> FunctionEmitter<'a> {
             Instruction::Comment(comment) => {
                 self.write_ident();
                 writeln!(&mut self.body, "/* {} */", comment.to_string()).unwrap();
+            }
+            Instruction::CoroSuspend { .. }
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroRegister { .. }
+            | Instruction::CoroSplitMark { .. } => {
+                panic!("Coroutine intrinsics should be lowered before codegen")
             }
             Instruction::Print { fmt, args } => {
                 todo!()

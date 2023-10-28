@@ -296,7 +296,9 @@ struct Func {
         WarpSize,
         WarpLaneId,
         DispatchId,
+        CoroId,
         DispatchSize,
+        CoroInitializer,
         /// (input, grads, ...) -> ()
         PropagateGrad,
         /// (var, idx) -> dvar/dinput_{idx}
@@ -728,6 +730,7 @@ struct Instruction {
         CoroSplitMark,
         CoroSuspend,
         CoroResume,
+        CoroRegister,
     };
 
     struct Local_Body {
@@ -825,6 +828,12 @@ struct Instruction {
         uint32_t token;
     };
 
+    struct CoroRegister_Body {
+        uint32_t token;
+        NodeRef value;
+        uint32_t var;
+    };
+
     Tag tag;
     union {
         Local_Body local;
@@ -847,6 +856,7 @@ struct Instruction {
         CoroSplitMark_Body coro_split_mark;
         CoroSuspend_Body coro_suspend;
         CoroResume_Body coro_resume;
+        CoroRegister_Body coro_register;
     };
 };
 

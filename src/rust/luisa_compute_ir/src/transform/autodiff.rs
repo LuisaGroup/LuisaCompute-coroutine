@@ -1775,7 +1775,8 @@ impl Backward {
             crate::ir::Instruction::Return(_) => {
                 panic!("should not have return in autodiff section")
             }
-            Instruction::CoroSplitMark { .. } => {
+            Instruction::CoroRegister { .. }
+            | Instruction::CoroSplitMark { .. } => {
                 unimplemented!("Coroutine is not supported yet");
             }
             Instruction::CoroSuspend { .. }

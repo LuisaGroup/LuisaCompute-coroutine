@@ -1,6 +1,8 @@
 #pragma once
 
+#include "luisa/ast/type.h"
 #include "luisa/core/logging.h"
+#include "luisa/dsl/expr_traits.h"
 #include <type_traits>
 #include <luisa/core/stl/memory.h>
 #include <luisa/core/stl/optional.h>
@@ -148,7 +150,7 @@ class FunctionBuilder;
 transform_function(Function callable) noexcept;
 
 [[nodiscard]] LC_DSL_API luisa::shared_ptr<const FunctionBuilder>
-transform_coroutine(Type* corotype, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function callable) noexcept;
+transform_coroutine(Type *corotype, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function callable) noexcept;
 
 }// namespace detail
 
@@ -253,8 +255,7 @@ public                                                           \
     Kernel<N, Args...> {                                         \
         using Kernel<N, Args...>::Kernel;                        \
         Kernel##N##D(Kernel<N, Args...> k) noexcept              \
-            : Kernel<N, Args...> { std::move(k._builder) }       \
-        {}                                                       \
+            : Kernel<N, Args...>{std::move(k._builder)} {}       \
         Kernel##N##D &operator=(Kernel<N, Args...> k) noexcept { \
             this->_builder = std::move(k._builder);              \
             return *this;                                        \
@@ -328,7 +329,18 @@ public:
         return luisa::span{_args.data(), _arg_count};
     }
 };
-
+class CoroutineInvoke : public ShaderInvokeBase {
+    CoroutineInvoke(uint64_t handle, size_t arg_count, size_t uniform_size) noexcept
+        : ShaderInvokeBase{handle, arg_count, uniform_size} {}
+    [[nodiscard]] auto dispatch(uint size_x) && noexcept {
+        return this->_parallelize(uint3{size_x, 1u, 1u});
+    }
+    [[nodiscard]] auto dispatch(const IndirectDispatchBuffer &indirect_buffer,
+                                uint32_t offset = 0,
+                                uint32_t max_dispatch_size = std::numeric_limits<uint32_t>::max()) && noexcept {
+        return this->_parallelize(indirect_buffer, offset, max_dispatch_size).build();
+    }
+};
 }// namespace detail
 
 /// Callable class. Callable<T> is not allowed, unless T is a function type.
@@ -344,7 +356,8 @@ struct is_callable<Callable<T>> : std::true_type {};
 template<typename Ret, typename... Args>
 class Callable<Ret(Args...)> {
     friend class CallableLibrary;
-    template<class T> friend class Coroutine;
+    template<class T>
+    friend class Coroutine;
     static_assert(
         std::negation_v<std::disjunction<
             is_buffer_or_view<Ret>,
@@ -468,7 +481,6 @@ public:
     }
 };
 
-
 /// Coroutine class. Coroutine<T> is not allowed, unless T is a function type.
 template<typename T>
 class Coroutine {
@@ -477,52 +489,48 @@ class Coroutine {
 
 template<typename T>
 struct is_callable<Coroutine<T>> : std::true_type {};
-template<typename Ret, typename... Args>
-class Coroutine<Ret(Args...)> {
-    static_assert(
-        std::negation_v<std::disjunction<
-            is_buffer_or_view<Ret>,
-            is_image_or_view<Ret>,
-            is_volume_or_view<Ret>>>,
-        "Coroutines may not return buffers, "
-        "images or volumes (or their views).");
+template<typename FrameType, typename... Args>
+class Coroutine<void(FrameType, Args...)> {
     static_assert(std::negation_v<std::disjunction<std::is_pointer<Args>...>>);
 
 private:
-    using CoroID=uint;
-    using FrameType = std::tuple_element_t<0, std::tuple<Args...>>;
+    using CoroID = uint;
     static_assert(std::is_lvalue_reference_v<FrameType>);
+    static_assert(is_coroframe_struct_v<expr_value_t<std::remove_cvref_t<FrameType>>>);
     luisa::shared_ptr<const detail::FunctionBuilder> _builder;
-    luisa::unordered_map<CoroID, Callable<Ret(FrameType)>> _sub_callables;
+    luisa::unordered_map<CoroID, Callable<void(FrameType, Args...)>> _sub_callables;
+    uint _uniform_size;
 
-    
 public:
     template<typename Def>
         requires std::negation_v<is_callable<std::remove_cvref_t<Def>>> &&
                  std::negation_v<is_kernel<std::remove_cvref_t<Def>>>
     Coroutine(Def &&f) noexcept {
         auto ast = detail::FunctionBuilder::define_coroutine([&f] {
-            static_assert(std::is_invocable_v<Def, detail::prototype_to_creation_t<Args>...>);
+            static_assert(std::is_invocable_v<Def, detail::prototype_to_creation_t<FrameType>, detail::prototype_to_creation_t<Args>...>);
             auto create = []<size_t... i>(auto &&def, std::index_sequence<i...>) noexcept {
-                using arg_tuple = std::tuple<Args...>;
-                using var_tuple = std::tuple<Var<std::remove_cvref_t<Args>>...>;
-                using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<Args>...>;
+                using arg_tuple = std::tuple<FrameType, Args...>;
+                using var_tuple = std::tuple<Var<std::remove_cvref_t<FrameType>>,
+                                             Var<std::remove_cvref_t<Args>>...>;
+                using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<FrameType>, detail::prototype_to_creation_tag_t<Args>...>;
+                
                 auto args = detail::create_argument_definitions<var_tuple, tag_tuple>(std::tuple<>{});
-                static_assert(std::tuple_size_v<decltype(args)> == sizeof...(Args));
+                static_assert(std::tuple_size_v<decltype(args)> == 1 + sizeof...(Args));
                 return luisa::invoke(std::forward<decltype(def)>(def),
                                      static_cast<detail::prototype_to_creation_t<
                                          std::tuple_element_t<i, arg_tuple>> &&>(std::get<i>(args))...);
             };
-            static_assert(std::is_same_v<Ret, void>,"coroutine should return void");
-            create(std::forward<Def>(f), std::index_sequence_for<Args...>{});
+            //static_assert(std::is_same_v<Ret, void>, "coroutine should return void");
+            create(std::forward<Def>(f), std::index_sequence_for<FrameType, Args...>{});
             detail::FunctionBuilder::current()->return_(nullptr);// to check if any previous $return called with non-void types
         });
-        Type *frame = const_cast<Type*>(Type::of<expr_value_t<FrameType>>());
+        Type *frame = const_cast<Type *>(Type::of<expr_value_t<FrameType>>());
         auto sub_builder = luisa::unordered_map<uint, luisa::shared_ptr<const detail::FunctionBuilder>>{};
-        _builder=detail::transform_coroutine(frame,sub_builder,ast->function());
+        _builder = detail::transform_coroutine(frame, sub_builder, ast->function());
         _sub_callables.clear();
+        _uniform_size = ShaderDispatchCmdEncoder::compute_uniform_size(_builder->function().unbound_arguments());
         for (auto v : sub_builder) {
-            _sub_callables.insert(std::make_pair(v.first, Callable<Ret(FrameType)>(v.second)));
+            _sub_callables.insert(std::make_pair(v.first, Callable<void(FrameType, Args...)>(v.second)));
         }
     }
 
@@ -532,23 +540,29 @@ public:
     [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
 
     //Call from start of coroutine
-    auto operator()(detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+    auto operator()(detail::prototype_to_callable_invocation_t<FrameType> type,
+                    detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
 
         detail::CallableInvoke invoke;
+        static_cast<void>((invoke << type));
         static_cast<void>((invoke << ... << args));
         detail::FunctionBuilder::current()->call(
-                _builder->function(), invoke.args());
+            _builder->function(), invoke.args());
     }
-
+    auto operator()(detail::prototype_to_shader_invocation_t<Args>... args) const noexcept {
+        using invoke_type = detail::CoroutineInvoke;
+        auto arg_count = (0u + ... + detail::shader_argument_encode_count<Args>::value);
+        invoke_type invoke{arg_count, _uniform_size};
+        static_cast<void>((invoke << ... << args));
+        return invoke;
+    }
     //Get Callable from certain suspend point
     auto operator[](CoroID index) const noexcept {
         auto builder = _sub_callables.find(index);
-        LUISA_ASSERT(builder!=_sub_callables.end(),"coroutine index out of range");
+        LUISA_ASSERT(builder != _sub_callables.end(), "coroutine index out of range");
         return builder->second;
-        //return Callable<Ret(Args...)>{builder->second};
     };
 };
-
 namespace detail {
 
 template<typename R, typename... Args>

@@ -1,5 +1,5 @@
-use std::{collections::HashSet, ops::Deref};
 use bitflags::Flags;
+use std::{collections::HashSet, ops::Deref};
 
 use indexmap::IndexMap;
 use smallvec::SmallVec;
@@ -159,9 +159,9 @@ impl ForwardAdTransform {
                 let grad = duals[idx as usize];
                 assert!(grad.is_lvalue());
                 #[allow(unused_variables)]
-                    let f = ();
+                let f = ();
                 #[allow(unused_variables)]
-                    let args = ();
+                let args = ();
                 // this operation is unsafe as it invalidates f and args
                 #[allow(unused_unsafe)]
                 unsafe {
@@ -622,6 +622,7 @@ impl ForwardAdTransform {
             Instruction::CoroSplitMark { .. } => {todo!()}
             Instruction::CoroSuspend { .. } => {todo!()}
             Instruction::CoroResume { .. } => {todo!()}
+            Instruction::CoroRegister { .. } => {todo!()}
         }
     }
     fn transform_block(&mut self, block: &Pooled<BasicBlock>, builder: &mut IrBuilder) {

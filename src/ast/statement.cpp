@@ -29,6 +29,12 @@ uint64_t ReturnStmt::_compute_hash() const noexcept {
 uint64_t SuspendStmt::_compute_hash() const noexcept {
     return luisa::hash<uint>{}(_id);
 }
+uint64_t CoroBindStmt::_compute_hash() const noexcept {
+    auto id1 = luisa::hash<uint>{}(_suspend_id);
+    auto id2 = luisa::hash<uint>{}(_var_id);
+    auto expr = _expr->hash();
+    return hash_combine({id1, id2, expr});
+}
 
 uint64_t ScopeStmt::_compute_hash() const noexcept {
     auto h = hash64_default_seed;
@@ -103,8 +109,10 @@ void StmtVisitor::visit(const AutoDiffStmt *stmt) {
     // handled by the IR when reaching the backend
     LUISA_ERROR_WITH_LOCATION("AutoDiffStmt is not supported.");
 }
-void StmtVisitor::visit(const SuspendStmt* stmt) {
-	LUISA_ERROR_WITH_LOCATION("SuspendStmt is not supported.");
+void StmtVisitor::visit(const SuspendStmt *stmt) {
+    LUISA_ERROR_WITH_LOCATION("SuspendStmt is not supported.");
+}
+void StmtVisitor::visit(const CoroBindStmt *stmt) {
+    LUISA_ERROR_WITH_LOCATION("CoroBindStmt is not supported.");
 }
 }// namespace luisa::compute
-

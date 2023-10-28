@@ -404,6 +404,7 @@ impl ToSSAImpl {
             Instruction::Return(_) => {
                 panic!("call LowerControlFlow before ToSSA");
             }
+            Instruction::CoroRegister { .. }|
             Instruction::CoroSplitMark { .. } => {
                 unimplemented!("Coroutine is not supported yet");
             }

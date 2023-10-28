@@ -85,13 +85,9 @@ impl DisplayIR {
     }
 
     pub fn display_existent_nodes(&self, nodes: &HashSet<NodeRef>) -> String {
-        let mut node_cnts: Vec<_> = nodes.iter().map(|node| {
-            self.get(node)
-        }).collect();
+        let mut node_cnts: Vec<_> = nodes.iter().map(|node| self.get(node)).collect();
         node_cnts.sort_unstable();
-        let mut node_cnts: Vec<_> = node_cnts.iter().map(|node| {
-            format!("${}", node)
-        }).collect();
+        let mut node_cnts: Vec<_> = node_cnts.iter().map(|node| format!("${}", node)).collect();
         format!("{{{}}}", node_cnts.join(", "))
     }
 
@@ -161,31 +157,43 @@ impl DisplayIR {
         self.add_ident(ident);
         match instruction.as_ref() {
             Instruction::Buffer => {
-                let temp = format!("${}: Buffer<{}> [param]", self.get_or_insert(&node), type_, );
+                let temp = format!("${}: Buffer<{}> [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Bindless => {
-                let temp = format!("${}: Bindless<{}> [param]", self.get_or_insert(&node), type_, );
+                let temp = format!(
+                    "${}: Bindless<{}> [param]",
+                    self.get_or_insert(&node),
+                    type_,
+                );
                 self.output += temp.as_str();
             }
             Instruction::Texture2D => {
-                let temp = format!("${}: Texture2D<{}> [param]", self.get_or_insert(&node), type_, );
+                let temp = format!(
+                    "${}: Texture2D<{}> [param]",
+                    self.get_or_insert(&node),
+                    type_,
+                );
                 self.output += temp.as_str();
             }
             Instruction::Texture3D => {
-                let temp = format!("${}: Texture3D<{}> [param]", self.get_or_insert(&node), type_, );
+                let temp = format!(
+                    "${}: Texture3D<{}> [param]",
+                    self.get_or_insert(&node),
+                    type_,
+                );
                 self.output += temp.as_str();
             }
             Instruction::Accel => {
-                let temp = format!("${}: Accel<{}> [param]", self.get_or_insert(&node), type_, );
+                let temp = format!("${}: Accel<{}> [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Shared => {
-                let temp = format!("${}: Shared<{}> [param]", self.get_or_insert(&node), type_, );
+                let temp = format!("${}: Shared<{}> [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Uniform => {
-                let temp = format!("${}: {} [param]", self.get_or_insert(&node), type_, );
+                let temp = format!("${}: {} [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Local { init } => {
@@ -206,16 +214,20 @@ impl DisplayIR {
             Instruction::UserData(_) => self.output += "Userdata",
             Instruction::Invalid => self.output += "INVALID",
             Instruction::Const(c) => {
-                let temp = format!("${}: {} = Const {}", self.get_or_insert(&node), type_, c, );
+                let temp = format!("${}: {} = Const {}", self.get_or_insert(&node), type_, c,);
                 self.output += temp.as_str();
             }
             Instruction::Update { var, value } => {
-                let temp = format!("${} = ${}", self.get_or_insert(var), self.get_or_insert(value), );
+                let temp = format!(
+                    "${} = ${}",
+                    self.get_or_insert(var),
+                    self.get_or_insert(value),
+                );
                 self.output += temp.as_str();
             }
             Instruction::Call(func, args) => {
                 if !is_type_equal(type_, &Type::void()) {
-                    let tmp = format!("${}: {} = ", self.get_or_insert(&node), type_, );
+                    let tmp = format!("${}: {} = ", self.get_or_insert(&node), type_,);
                     self.output += tmp.as_str();
                 }
 
@@ -393,7 +405,16 @@ impl DisplayIR {
             Instruction::CoroSuspend { token } => {
                 self.output += format!("CoroSuspend({})", token).as_str();
             }
-            | Instruction::CoroResume { token } => {
+            Instruction::CoroRegister { token, value, var } => {
+                let temp = format!(
+                    "CoroRegister(at {}, ${}, to {})\n",
+                    token,
+                    self.get(value),
+                    var
+                );
+                self.output += temp.as_str();
+            }
+            Instruction::CoroResume { token } => {
                 self.output += format!("CoroResume({})", token).as_str();
             }
             Instruction::Return(v) => {

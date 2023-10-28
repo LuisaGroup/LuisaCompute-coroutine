@@ -103,6 +103,7 @@ private:
     luisa::vector<Usage> _variable_usages;
     luisa::vector<std::pair<std::byte *, size_t /* alignment */>> _temporary_data;
     luisa::vector<CpuCallback> _cpu_callbacks;
+    luisa::unordered_map<luisa::string, uint> _suspend_ids;
     CallOpSet _direct_builtin_callables;
     CallOpSet _propagated_builtin_callables;
     uint64_t _hash;
@@ -231,6 +232,8 @@ public:
     [[nodiscard]] bool requires_atomic_float() const noexcept;
     /// Return if uses automatic differentiation.
     [[nodiscard]] bool requires_autodiff() const noexcept;
+    /// Return suspend id to token map
+    [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &suspend_ids() const noexcept { return _suspend_ids; }
 
     void coroframe_replace(const Type *type) noexcept;
     // build primitives
@@ -279,7 +282,8 @@ public:
     [[nodiscard]] const RefExpr *warp_lane_count() noexcept;
     /// Return warp lane count
     [[nodiscard]] const RefExpr *warp_lane_id() noexcept;
-
+    /// Return coroutine id in coroframe
+    [[nodiscard]] const RefExpr *coro_id() noexcept;
     // variables
     /// Add local variable of type
     [[nodiscard]] const RefExpr *local(const Type *type) noexcept;
@@ -368,8 +372,11 @@ public:
     /// Add assign statement
     void assign(const Expression *lhs, const Expression *rhs) noexcept;
     /// Add suspend statement
-    void suspend_(uint suspend_id) noexcept;
-
+    uint suspend_(luisa::string suspend_id) noexcept;
+    ///bind local to promise
+    void bind_promise_(uint suspend_id, const Expression *var, const luisa::string &name) noexcept;
+    ///read local from promise
+    const MemberExpr *read_promise_(const Expression *expr, const luisa::string &name) noexcept;
     /// Add if statement
     [[nodiscard]] IfStmt *if_(const Expression *cond) noexcept;
     /// Add loop statement

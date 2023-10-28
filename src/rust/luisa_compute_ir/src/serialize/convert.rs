@@ -275,6 +275,14 @@ impl KernelSerializer {
             Instruction::CoroResume { token } => {
                 SerializedInstruction::CoroResume { token: *token }
             }
+            Instruction::CoroRegister { token, value, var } => {
+                let value = self.serialize_noderef(*value);
+                SerializedInstruction::CoroRegister {
+                    token: *token,
+                    value,
+                    var: *var,
+                }
+            }
             _ => todo!(),
         }
     }

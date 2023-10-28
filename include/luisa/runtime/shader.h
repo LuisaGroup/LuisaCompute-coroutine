@@ -163,15 +163,15 @@ template<>
 struct ShaderInvoke<1> : public ShaderInvokeBase {
     explicit ShaderInvoke(uint64_t handle, size_t arg_count, size_t uniform_size) noexcept
         : ShaderInvokeBase{handle, arg_count, uniform_size} {}
-    [[nodiscard]] auto dispatch(uint size_x) && noexcept {
+    [[nodiscard]] auto dispatch(uint size_x) &&noexcept {
         return this->_parallelize(uint3{size_x, 1u, 1u}).build();
     }
-    [[nodiscard]] auto dispatch(luisa::span<const uint3> dispatch_sizes) && noexcept {
+    [[nodiscard]] auto dispatch(luisa::span<const uint3> dispatch_sizes) &&noexcept {
         return this->_parallelize(dispatch_sizes).build();
     }
     [[nodiscard]] auto dispatch(const IndirectDispatchBuffer &indirect_buffer,
                                 uint32_t offset = 0,
-                                uint32_t max_dispatch_size = std::numeric_limits<uint32_t>::max()) && noexcept {
+                                uint32_t max_dispatch_size = std::numeric_limits<uint32_t>::max()) &&noexcept {
         return this->_parallelize(indirect_buffer, offset, max_dispatch_size).build();
     }
 };
@@ -180,18 +180,18 @@ template<>
 struct ShaderInvoke<2> : public ShaderInvokeBase {
     explicit ShaderInvoke(uint64_t handle, size_t arg_count, size_t uniform_size) noexcept
         : ShaderInvokeBase{handle, arg_count, uniform_size} {}
-    [[nodiscard]] auto dispatch(uint size_x, uint size_y) && noexcept {
+    [[nodiscard]] auto dispatch(uint size_x, uint size_y) &&noexcept {
         return this->_parallelize(uint3{size_x, size_y, 1u}).build();
     }
-    [[nodiscard]] auto dispatch(uint2 size) && noexcept {
+    [[nodiscard]] auto dispatch(uint2 size) &&noexcept {
         return this->_parallelize(uint3{size.x, size.y, 1u}).build();
     }
-    [[nodiscard]] auto dispatch(luisa::span<const uint3> dispatch_sizes) && noexcept {
+    [[nodiscard]] auto dispatch(luisa::span<const uint3> dispatch_sizes) &&noexcept {
         return this->_parallelize(dispatch_sizes).build();
     }
     [[nodiscard]] auto dispatch(const IndirectDispatchBuffer &indirect_buffer,
                                 uint32_t offset = 0,
-                                uint32_t max_dispatch_size = std::numeric_limits<uint32_t>::max()) && noexcept {
+                                uint32_t max_dispatch_size = std::numeric_limits<uint32_t>::max()) &&noexcept {
         return std::move(*this)._parallelize(indirect_buffer, offset, max_dispatch_size).build();
     }
 };
@@ -200,18 +200,18 @@ template<>
 struct ShaderInvoke<3> : public ShaderInvokeBase {
     explicit ShaderInvoke(uint64_t handle, size_t arg_count, size_t uniform_size) noexcept
         : ShaderInvokeBase{handle, arg_count, uniform_size} {}
-    [[nodiscard]] auto dispatch(uint size_x, uint size_y, uint size_z) && noexcept {
+    [[nodiscard]] auto dispatch(uint size_x, uint size_y, uint size_z) &&noexcept {
         return this->_parallelize(uint3{size_x, size_y, size_z}).build();
     }
-    [[nodiscard]] auto dispatch(luisa::span<const uint3> dispatch_sizes) && noexcept {
+    [[nodiscard]] auto dispatch(luisa::span<const uint3> dispatch_sizes) &&noexcept {
         return this->_parallelize(dispatch_sizes).build();
     }
     [[nodiscard]] auto dispatch(const IndirectDispatchBuffer &indirect_buffer,
                                 uint32_t offset = 0,
-                                uint32_t max_dispatch_size = std::numeric_limits<uint32_t>::max()) && noexcept {
+                                uint32_t max_dispatch_size = std::numeric_limits<uint32_t>::max()) &&noexcept {
         return this->_parallelize(indirect_buffer, offset, max_dispatch_size).build();
     }
-    [[nodiscard]] auto dispatch(uint3 size) && noexcept {
+    [[nodiscard]] auto dispatch(uint3 size) &&noexcept {
         return std::move(*this).dispatch(size.x, size.y, size.z);
     }
 };
@@ -279,6 +279,16 @@ public:
     using Resource::operator bool;
 
     [[nodiscard]] auto operator()(detail::prototype_to_shader_invocation_t<Args>... args) const noexcept {
+        _check_is_valid();
+        using invoke_type = detail::ShaderInvoke<dimension>;
+        auto arg_count = (0u + ... + detail::shader_argument_encode_count<Args>::value);
+        invoke_type invoke{handle(), arg_count, _uniform_size};
+        static_cast<void>((invoke << ... << args));
+        return invoke;
+    }
+
+    template<typename... Pre>
+    [[nodiscard]] auto partial_invoke(detail::prototype_to_shader_invocation_t<Pre>... args) const noexcept {
         _check_is_valid();
         using invoke_type = detail::ShaderInvoke<dimension>;
         auto arg_count = (0u + ... + detail::shader_argument_encode_count<Args>::value);

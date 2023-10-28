@@ -1098,6 +1098,7 @@ impl SplitManager {
                 node_new
             }
             Instruction::CoroSplitMark { .. }
+            | Instruction::CoroRegister { .. }
             | Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
             Instruction::Print { fmt, args } => {
                 let args = args

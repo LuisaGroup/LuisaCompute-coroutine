@@ -265,9 +265,9 @@ enum struct CallOp : uint32_t {
     BACKWARD,           // (expr) -> void
     DETACH,             // (expr) -> expr
 
-    //coroutine
+    //coroutine pseudo op
     SUSPEND,
-
+    INITIALIZE_COROFRAME,
     // ray tracing
     RAY_TRACING_INSTANCE_TRANSFORM,      // (Accel, uint)
     RAY_TRACING_INSTANCE_USER_ID,        // (Accel, uint)

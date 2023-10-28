@@ -39,6 +39,7 @@ public:
         KERNEL_ID,
         WARP_LANE_COUNT,
         WARP_LANE_ID,
+        CORO_ID,
         OBJECT_ID
     };
 

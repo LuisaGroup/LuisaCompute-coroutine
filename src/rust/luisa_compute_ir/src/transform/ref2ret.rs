@@ -234,8 +234,13 @@ impl Ref2RetImpl {
                 Instruction::Comment(_) => {}
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
-                | Instruction::CoroResume { .. } => {todo!()}
-                Instruction::Print { .. } => {todo!()}
+                | Instruction::CoroRegister { .. }
+                | Instruction::CoroResume { .. } => {
+                    todo!()
+                }
+                Instruction::Print { .. } => {
+                    todo!()
+                }
             }
         }
     }

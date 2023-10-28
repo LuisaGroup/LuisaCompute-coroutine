@@ -162,6 +162,11 @@ pub enum SerializedInstruction {
     CoroResume {
         token: u32,
     },
+    CoroRegister {
+        token: u32,
+        value: SerializedNodeRef,
+        var: u32,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]

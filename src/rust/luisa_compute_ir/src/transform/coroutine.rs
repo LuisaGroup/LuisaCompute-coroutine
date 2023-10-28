@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use super::Transform;
 
-use crate::{*, display::DisplayIR};
+use crate::{display::DisplayIR, *};
 use indexmap::IndexSet;
 use ir::*;
 /*
@@ -52,7 +52,9 @@ impl CoroutineImpl {
             suspend_count: 0,
             corostate: state,
             corostate_type: crate::context::register_type(Type::Struct(StructType {
-                fields: CBoxedSlice::new(vec![crate::context::register_type(Type::Primitive(Primitive::Uint32))]),
+                fields: CBoxedSlice::new(vec![crate::context::register_type(Type::Primitive(
+                    Primitive::Uint32,
+                ))]),
                 alignment: 4,
                 size: 4,
             })),
@@ -334,26 +336,46 @@ impl CoroutineImpl {
                 builder.return_(INVALID_REF);
                 INVALID_REF
             }
+            Instruction::CoroRegister { .. } => {
+                todo!()
+            }
             Instruction::CoroSplitMark { token } => {
                 let suspend_id = builder.const_(Const::Uint32(*token));
                 let const0 = builder.const_(Const::Uint32(0));
                 let const1 = builder.const_(Const::Uint32(1));
-                let id_handle = builder.call(Func::ExtractElement, &[self.corostate, const0], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-                let cond = builder.call(Func::Eq, &[suspend_id, id_handle], crate::context::register_type(Type::Primitive(Primitive::Bool)));
+                let id_handle = builder.call(
+                    Func::ExtractElement,
+                    &[self.corostate, const0],
+                    crate::context::register_type(Type::Primitive(Primitive::Uint32)),
+                );
+                let cond = builder.call(
+                    Func::Eq,
+                    &[suspend_id, id_handle],
+                    crate::context::register_type(Type::Primitive(Primitive::Bool)),
+                );
                 let mut true_builder = IrBuilder::new(builder.pools.clone());
-                let left_id = true_builder.call(Func::GetElementPtr, &[self.corostate, const0], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-                let inc1 = true_builder.call(Func::Add, &[id_handle, const1], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
+                let left_id = true_builder.call(
+                    Func::GetElementPtr,
+                    &[self.corostate, const0],
+                    crate::context::register_type(Type::Primitive(Primitive::Uint32)),
+                );
+                let inc1 = true_builder.call(
+                    Func::Add,
+                    &[id_handle, const1],
+                    crate::context::register_type(Type::Primitive(Primitive::Uint32)),
+                );
                 true_builder.update(left_id, inc1);
                 true_builder.return_(INVALID_REF);
                 let true_branch = true_builder.finish();
                 let false_branch = IrBuilder::new(builder.pools.clone()).finish();
                 builder.if_(cond, true_branch, false_branch)
             }
-            Instruction::CoroSuspend { .. }
-            | Instruction::CoroResume { .. } => {
+            Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
                 todo!()
             }
-            Instruction::Print { .. } => { todo!() }
+            Instruction::Print { .. } => {
+                todo!()
+            }
         }
     }
     fn promote_bb(
@@ -380,13 +402,13 @@ impl Transform for Coroutine {
         let mut builder = IrBuilder::new(module.pools.clone());
         let const0 = builder.const_(Const::Uint32(0));
         let const1 = builder.const_(Const::Uint32(1));
-        let left_id = builder.call(Func::GetElementPtr, &[imp.corostate, const0], crate::context::register_type(Type::Primitive(Primitive::Uint32)));
-        builder.update(left_id, const1);
-        let new_bb = imp.promote_bb(
-            module.entry,
-            builder,
-            &mut SSABlockRecord::new(),
+        let left_id = builder.call(
+            Func::GetElementPtr,
+            &[imp.corostate, const0],
+            crate::context::register_type(Type::Primitive(Primitive::Uint32)),
         );
+        builder.update(left_id, const1);
+        let new_bb = imp.promote_bb(module.entry, builder, &mut SSABlockRecord::new());
         let mut entry = module.entry;
         *entry.get_mut() = *new_bb;
         let ret = Module {
@@ -398,6 +420,23 @@ impl Transform for Coroutine {
         //println!("\n\n----------after------\n\n");
         //let result=DisplayIR::new().display_ir(&ret);
         //println!("{}",result);
+        /*         let sub_builder=IrBuilder::new(module.pools.clone());
+        let sub_bb = imp.promote_bb(
+            module.entry,
+            sub_builder,
+            &mut SSABlockRecord::new(),
+        );
+        let mut entry = module.entry;
+        *entry.get_mut() = *sub_bb;
+        let sub_module=Module {
+            kind: module.kind,
+            entry,
+            pools: module.pools.clone(),
+        };
+        let sub_callable=CallableModule {
+            module:sub_module,
+            ..callable,
+        };*/
         callable.args[0].get_mut().type_ = imp.corostate_type;
         CallableModule {
             module: ret,

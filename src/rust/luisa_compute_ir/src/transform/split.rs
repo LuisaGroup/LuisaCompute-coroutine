@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
+use std::process::exit;
 use std::ptr::null;
 use lazy_static::lazy_static;
 
@@ -243,13 +244,18 @@ impl SplitManager {
 
         for token in token_vec.iter() {
             let callable_info = self.coro_callable_info.get_mut(token).unwrap();
-            let frame_node = Node::new(
-                CArc::new(Instruction::Argument { by_value: false }),
-                self.frame_type.clone(),
-            );
-            callable_info.frame_node = new_node(pools, frame_node);
 
-            callable_info.args.insert(0, callable_info.frame_node);
+            // FIXME: args[0] is frame by default
+            // let frame_node = Node::new(
+            //     CArc::new(Instruction::Argument { by_value: false }),
+            //     self.frame_type.clone(),
+            // );
+            // callable_info.frame_node = new_node(pools, frame_node);
+            // callable_info.args.insert(0, callable_info.frame_node);
+
+            // TODO: can we change the type of args here?
+            callable_info.args[0].get_mut().type_ = self.frame_type.clone();
+            callable_info.frame_node = callable_info.args[0].clone();
         }
 
         ScopeBuilder::new(entry_token, pools.clone())

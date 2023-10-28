@@ -35,10 +35,10 @@ int main(int argc, char *argv[]) {
     auto x_vec = std::vector<uint>(n, 0u);
 
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n) noexcept {
-        auto x = x_buffer.read(id);
         auto user = def<User>(20u, 1000.0f);
         auto i = def(0u);
-        $while (i >= 3u) {
+        $while (i <= 3u) {
+            auto x = x_buffer.read(id) + user.age;
             $switch (1u) {
                 $case (1u) {
                     $if (id < 5u) {
@@ -51,7 +51,7 @@ int main(int argc, char *argv[]) {
                             $suspend(2u);
                         };
                         x = x;
-                        $suspend(3u);   // TODO: without if, unwrap bug may occur
+                        $suspend(3u);// TODO: without if, unwrap bug may occur
                         x_buffer.write(id, x + n);
                     }
                     $else {
@@ -64,7 +64,6 @@ int main(int argc, char *argv[]) {
             };
             i += 1u;
         };
-        x_buffer.write(id, x + 10000u + user.age);
     };
     auto frame_buffer = device.create_buffer<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {

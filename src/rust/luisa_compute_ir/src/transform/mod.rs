@@ -12,7 +12,6 @@ pub mod reg2mem;
 
 use bitflags::Flags;
 
-pub mod split;
 pub mod coroutine_split;
 
 use crate::ir::{self, ModuleFlags, CallableModule, Module, KernelModule};
@@ -114,7 +113,7 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         "coroutine" => {
-            let transform = coroutine_split::Coroutine;
+            let transform = coroutine_split::CoroutineSplit;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),

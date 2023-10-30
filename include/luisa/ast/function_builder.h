@@ -282,8 +282,6 @@ public:
     [[nodiscard]] const RefExpr *warp_lane_count() noexcept;
     /// Return warp lane count
     [[nodiscard]] const RefExpr *warp_lane_id() noexcept;
-    /// Return coroutine id in coroframe
-    [[nodiscard]] const RefExpr *coro_id() noexcept;
     // variables
     /// Add local variable of type
     [[nodiscard]] const RefExpr *local(const Type *type) noexcept;
@@ -371,12 +369,17 @@ public:
     void comment_(luisa::string comment) noexcept;
     /// Add assign statement
     void assign(const Expression *lhs, const Expression *rhs) noexcept;
+    /// check if function is coroutine
+    void check_is_coroutine() noexcept;
     /// Add suspend statement
     uint suspend_(luisa::string suspend_id) noexcept;
     ///bind local to promise
     void bind_promise_(uint suspend_id, const Expression *var, const luisa::string &name) noexcept;
     ///read local from promise
     const MemberExpr *read_promise_(const Expression *expr, const luisa::string &name) noexcept;
+    ///initialize coroframe
+    void initialize_coroframe(const Expression *expr, const Expression *coro_id) noexcept;
+    const CallExpr *coro_id() noexcept;
     /// Add if statement
     [[nodiscard]] IfStmt *if_(const Expression *cond) noexcept;
     /// Add loop statement

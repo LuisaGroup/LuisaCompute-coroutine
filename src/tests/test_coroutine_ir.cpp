@@ -9,8 +9,7 @@ using namespace luisa::compute;
 
 struct alignas(4) CoroFrame {
 };
-LUISA_CUSTOM_STRUCT_EXT(CoroFrame){};
-LUISA_COROFRAME_STRUCT_REFLECT(CoroFrame, "CoroFrame")
+LUISA_COROFRAME_STRUCT(CoroFrame){};
 
 struct alignas(8) User {
 public:
@@ -34,8 +33,10 @@ int main(int argc, char *argv[]) {
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = std::vector<uint>(n, 0u);
 
-    Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n) noexcept {
+    Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt id, UInt n,Var<User> test) noexcept {
+        test.age=0u;
         auto user = def<User>(20u, 1000.0f);
+        user.age = 1u;
         auto i = def(0u);
         $while (i <= 3u) {
             auto x = x_buffer.read(id) + user.age;
@@ -65,7 +66,7 @@ int main(int argc, char *argv[]) {
             i += 1u;
         };
     };
-    auto frame_buffer = device.create_buffer<CoroFrame>(n);
+    auto frame_buffer = device.create_soa<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
         x_buffer.write(id, id);

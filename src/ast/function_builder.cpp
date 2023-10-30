@@ -114,30 +114,43 @@ void FunctionBuilder::return_(const Expression *expr) noexcept {
     }
 }
 
+void FunctionBuilder::check_is_coroutine() noexcept {
+    LUISA_ASSERT(_tag == Tag::COROUTINE,
+                 "Can only use coroutine intrinsics in coroutines.");
+}
 uint FunctionBuilder::suspend_(const luisa::string suspend_id) noexcept {
+    check_is_coroutine();
     uint id = _suspend_ids.size() + 1;
     _suspend_ids.insert(std::make_pair(suspend_id, id));
     _create_and_append_statement<SuspendStmt>(id);
-    _direct_builtin_callables.mark(CallOp::SUSPEND);
-    _propagated_builtin_callables.mark(CallOp::SUSPEND);
     return id;
 }
 void FunctionBuilder::bind_promise_(const uint suspend_id, const Expression *expr, const luisa::string &name) noexcept {
+    check_is_coroutine();
     auto type = _arguments[0].type();
     auto res = const_cast<Type *>(type)->add_member(name);
     LUISA_ASSERT(res!=-1,"error! Adding member failed!");
     _create_and_append_statement<CoroBindStmt>(suspend_id, expr, res);
-    _direct_builtin_callables.mark(CallOp::SUSPEND);
-    _propagated_builtin_callables.mark(CallOp::SUSPEND);
 }
 const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const luisa::string &name) noexcept {
+    check_is_coroutine();
     LUISA_ASSERT(expr->type()->is_coroframe(), "Can only read from Coroframe types!");
     auto member = expr->type()->member(name);
     if (expr->type()->member(name) != -1) {
-        return _create_expression<MemberExpr>(expr->type()->members()[member], expr, member);
+        return _create_expression<MemberExpr>(expr->type()->corotype()->members()[member], expr, member);
     }
 }
-
+void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
+    check_is_coroutine();
+    auto member_coro_id=member(Type::of<uint3>(),expr,0u);
+    auto member_resume_id=member(Type::of<uint>(),expr,1u);
+    assign(member_coro_id,coro_id);
+    assign(member_resume_id,literal(Type::of<uint>(),0u));
+}
+const CallExpr* FunctionBuilder::coro_id() noexcept {
+    check_is_coroutine();
+    return _create_expression<CallExpr>(Type::of<uint3>(),CallOp::CORO_ID, luisa::vector<const Expression *>{});
+}
 RayQueryStmt *FunctionBuilder::ray_query_(const RefExpr *query) noexcept {
     LUISA_ASSERT(query->builder() == this,
                  "Ray query must be created by the same function builder.");
@@ -220,11 +233,7 @@ const RefExpr *FunctionBuilder::kernel_id() noexcept { return _builtin(Type::of<
 const RefExpr *FunctionBuilder::object_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::OBJECT_ID); }
 const RefExpr *FunctionBuilder::warp_lane_count() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_COUNT); }
 const RefExpr *FunctionBuilder::warp_lane_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_ID); }
-const RefExpr *FunctionBuilder::coro_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::CORO_ID); }
 inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag tag) noexcept {
-    if (tag == Variable::Tag::CORO_ID) [[unlikely]] {
-        LUISA_ASSERT(_tag == Function::Tag::COROUTINE, "Can only use coro_id in a coroutine!");
-    }
     if (auto iter = std::find_if(
             _builtin_variables.cbegin(), _builtin_variables.cend(),
             [tag](auto &&v) noexcept { return v.tag() == tag; });
@@ -235,10 +244,8 @@ inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag 
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
     if (_tag == Function::Tag::CALLABLE || _tag == Function::Tag::COROUTINE) [[unlikely]] {
-        if (tag != Variable::Tag::CORO_ID) {
             _arguments.emplace_back(v);
             _bound_arguments.emplace_back();
-        }
     }
     return _ref(v);
 }

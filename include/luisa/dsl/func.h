@@ -562,6 +562,9 @@ public:
         LUISA_ASSERT(builder != _sub_callables.end(), "coroutine index out of range");
         return builder->second;
     };
+    auto operator[](luisa::string &&index) const noexcept {
+        return (*this)[function_builder()->suspend_ids()[index]];
+    };
 };
 namespace detail {
 

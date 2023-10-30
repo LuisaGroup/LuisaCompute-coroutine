@@ -62,35 +62,11 @@ transform_function(Function function) noexcept {
         return converted;
 #endif
     }
-    if (function.direct_builtin_callables().uses_coroutine()) {
-#ifndef LUISA_ENABLE_IR
-        LUISA_ERROR_WITH_LOCATION(
-            "Coroutine requires IR support but "
-            "LuisaCompute is built without the IR module. "
-            "This might be caused by missing Rust. "
-            "Please install the Rust toolchain and "
-            "recompile LuisaCompute to get the IR module.");
-#else
-        LUISA_VERBOSE_WITH_LOCATION("Performing Coroutine transform "
-                                    "on function with hash {:016x}.",
-                                    function.hash());
-        //idea: send in function-> module with .subroutine-> seperate transform to callable-> register to coroutine
-        luisa::shared_ptr<const FunctionBuilder> converted;
-        auto m = AST2IR::build_callable(function);
-        perform_coroutine_transform(m->get());
-        converted = IR2AST::build(m->get());
-        LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
-                                    "kernel with hash {:016x}. "
-                                    "Coroutine transform is done.",
-                                    function.hash());
-        return converted;
-#endif
-    }
     return function.shared_builder();
 }
 
 luisa::shared_ptr<const FunctionBuilder> transform_coroutine(Type *corotype, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function function) noexcept {
-    if (function.direct_builtin_callables().uses_coroutine()) {
+    if (true) {
 #ifndef LUISA_ENABLE_IR
         LUISA_ERROR_WITH_LOCATION(
             "Coroutine requires IR support but "

@@ -69,9 +69,11 @@ int main(int argc, char *argv[]) {
            << synchronize();
     static constexpr auto f = [](auto x, auto y) noexcept { return x * sin(y); };
     Coroutine test_coro = [](Var<CoroFrame> &frame, BufferFloat x_buffer) noexcept {
-        auto i = coro_id();
-        auto x = x_buffer.read(i);
-        $suspend("1", std::make_pair(x, "x"), std::make_pair(x + i, "y"));
+        auto i = coro_id().x;
+
+        auto x = x_buffer->read(i);
+        auto y=sin(x);
+        $suspend("1");
 
         x += 10;
         x_buffer.write(i, x);
@@ -91,9 +93,7 @@ int main(int argc, char *argv[]) {
         auto frame = frame_soa->read(dispatch_x());
         initialize_coroframe(frame, id);
         test_coro(frame, x_buffer);
-        if ($read_promise(frame, "x") == 0u) {
-            frame_buffer->write(dispatch_x(), frame);
-        }
+        frame_buffer->write(dispatch_x(), frame);
     };
     Kernel1D next = [&](BufferFloat x_buffer) noexcept {
         auto id = dispatch_x();
@@ -107,6 +107,7 @@ int main(int argc, char *argv[]) {
     option.enable_debug_info = true;
     auto gen_shader = device.compile(gen, option);
     auto next_shader = device.compile(next);
+    LUISA_INFO("start execution...");
     stream << x_buffer.copy_from(x.data())
            << synchronize();
     stream << gen_shader(x_buffer).dispatch(n)

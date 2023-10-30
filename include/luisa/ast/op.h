@@ -265,9 +265,8 @@ enum struct CallOp : uint32_t {
     BACKWARD,           // (expr) -> void
     DETACH,             // (expr) -> expr
 
-    //coroutine pseudo op
-    SUSPEND,
-    INITIALIZE_COROFRAME,
+    //coroutine ops
+    CORO_ID,
     // ray tracing
     RAY_TRACING_INSTANCE_TRANSFORM,      // (Accel, uint)
     RAY_TRACING_INSTANCE_USER_ID,        // (Accel, uint)
@@ -419,9 +418,6 @@ public:
                test(CallOp::ACCUMULATE_GRADIENT) ||
                test(CallOp::BACKWARD) ||
                test(CallOp::DETACH);
-    }
-    [[nodiscard]] auto uses_coroutine() const noexcept {
-        return test(CallOp::SUSPEND);
     }
 };
 

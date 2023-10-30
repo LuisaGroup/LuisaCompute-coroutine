@@ -114,9 +114,6 @@ inline void unreachable(luisa::string_view msg) noexcept {
 [[nodiscard]] inline auto warp_lane_id() noexcept {
     return def<uint>(detail::FunctionBuilder::current()->warp_lane_id());
 }
-[[nodiscard]] inline auto coro_id() noexcept {
-    return def<uint>(detail::FunctionBuilder::current()->coro_id());
-}
 /// Get dispatch_id.x
 [[nodiscard]] inline auto dispatch_x() noexcept {
     return dispatch_id().x;
@@ -1733,8 +1730,15 @@ template<typename F, typename V>
     requires is_coroframe_struct_v<expr_value_t<F>> &&
              is_dsl_v<V> && is_unsigned_integral_expr_v<V>
 inline void initialize_coroframe(F &&frame, V &&coro_id) noexcept {
-    detail::FunctionBuilder::current()->call(
-        CallOp::INITIALIZE_COROFRAME, {LUISA_EXPR(frame), LUISA_EXPR(coro_id)});
+    detail::FunctionBuilder::current()->initialize_coroframe(LUISA_EXPR(frame),LUISA_EXPR(coro_id));
+}
+[[nodiscard]] inline auto coro_id() noexcept {
+   return def<uint3>(detail::FunctionBuilder::current()->coro_id());
+}
+template<typename Ret,typename T, typename S>
+inline auto read_promise(T &&t, S &&name) noexcept {
+    return def<Ret>(detail::FunctionBuilder::current()->read_promise_(
+        detail::extract_expression(std::forward<T>(t)), std::forward<S>(name)));
 }
 // barriers
 /// Synchronize thread block.

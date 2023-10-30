@@ -143,9 +143,9 @@ const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const l
 void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
     check_is_coroutine();
     auto member_coro_id=member(Type::of<uint3>(),expr,0u);
-    auto member_resume_id=member(Type::of<uint>(),expr,1u);
+    auto member_frame_token=member(Type::of<uint>(),expr,1u);
     assign(member_coro_id,coro_id);
-    assign(member_resume_id,literal(Type::of<uint>(),0u));
+    assign(member_frame_token,literal(Type::of<uint>(),0u));
 }
 const CallExpr* FunctionBuilder::coro_id() noexcept {
     check_is_coroutine();

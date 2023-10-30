@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
            << synchronize();
     static constexpr auto f = [](auto x, auto y) noexcept { return x * sin(y); };
     Coroutine test_coro = [](Var<CoroFrame> &frame, BufferFloat x_buffer) noexcept {
-        auto i = coro_id().x;
+        auto i = coro_id().x;//(=== auto i = frame.m0.x)
 
         auto x = x_buffer->read(i);
         auto y=sin(x);

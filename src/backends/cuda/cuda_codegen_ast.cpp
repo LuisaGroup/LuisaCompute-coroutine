@@ -1015,6 +1015,9 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
         case CallOp::WARP_READ_LANE: _scratch << "lc_warp_read_lane"; break;
         case CallOp::WARP_READ_FIRST_ACTIVE_LANE: _scratch << "lc_warp_read_first_active_lane"; break;
         case CallOp::SHADER_EXECUTION_REORDER: _scratch << "lc_shader_execution_reorder"; break;
+        case CallOp::CORO_ID: _scratch << "lc_coro_id"; break;
+        case CallOp::CORO_TOKEN: _scratch << "lc_coro_token"; break;
+        case CallOp::INITIALIZE_COROFRAME: _scratch << "lc_initialize_coro_frame"; break;
     }
     _scratch << "(";
     if (auto op = expr->op(); is_atomic_operation(op)) {
@@ -1629,14 +1632,14 @@ void CUDACodegenAST::_emit_type_name(const Type *type) noexcept {
                 _scratch << "LCRayQueryAny";
             } else if (type == _indirect_buffer_type) {
                 _scratch << "LCIndirectBuffer";
-            }  else {
+            } else {
                 LUISA_ERROR_WITH_LOCATION(
                     "Unsupported custom type: {}.",
                     type->description());
             }
             break;
         }
-        case Type::Tag::COROFRAME:{
+        case Type::Tag::COROFRAME: {
             _emit_type_name(type->corotype());
             break;
         }

@@ -233,7 +233,7 @@ public:
     /// Return if uses automatic differentiation.
     [[nodiscard]] bool requires_autodiff() const noexcept;
     /// Return suspend id to token map
-    [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &suspend_ids() const noexcept { return _coro_tokens; }
+    [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &coro_tokens() const noexcept { return _coro_tokens; }
 
     void coroframe_replace(const Type *type) noexcept;
     // build primitives

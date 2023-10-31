@@ -7,7 +7,7 @@ use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
 use crate::context::register_type;
 use crate::ir::{SwitchCase, Instruction, BasicBlock, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType, ModuleFlags, ModuleKind};
 
-const STATE_INDEX_DISPATCH_ID: usize = 0;
+const STATE_INDEX_CORO_ID: usize = 0;
 const STATE_INDEX_FRAME_TOKEN: usize = 1;
 
 struct ScopeBuilder {
@@ -192,12 +192,12 @@ impl SplitManager {
         let pools = &callable.pools;
         let entry_token = self.frame_analyser.entry_token;
 
-        let dispatch_id_type = Type::Vector(VectorType {
+        let coro_id_type = Type::Vector(VectorType {
             element: VectorElementType::Scalar(Primitive::Uint32),
             length: 3,
         });
         let token_type = Type::Primitive(Primitive::Uint32);
-        let mut frame_fields: Vec<CArc<Type>> = vec![CArc::new(dispatch_id_type), CArc::new(token_type)];
+        let mut frame_fields: Vec<CArc<Type>> = vec![CArc::new(coro_id_type), CArc::new(token_type)];
         let mut index_counter: usize = frame_fields.len();
 
         // calculate frame state
@@ -267,7 +267,7 @@ impl SplitManager {
         for token in token_vec.iter() {
             let callable_info = self.coro_callable_info.get_mut(token).unwrap();
 
-            // FIXME: args[0] is frame by default
+            // // args[0] is frame by default
             // let frame_node = Node::new(
             //     CArc::new(Instruction::Argument { by_value: false }),
             //     self.frame_type.clone(),
@@ -275,7 +275,7 @@ impl SplitManager {
             // callable_info.frame_node = new_node(pools, frame_node);
             // callable_info.args.insert(0, callable_info.frame_node);
 
-            // TODO: can we change the type of args here?
+            // change the type of args here
             callable_info.args[0].get_mut().type_ = self.frame_type.clone();
             callable_info.frame_node = callable_info.args[0].clone();
         }
@@ -1017,10 +1017,15 @@ impl SplitManager {
                     }
                     _ => func.clone()
                 };
-                let dup_args: Vec<_> = args.iter().map(|arg| {
+                let mut dup_args: Vec<_> = args.iter().map(|arg| {
                     let dup_arg = self.find_duplicated_node(scope_builder, *arg);
                     dup_arg
                 }).collect();
+                if func == &Func::CoroId || func == &Func::CoroToken {
+                    assert!(dup_args.is_empty(), "Args of function {:?} is not empty", func);
+                    let frame_node = self.coro_callable_info.get(&frame_token).unwrap().frame_node;
+                    dup_args.push(frame_node);
+                }
                 scope_builder.builder.call(dup_func, dup_args.as_slice(), node.type_.clone())
             }
             Instruction::Phi(incomings) => {
@@ -1133,6 +1138,8 @@ impl CoroutineSplitImpl {
 
         let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
         println!("{:-^40}", " After split ");
+        let result = DisplayIR::new().display_ir_callable(&coroutine_entry);
+        println!("{:-^40}\n{}", format!(" CoroScope {} ", 0), result);
         for (token, coro) in coroutine_entry.subroutine_ids.iter().zip(coroutine_entry.subroutines.iter()) {
             let result = DisplayIR::new().display_ir_callable(coro.as_ref());
             println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);

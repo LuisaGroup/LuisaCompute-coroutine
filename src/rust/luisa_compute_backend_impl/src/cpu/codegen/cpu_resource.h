@@ -480,3 +480,41 @@ inline T read_first_lane(T &&v) {
     return v;
 }
 inline void lc_shader_execution_reorder(lc_uint hint, lc_uint hint_bits) noexcept {}
+
+template<typename T>
+inline lc_uint3 lc_coro_id(T &frame) noexcept {
+//    struct alignas(alignof(T)) S {
+//        lc_uint3 m0;
+//        lc_uint m1;
+//    };
+//    auto s = reinterpret_cast<S *>(&frame);
+//    return s->m0;
+
+    return frame.m0;
+}
+
+template<typename T>
+inline lc_uint lc_coro_token(T &frame) noexcept {
+//    struct alignas(alignof(T)) S {
+//        lc_uint3 m0;
+//        lc_uint m1;
+//    };
+//    auto s = reinterpret_cast<S *>(&frame);
+//    return s->m1;
+
+    return frame.m1;
+}
+
+template<typename T>
+inline void lc_initialize_coro_frame(T &frame, lc_uint3 coro_id) noexcept {
+//    struct alignas(alignof(T)) S {
+//        lc_uint3 m0;
+//        lc_uint m1;
+//    };
+//    auto s = reinterpret_cast<S *>(&frame);
+//    s->m0 = coro_id;
+//    s->m1 = 0u;
+
+    frame.m0 = coro_id;
+    frame.m1 = 0u;
+}

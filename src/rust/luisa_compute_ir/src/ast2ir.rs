@@ -7,6 +7,8 @@ use json::{parse as parse_json, JsonValue as JSON};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::iter::zip;
+use bitflags::Flags;
+use crate::ir::Primitive::Uint32;
 
 struct AST2IRCtx<'a> {
     j: &'a JSON,
@@ -306,12 +308,6 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                         let t = <u32 as TypeOf>::type_();
                         let (builder, _, _) = self.unwrap_ctx();
                         let v = builder.call(Func::WarpSize, &[], t);
-                        builder.local(v)
-                    }
-                    "CORO_ID" => {
-                        let t = <u32 as TypeOf>::type_();
-                        let (builder, _, _) = self.unwrap_ctx();
-                        let v = builder.call(Func::CoroId, &[], t);
                         builder.local(v)
                     }
                     "WARP_LANE_ID" => {
@@ -1004,6 +1000,8 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "INDIRECT_SET_DISPATCH_KERNEL" => Func::IndirectDispatchSetKernel,
             "INDIRECT_SET_DISPATCH_COUNT" => Func::IndirectDispatchSetCount,
             "SHADER_EXECUTION_REORDER" => Func::ShaderExecutionReorder,
+            "CORO_ID" => Func::CoroId,
+            "CORO_TOKEN" => Func::CoroToken,
             "INITIALIZE_COROFRAME" => Func::CoroInitializer,
             _ => panic!("Invalid built-in function: {}.", f),
         };
@@ -1734,6 +1732,26 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 let args = convert_args(&[false, false]);
                 check_same_types!(args[0].type_(), args[1].type_());
                 assert!(args[0].type_().is_int() && args[0].type_().is_primitive());
+                assert!(t.is_void());
+                args
+            }
+
+            "CORO_ID" => {
+                // (struct): uint3
+                let args = convert_args(&[]);
+                assert!(t.is_unsigned() && t.is_vector() && t.dimension() == 3);
+                args
+            }
+            "CORO_TOKEN" => {
+                // (struct): uint
+                let args = convert_args(&[]);
+                assert!(t.is_unsigned() && t.is_primitive());
+                args
+            }
+            "INITIALIZE_COROFRAME" => {
+                let args = convert_args(&[]);
+                assert!(args[0].type_().is_struct());
+                assert!(args[1].type_().is_unsigned() && args[1].type_().is_vector() && args[1].type_().dimension() == 3);
                 assert!(t.is_void());
                 args
             }

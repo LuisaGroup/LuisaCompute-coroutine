@@ -214,7 +214,7 @@ void _update(Type *dst, const Type *src) {
 }
 size_t _add_member(Type *type, const luisa::string &name) {
     auto inst = static_cast<TypeImpl *>(type);
-    LUISA_ASSERT(name!="resume_id", "resume_id is a reserved name for coroframe type.");
+    LUISA_ASSERT(name != "resume_id", "resume_id is a reserved name for coroframe type.");
     size_t id = inst->member_names.size();
     auto ret = inst->member_names.insert(std::make_pair(name, id));
     return ret.second ? id : -1;
@@ -528,8 +528,10 @@ uint64_t Type::hash() const noexcept {
 }
 
 size_t Type::size() const noexcept {
-    LUISA_ASSERT(!(is_coroframe() && members().empty()), "Cannot find size of {}."
-                                                         "Usages of coroframe type should after the coroutine definition!",
+    LUISA_ASSERT(!(is_coroframe() && members().empty()),
+                 "Cannot find size of {}. "
+                 "Usages of CoroFrame types should be "
+                 "after the coroutine definition!",
                  description());
     return static_cast<const detail::TypeImpl *>(this)->size;
 }
@@ -682,7 +684,7 @@ size_t Type::add_member(const luisa::string &name) noexcept {
 }
 
 size_t Type::member(const luisa::string &name) const noexcept {
-    if(name=="resume_id")return 0;
+    if (name == "resume_id") return 0;
     auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;
     auto it = map.find(name);
     if (it == map.end()) {

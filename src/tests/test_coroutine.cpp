@@ -91,9 +91,9 @@ int main(int argc, char *argv[]) {
         auto frame = frame_soa->read(dispatch_x());
         initialize_coroframe(frame, id);
         test_coro(frame, x_buffer);
-        if ($read_promise(frame, "x") == 0u) {
+        $if ($read_promise(frame, "x") == 0u) {
             frame_buffer->write(dispatch_x(), frame);
-        }
+        };
     };
     Kernel1D next = [&](BufferFloat x_buffer) noexcept {
         auto id = dispatch_x();

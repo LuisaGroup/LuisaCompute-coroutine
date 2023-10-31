@@ -1433,6 +1433,18 @@ impl<'a> FunctionEmitter<'a> {
                 writeln!(self.body, "lc_ray_query_terminate({0});", args_v[0]).unwrap();
                 true
             }
+            Func::CoroId => {
+                writeln!(self.body, "const {} {} = lc_coro_id({})", node_ty_s, var, args_v[0]).unwrap();
+                true
+            }
+            Func::CoroToken => {
+                writeln!(self.body, "const {} {} = lc_coro_token({})", node_ty_s, var, args_v[0]).unwrap();
+                true
+            }
+            Func::CoroInitializer => {
+                writeln!(self.body, "lc_initialize_coro_frame({}, {})", args_v[0], args_v[1]).unwrap();
+                true
+            }
             _ => false,
         }
     }

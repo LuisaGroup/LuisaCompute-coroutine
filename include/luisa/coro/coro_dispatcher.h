@@ -92,7 +92,7 @@ public:
         Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, Var<Buffer<FrameType>> frame_buffer, UInt st_task_id, UInt n, Var<Args>... args) {
             auto x = dispatch_x();
             $if (x >= n) {
-                return;
+                $return();
             };
             auto frame_id = index->read(x);
             auto frame = frame_buffer->read(frame_id);

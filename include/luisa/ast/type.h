@@ -415,7 +415,7 @@ public:
     [[nodiscard]] luisa::span<const Type *const> members() const noexcept;
     [[nodiscard]] const Type *element() const noexcept;
     [[nodiscard]] const Type *corotype() const noexcept;
-    ///change the corresponding Type to another Type in registery
+    ///change the corresponding Type to another Type in registry
     void update_from(const Type *type);
     /// add a member with name and type
     size_t add_member(const luisa::string &name) noexcept;

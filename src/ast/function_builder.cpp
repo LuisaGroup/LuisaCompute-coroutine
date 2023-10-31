@@ -125,7 +125,7 @@ uint FunctionBuilder::suspend_(const luisa::string suspend_id) noexcept {
 void FunctionBuilder::bind_promise_(const uint suspend_id, const Expression *expr, const luisa::string &name) noexcept {
     auto type = _arguments[0].type();
     auto res = const_cast<Type *>(type)->add_member(name);
-    LUISA_ASSERT(res!=-1,"error! Adding member failed!");
+    LUISA_ASSERT(res != -1, "error! Adding member failed!");
     _create_and_append_statement<CoroBindStmt>(suspend_id, expr, res);
     _direct_builtin_callables.mark(CallOp::SUSPEND);
     _propagated_builtin_callables.mark(CallOp::SUSPEND);
@@ -220,11 +220,15 @@ const RefExpr *FunctionBuilder::kernel_id() noexcept { return _builtin(Type::of<
 const RefExpr *FunctionBuilder::object_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::OBJECT_ID); }
 const RefExpr *FunctionBuilder::warp_lane_count() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_COUNT); }
 const RefExpr *FunctionBuilder::warp_lane_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_ID); }
-const RefExpr *FunctionBuilder::coro_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::CORO_ID); }
-inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag tag) noexcept {
-    if (tag == Variable::Tag::CORO_ID) [[unlikely]] {
-        LUISA_ASSERT(_tag == Function::Tag::COROUTINE, "Can only use coro_id in a coroutine!");
-    }
+const CallExpr *FunctionBuilder::coro_id() noexcept {
+    auto args = luisa::span<const Expression *const>();
+    return call(Type::of<uint3>(), CallOp::CORO_ID, args);
+}
+const CallExpr *FunctionBuilder::coro_token() noexcept {
+    auto args = luisa::span<const Expression *const>();
+    return call(Type::of<uint>(), CallOp::CORO_TOKEN, args);
+}
+inline const RefExpr *FunctionBuilder::_builtin(const Type *type, Variable::Tag tag) noexcept {
     if (auto iter = std::find_if(
             _builtin_variables.cbegin(), _builtin_variables.cend(),
             [tag](auto &&v) noexcept { return v.tag() == tag; });
@@ -234,11 +238,9 @@ inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag 
     Variable v{type, tag, _next_variable_uid()};
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
-    if (_tag == Function::Tag::CALLABLE || _tag == Function::Tag::COROUTINE) [[unlikely]] {
-        if (tag != Variable::Tag::CORO_ID) {
-            _arguments.emplace_back(v);
-            _bound_arguments.emplace_back();
-        }
+    if (_tag == Function::Tag::CALLABLE) [[unlikely]] {
+        _arguments.emplace_back(v);
+        _bound_arguments.emplace_back();
     }
     return _ref(v);
 }

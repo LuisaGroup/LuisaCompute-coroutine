@@ -39,14 +39,13 @@ public:
         KERNEL_ID,
         WARP_LANE_COUNT,
         WARP_LANE_ID,
-        CORO_ID,
         OBJECT_ID
     };
 
 private:
     const Type *_type{nullptr};
-    uint32_t _uid{};
     Tag _tag{};
+    uint32_t _uid{};
 
 private:
     friend class detail::FunctionBuilder;

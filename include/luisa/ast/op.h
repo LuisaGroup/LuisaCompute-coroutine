@@ -267,7 +267,9 @@ enum struct CallOp : uint32_t {
 
     //coroutine pseudo op
     SUSPEND,
-    INITIALIZE_COROFRAME,
+    INITIALIZE_COROFRAME,// (struct, uint3)
+    CORO_ID,             // (struct)
+    CORO_TOKEN,          // (struct)
     // ray tracing
     RAY_TRACING_INSTANCE_TRANSFORM,      // (Accel, uint)
     RAY_TRACING_INSTANCE_USER_ID,        // (Accel, uint)

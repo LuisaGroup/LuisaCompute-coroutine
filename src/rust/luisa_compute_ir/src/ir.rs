@@ -607,6 +607,7 @@ pub enum Func {
     WarpLaneId,
     DispatchId,
     CoroId,
+    CoroToken,
     DispatchSize,
     CoroInitializer,
 
@@ -1299,7 +1300,7 @@ impl Debug for Instruction {
             Instruction::CoroSplitMark { token } => { write!(f, "CoroSplitMark({})", token) }
             Instruction::CoroSuspend { token } => { write!(f, "CoroSuspend({})", token) }
             Instruction::CoroResume { token } => { write!(f, "CoroResume({})", token) }
-            Instruction::CoroRegister{ token,value,var} =>{ write!(f, "CoroSuspend(at:{},val:{},var:{})",token,value.0,var)}
+            Instruction::CoroRegister{ token,value,var} =>{ write!(f, "CoroRegister(at:{}, val:{}, var:{})",token,value.0,var)}
         }
     }
 }

@@ -115,7 +115,10 @@ inline void unreachable(luisa::string_view msg) noexcept {
     return def<uint>(detail::FunctionBuilder::current()->warp_lane_id());
 }
 [[nodiscard]] inline auto coro_id() noexcept {
-    return def<uint>(detail::FunctionBuilder::current()->coro_id());
+    return def<uint3>(detail::FunctionBuilder::current()->coro_id());
+}
+[[nodiscard]] inline auto coro_token() noexcept {
+    return def<uint>(detail::FunctionBuilder::current()->coro_token());
 }
 /// Get dispatch_id.x
 [[nodiscard]] inline auto dispatch_x() noexcept {
@@ -1731,7 +1734,8 @@ template<typename T>
 /// coroutine initialization
 template<typename F, typename V>
     requires is_coroframe_struct_v<expr_value_t<F>> &&
-             is_dsl_v<V> && is_unsigned_integral_expr_v<V>
+             is_dsl_v<V> &&
+             is_same_expr_v<V, uint3>
 inline void initialize_coroframe(F &&frame, V &&coro_id) noexcept {
     detail::FunctionBuilder::current()->call(
         CallOp::INITIALIZE_COROFRAME, {LUISA_EXPR(frame), LUISA_EXPR(coro_id)});

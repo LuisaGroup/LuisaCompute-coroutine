@@ -297,6 +297,7 @@ struct Func {
         WarpLaneId,
         DispatchId,
         CoroId,
+        CoroToken,
         DispatchSize,
         CoroInitializer,
         /// (input, grads, ...) -> ()

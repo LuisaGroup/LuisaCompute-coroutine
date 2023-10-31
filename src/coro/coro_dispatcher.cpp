@@ -37,8 +37,9 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
     stream << _count_prefix_shader(_resume_count, _resume_offset, _max_sub_coro).dispatch(1u);
     stream << _gather_shader(_resume_index, _resume_offset, _frame, _max_frame_count).dispatch(_max_frame_count);
     if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
-        stream << call_shader(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _frame, _max_frame_count).dispatch();
-
+        stream << _compact_shader(_resume_index,_frame,_max_frame_count).dispatch(_max_frame_count-_host_count[0]);
+        stream << call_shader(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _frame, _dispatch_counter,_max_frame_count).dispatch(_host_count[0]);
+        _dispatch_counter+=_host_count[0];
     } else {
         for (uint i = 1; i <= _max_sub_coro; i++) {
             if (_host_count[i] > 0) {

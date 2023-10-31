@@ -606,10 +606,11 @@ pub enum Func {
     WarpSize,
     WarpLaneId,
     DispatchId,
+    DispatchSize,
+
+    // Coroutine
     CoroId,
     CoroToken,
-    DispatchSize,
-    CoroInitializer,
 
     // Forward AD
     /// (input, grads, ...) -> ()

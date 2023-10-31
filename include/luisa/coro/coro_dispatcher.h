@@ -61,7 +61,7 @@ private:
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
     Shader1D<Buffer<uint>, Buffer<uint>, Buffer<FrameType>, uint> _gather_shader;
     Shader1D<> _initialize_shader;
-    Shader1D<> _compact_shader;
+    Shader1D<Buffer<uint>,Buffer<FrameType>,uint,uint> _compact_shader;
     compute::Buffer<FrameType> _frame;
     compute::Buffer<uint> _resume_index;
     compute::Buffer<uint> _resume_count;
@@ -94,34 +94,35 @@ public:
             $if (x >= n) {
                 $return();
             };
-            auto frame_id = index->read(x);
+            //auto frame_id = index->read(x);
+            auto frame_id = x;
             auto frame = frame_buffer->read(frame_id);
             initialize_coroframe(frame, st_task_id + x);
             count->atomic(0).fetch_add(-1u);
             (*coroutine)(frame, args...);
             frame_buffer->write(frame_id, frame);
-            auto nxt = $read_promise(frame, "resume_id");
+            auto nxt = $read_promise(frame, "coro_id");
             count->atomic(nxt).fetch_add(1);
         };
         _gen_shader = device.compile(gen_kernel);
         _resume_shaders.resize(max_sub_coro);
         for (int i = 1; i <= max_sub_coro; ++i) {
-            auto resume_kernel = [&](BufferUInt index, BufferUInt count, Var<Buffer<FrameType>> frame_buffer, UInt n, Args... args) {
+            Kernel1D resume_kernel = [&](BufferUInt index, BufferUInt count, Var<Buffer<FrameType>> frame_buffer, UInt n, Args... args) {
                 auto x = dispatch_x();
                 $if (x >= n) {
                     return;
                 };
                 auto frame_id = index->read(x);
                 auto frame = frame_buffer->read(frame_id);
-                auto prev = $read_promise(frame, "resume_id");
+                auto prev = $read_promise(frame, "coro_id");
                 count->atomic(i).fetch_add(-1u);
                 (*coroutine)[i](frame, args...);
-                auto nxt = $read_promise(frame, "resume_id");
+                auto nxt = $read_promise(frame, "coro_id");
                 count->atomic(nxt).fetch_add(1);
             };
             _resume_shaders[i] = device.compile(resume_kernel);
         }
-        auto _prefix_kernel = [&](BufferUInt count, BufferUInt prefix, UInt n) {
+        Kernel1D _prefix_kernel = [&](BufferUInt count, BufferUInt prefix, UInt n) {
             /*_global_buffer->write(0, 0);
             sync_block();
             auto x = dispatch_x();
@@ -144,18 +145,32 @@ public:
             };
         };
         _count_prefix_shader = device.compile(_prefix_kernel);
-        auto _collect_kernel = [](BufferUInt index, BufferUInt prefix, Var<Buffer<FrameType>> frame_buffer, UInt n) {
+        Kernel1D _collect_kernel = [](BufferUInt index, BufferUInt prefix, Var<Buffer<FrameType>> frame_buffer, UInt n) {
             auto x = dispatch_x();
             auto frame = frame_buffer->read(x);
-            auto r_id = $read_promise(frame, "resume_id");
+            auto r_id = $read_promise(frame, "coro_id");
             auto q_id = prefix->atomic(r_id).fetch_add(1);
             index->write(q_id, x);
         };
         _gather_shader = device.compile(_collect_kernel);
+        Kernel1D _compact_kernel = [&](BufferUInt index, Var<Buffer<FrameType>> frame_buffer, UInt empty_offset, UInt n){
+            _global_buffer->write(0, 0);
+            auto x = dispatch_x();
+            $if(empty_offset+x<n){
+                auto frame = frame_buffer->read(empty_offset+x);
+                $if($read_promise(frame,"coro_id")!=0){
+                    auto res = _global_buffer->atomic(0).fetch_add(1u);
+                    auto slot= index->read(res);
+                    frame_buffer->write(slot,frame);
+                };
+            };
+        };
+        _compact_shader = device.compile(_compact_kernel);
     }
 };
 template<typename T>
 class ThreadCoroDispatcher : public CoroDispatcherBase<T> {
+
 };
 // a simple wrap that helps submit a coroutine dispatch to the stream
 enum struct CmdTag {

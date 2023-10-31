@@ -103,7 +103,6 @@ namespace luisa::compute::dsl_detail {
     *([&] { return __VA_ARGS__; }) % [&]() noexcept
 
 #define $suspend(...) ::luisa::compute::suspend(__VA_ARGS__)
-#define $read_promise(x, y) ::luisa::compute::read_promise(x, y)
 #define $default ::luisa::compute::detail::SwitchDefaultStmtBuilder{} % [&]() noexcept
 #define $loop                                                                       \
     ::luisa::compute::detail::LoopStmtBuilder::create_with_comment(                 \

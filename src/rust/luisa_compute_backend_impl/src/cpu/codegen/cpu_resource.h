@@ -504,17 +504,3 @@ inline lc_uint lc_coro_token(T &frame) noexcept {
 
     return frame.m1;
 }
-
-template<typename T>
-inline void lc_initialize_coro_frame(T &frame, lc_uint3 coro_id) noexcept {
-//    struct alignas(alignof(T)) S {
-//        lc_uint3 m0;
-//        lc_uint m1;
-//    };
-//    auto s = reinterpret_cast<S *>(&frame);
-//    s->m0 = coro_id;
-//    s->m1 = 0u;
-
-    frame.m0 = coro_id;
-    frame.m1 = 0u;
-}

@@ -7,9 +7,3 @@ template<typename T>
 uint CoroToken(in T frame){
 return frame.v1;
 }
-
-template<typename T>
-void InitializeCoroFrame(inout T frame, const uint3 coro_id){
-frame.v0.v = coro_id;
-frame.v1 = 0u;
-}

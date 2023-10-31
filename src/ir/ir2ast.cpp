@@ -875,7 +875,7 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
 
         case ir::Func::Tag::IndirectDispatchSetCount: return builtin_func(2, CallOp::INDIRECT_SET_DISPATCH_COUNT);
         case ir::Func::Tag::IndirectDispatchSetKernel: return builtin_func(5, CallOp::INDIRECT_SET_DISPATCH_KERNEL);
-        case ir::Func::Tag::CoroInitializer: return builtin_func(2, CallOp::INITIALIZE_COROFRAME);
+
         case ir::Func::Tag::CoroId: return builtin_func(1, CallOp::CORO_ID);
         case ir::Func::Tag::CoroToken: return builtin_func(1, CallOp::CORO_TOKEN);
     }

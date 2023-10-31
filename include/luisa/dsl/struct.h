@@ -422,10 +422,10 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
             auto type = Type::of<S>()->corotype();                                                     \
             auto tot_size = dsl::def(soa_offset);                                                      \
             for (auto &mem : type->members()) {                                                        \
+                _member_offsets.push_back(dsl::def(tot_size));                                         \
                 uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                      \
                 auto member_size = soa_size * stride;                                                  \
                 member_size = align_to_soa_cache_line(member_size);                                    \
-                _member_offsets.push_back(dsl::def(tot_size));                                         \
                 tot_size += member_size;                                                               \
             }                                                                                          \
         }                                                                                              \
@@ -530,7 +530,7 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
             size_t tot_size = 0u;                                                                      \
             for (auto mem : type->members()) {                                                         \
                 tot_size += align_to_soa_cache_line(soa_size *                                         \
-                                                    (mem->size() + sizeof(uint) - 1u) / sizeof(uint)); \
+                                                   ((mem->size() + sizeof(uint) - 1u) / sizeof(uint)));\
             }                                                                                          \
             return tot_size;                                                                           \
         }                                                                                              \
@@ -550,7 +550,7 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
         SOA() noexcept = default;                                                                      \
         SOA(Device &device, size_t elem_count) noexcept                                                \
             : SOA{device.create_byte_buffer(SOAView<S>::compute_soa_size(elem_count) * sizeof(uint)),  \
-                  SOAView<S>::compute_soa_size(elem_count)} {}                                         \
+                  elem_count} {}                                                                       \
         [[nodiscard]] auto view() const noexcept { return SOAView<S>{*this}; }                         \
     };                                                                                                 \
     Expr<SOA<S>>::Expr(SOAView<S> soa) noexcept                                                        \

@@ -1017,7 +1017,6 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
         case CallOp::SHADER_EXECUTION_REORDER: _scratch << "lc_shader_execution_reorder"; break;
         case CallOp::CORO_ID: _scratch << "lc_coro_id"; break;
         case CallOp::CORO_TOKEN: _scratch << "lc_coro_token"; break;
-        case CallOp::INITIALIZE_COROFRAME: _scratch << "lc_initialize_coro_frame"; break;
     }
     _scratch << "(";
     if (auto op = expr->op(); is_atomic_operation(op)) {
@@ -1468,6 +1467,8 @@ static void collect_types_in_function(Function f,
                 for (auto m : t->members()) {
                     self(self, m);
                 }
+            } else if (t->is_coroframe()) {
+                self(self, t->corotype());
             }
         }
     };

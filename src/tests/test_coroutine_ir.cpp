@@ -9,8 +9,7 @@ using namespace luisa::compute;
 
 struct alignas(4) CoroFrame {
 };
-LUISA_CUSTOM_STRUCT_EXT(CoroFrame){};
-LUISA_COROFRAME_STRUCT_REFLECT(CoroFrame, "CoroFrame")
+LUISA_COROFRAME_STRUCT(CoroFrame){};
 
 struct alignas(8) User {
 public:
@@ -36,38 +35,43 @@ int main(int argc, char *argv[]) {
 
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
         auto id = coro_id().x;
-        x_buffer.write(id, id * 2u);
-//        x_buffer.write(id, coro_token() * 2u);
+        //        x_buffer.write(id, id * 2u);
+        x_buffer.write(id, coro_token() + 100u);
         $suspend("1");
-//        auto user = def<User>(20u, 1000.0f);
-//        auto i = def(0u);
-//        $while (i <= 3u) {
-//            auto x = x_buffer.read(id) + user.age;
-//            $switch (1u) {
-//                $case (1u) {
-//                    $if (id < 5u) {
-//                        x_buffer.write(id, x + 1000u);
-//                        $if (i == 0u) {
-//                            $suspend("1");
-//                        };
-//                        x = x_buffer.read(id);
-//                        $if (i == 1u) {
-//                            $suspend("2");
-//                        };
-//                        x = x;
-//                        $suspend("3u");
-//                        x_buffer.write(id, x + n);
-//                    }
-//                    $else {
-//                        x_buffer.write(id, x + 2000u);
-//                    };
-//                };
-//                $default {
-//                    x_buffer.write(id, x + 3000u);
-//                };
-//            };
-//            i += 1u;
-//        };
+        x_buffer.write(id, coro_token() + 200u);
+        //        $if(id % 2u == 0u) {
+        //            $suspend("1");
+        //            x_buffer.write(id, 1000u + coro_token() * 2u);
+        //        };
+        //        auto user = def<User>(20u, 1000.0f);
+        //        auto i = def(0u);
+        //        $while (i <= 3u) {
+        //            auto x = x_buffer.read(id) + user.age;
+        //            $switch (1u) {
+        //                $case (1u) {
+        //                    $if (id < 5u) {
+        //                        x_buffer.write(id, x + 1000u);
+        //                        $if (i == 0u) {
+        //                            $suspend("1");
+        //                        };
+        //                        x = x_buffer.read(id);
+        //                        $if (i == 1u) {
+        //                            $suspend("2");
+        //                        };
+        //                        x = x;
+        //                        $suspend("3u");
+        //                        x_buffer.write(id, x + n);
+        //                    }
+        //                    $else {
+        //                        x_buffer.write(id, x + 2000u);
+        //                    };
+        //                };
+        //                $default {
+        //                    x_buffer.write(id, x + 3000u);
+        //                };
+        //            };
+        //            i += 1u;
+        //        };
     };
     auto type = Type::of<CoroFrame>();
     auto frame_buffer = device.create_buffer<CoroFrame>(n);
@@ -80,11 +84,29 @@ int main(int argc, char *argv[]) {
         coro(frame, x_buffer, n);
     };
     auto shader = device.compile(kernel);
-
+    Kernel1D resume_kernel = [&](BufferUInt x_buffer) noexcept {
+        auto id = dispatch_x();
+        auto frame = frame_buffer->read(id);
+        auto token = read_promise<uint>(frame, "coro_token");
+        $switch (token) {
+            for (int i = 1; i <= coro.suspend_count(); ++i) {
+                $case (i) {
+                    coro[i](frame, x_buffer, n);
+                };
+            }
+        };
+        frame_buffer->write(id, frame);
+    };
+    auto resume_shader = device.compile(resume_kernel);
     stream << shader(x_buffer).dispatch(n)
            << x_buffer.copy_to(x_vec.data())
            << synchronize();
-    for (auto i = 0u; i < n; ++i) {
-        LUISA_INFO("x[{}] = {}", i, x_vec[i]);
+    for (auto iter = 0u; iter < 20; ++iter) {
+        for (auto i = 0u; i < n; ++i) {
+            LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
+        }
+        stream << resume_shader(x_buffer).dispatch(n)
+               << x_buffer.copy_to(x_vec.data())
+               << synchronize();
     }
 }

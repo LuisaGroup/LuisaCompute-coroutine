@@ -1002,7 +1002,6 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "SHADER_EXECUTION_REORDER" => Func::ShaderExecutionReorder,
             "CORO_ID" => Func::CoroId,
             "CORO_TOKEN" => Func::CoroToken,
-            "INITIALIZE_COROFRAME" => Func::CoroInitializer,
             _ => panic!("Invalid built-in function: {}.", f),
         };
 
@@ -1736,6 +1735,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 args
             }
 
+            // coroutine related
             "CORO_ID" => {
                 // (struct): uint3
                 let args = convert_args(&[]);
@@ -1746,13 +1746,6 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 // (struct): uint
                 let args = convert_args(&[]);
                 assert!(t.is_unsigned() && t.is_primitive());
-                args
-            }
-            "INITIALIZE_COROFRAME" => {
-                let args = convert_args(&[]);
-                assert!(args[0].type_().is_struct());
-                assert!(args[1].type_().is_unsigned() && args[1].type_().is_vector() && args[1].type_().dimension() == 3);
-                assert!(t.is_void());
                 args
             }
             _ => panic!("Invalid built-in function: {}.", f),

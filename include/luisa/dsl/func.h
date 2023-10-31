@@ -538,7 +538,7 @@ public:
     [[nodiscard]] auto function() const noexcept { return Function{_builder.get()}; }
     [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
     [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
-
+    [[nodiscard]] auto const suspend_count() noexcept { return _builder->suspend_ids().size(); }
     //Call from start of coroutine
     auto operator()(detail::prototype_to_callable_invocation_t<FrameType> type,
                     detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
@@ -561,6 +561,9 @@ public:
         auto builder = _sub_callables.find(index);
         LUISA_ASSERT(builder != _sub_callables.end(), "coroutine index out of range");
         return builder->second;
+    };
+    auto operator[](luisa::string &&index) const noexcept {
+        return (*this)[function_builder()->suspend_ids()[index]];
     };
 };
 namespace detail {

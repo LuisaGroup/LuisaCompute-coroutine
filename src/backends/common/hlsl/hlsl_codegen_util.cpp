@@ -127,7 +127,8 @@ static size_t AddHeader(CallOpSet const &ops, luisa::BinaryIO const *internalDat
         ops.test(CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION)) {
         builder << CodegenUtility::ReadInternalHLSLFile("reduce", internalDataPath);
     }
-    if (ops.test(CallOp::INITIALIZE_COROFRAME)) {
+    if (ops.test(CallOp::CORO_ID) ||
+        ops.test(CallOp::CORO_TOKEN)) {
         builder << CodegenUtility::ReadInternalHLSLFile("coroutine", internalDataPath);
     }
     return immutable_size;
@@ -1248,9 +1249,6 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             break;
         case CallOp::CORO_TOKEN:
             str << "CoroToken"sv;
-            break;
-        case CallOp::INITIALIZE_COROFRAME:
-            str << "InitializeCoroFrame"sv;
             break;
     }
     str << '(';

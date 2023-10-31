@@ -2894,10 +2894,3 @@ template<typename T>
 __device__ inline lc_uint lc_coro_token(const T &frame) noexcept {
     return frame.m1;
 }
-
-template<typename T>
-__device__ inline void lc_initialize_coro_frame(T &frame, lc_uint3 coro_id) noexcept {
-    frame = {};
-    frame.m0 = lc_make_uint3(coro_id);
-    frame.m1 = 0u;
-}

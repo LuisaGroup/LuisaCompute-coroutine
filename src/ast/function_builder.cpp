@@ -114,30 +114,45 @@ void FunctionBuilder::return_(const Expression *expr) noexcept {
     }
 }
 
-uint FunctionBuilder::suspend_(const luisa::string suspend_id) noexcept {
+void FunctionBuilder::check_is_coroutine() noexcept {
+    LUISA_ASSERT(_tag == Tag::COROUTINE,
+                 "Coroutine intrinsics are only allowed in coroutines.");
+}
+uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
+    check_is_coroutine();
     uint id = _suspend_ids.size() + 1;
-    _suspend_ids.insert(std::make_pair(suspend_id, id));
+    _suspend_ids.insert(std::make_pair(desc, id));
     _create_and_append_statement<SuspendStmt>(id);
-    _direct_builtin_callables.mark(CallOp::SUSPEND);
-    _propagated_builtin_callables.mark(CallOp::SUSPEND);
     return id;
 }
 void FunctionBuilder::bind_promise_(const uint suspend_id, const Expression *expr, const luisa::string &name) noexcept {
+    check_is_coroutine();
     auto type = _arguments[0].type();
     auto res = const_cast<Type *>(type)->add_member(name);
-    LUISA_ASSERT(res != -1, "error! Adding member failed!");
+    LUISA_ASSERT(res != -1, "Failed in promise binding");
     _create_and_append_statement<CoroBindStmt>(suspend_id, expr, res);
-    _direct_builtin_callables.mark(CallOp::SUSPEND);
-    _propagated_builtin_callables.mark(CallOp::SUSPEND);
 }
 const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const luisa::string &name) noexcept {
-    LUISA_ASSERT(expr->type()->is_coroframe(), "Can only read from Coroframe types!");
-    auto member = expr->type()->member(name);
-    if (expr->type()->member(name) != -1) {
-        return _create_expression<MemberExpr>(expr->type()->members()[member], expr, member);
+    LUISA_ASSERT(expr->type()->is_coroframe(), "Promise reading is only allowed for CoroFrame type");
+    auto index = expr->type()->member(name);
+    if (index != -1) {
+        return _create_expression<MemberExpr>(expr->type()->corotype()->members()[index], expr, index);
     }
 }
-
+void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
+    auto member_coro_id = member(Type::of<uint3>(), expr, 0u);
+    auto member_coro_token = member(Type::of<uint>(), expr, 1u);
+    assign(member_coro_id, coro_id);
+    assign(member_coro_token, literal(Type::of<uint>(), 0u));
+}
+const CallExpr *FunctionBuilder::coro_id() noexcept {
+    check_is_coroutine();
+    return call(Type::of<uint3>(), CallOp::CORO_ID, {});
+}
+const CallExpr *FunctionBuilder::coro_token() noexcept {
+    check_is_coroutine();
+    return call(Type::of<uint>(), CallOp::CORO_TOKEN, {});
+}
 RayQueryStmt *FunctionBuilder::ray_query_(const RefExpr *query) noexcept {
     LUISA_ASSERT(query->builder() == this,
                  "Ray query must be created by the same function builder.");
@@ -220,14 +235,6 @@ const RefExpr *FunctionBuilder::kernel_id() noexcept { return _builtin(Type::of<
 const RefExpr *FunctionBuilder::object_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::OBJECT_ID); }
 const RefExpr *FunctionBuilder::warp_lane_count() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_COUNT); }
 const RefExpr *FunctionBuilder::warp_lane_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_ID); }
-const CallExpr *FunctionBuilder::coro_id() noexcept {
-    auto args = luisa::span<const Expression *const>();
-    return call(Type::of<uint3>(), CallOp::CORO_ID, args);
-}
-const CallExpr *FunctionBuilder::coro_token() noexcept {
-    auto args = luisa::span<const Expression *const>();
-    return call(Type::of<uint>(), CallOp::CORO_TOKEN, args);
-}
 inline const RefExpr *FunctionBuilder::_builtin(const Type *type, Variable::Tag tag) noexcept {
     if (auto iter = std::find_if(
             _builtin_variables.cbegin(), _builtin_variables.cend(),
@@ -238,7 +245,7 @@ inline const RefExpr *FunctionBuilder::_builtin(const Type *type, Variable::Tag 
     Variable v{type, tag, _next_variable_uid()};
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
-    if (_tag == Function::Tag::CALLABLE) [[unlikely]] {
+    if (_tag == Function::Tag::CALLABLE || _tag == Function::Tag::COROUTINE) [[unlikely]] {
         _arguments.emplace_back(v);
         _bound_arguments.emplace_back();
     }

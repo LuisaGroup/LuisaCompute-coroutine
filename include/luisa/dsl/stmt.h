@@ -478,11 +478,6 @@ inline void suspend(luisa::string &&suspend_id, Args &&...args) noexcept {
             id, ret.first, ret.second);
     }
 }
-template<typename T, typename S>
-inline auto read_promise(T &&t, S &&name) noexcept {
-    return detail::FunctionBuilder::current()->read_promise_(
-        detail::extract_expression(std::forward<T>(t)), std::forward<S>(name));
-}
 inline void return_() noexcept {
     detail::FunctionBuilder::current()->return_();
 }

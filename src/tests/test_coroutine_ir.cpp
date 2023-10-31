@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
         //            i += 1u;
         //        };
     };
+    LUISA_INFO_WITH_LOCATION("Coro count = {}", coro.suspend_count());
     auto type = Type::of<CoroFrame>();
     auto frame_buffer = device.create_buffer<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
@@ -82,6 +83,7 @@ int main(int argc, char *argv[]) {
         auto frame = frame_buffer->read(id_x);
         initialize_coroframe(frame, id);
         coro(frame, x_buffer, n);
+        frame_buffer->write(id_x, frame);
     };
     auto shader = device.compile(kernel);
     Kernel1D resume_kernel = [&](BufferUInt x_buffer) noexcept {

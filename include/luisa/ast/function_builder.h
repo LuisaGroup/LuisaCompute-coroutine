@@ -103,7 +103,7 @@ private:
     luisa::vector<Usage> _variable_usages;
     luisa::vector<std::pair<std::byte *, size_t /* alignment */>> _temporary_data;
     luisa::vector<CpuCallback> _cpu_callbacks;
-    luisa::unordered_map<luisa::string, uint> _suspend_ids;
+    luisa::unordered_map<luisa::string, uint> _coro_tokens;
     CallOpSet _direct_builtin_callables;
     CallOpSet _propagated_builtin_callables;
     uint64_t _hash;
@@ -233,7 +233,7 @@ public:
     /// Return if uses automatic differentiation.
     [[nodiscard]] bool requires_autodiff() const noexcept;
     /// Return suspend id to token map
-    [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &suspend_ids() const noexcept { return _suspend_ids; }
+    [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &suspend_ids() const noexcept { return _coro_tokens; }
 
     void coroframe_replace(const Type *type) noexcept;
     // build primitives
@@ -394,7 +394,7 @@ public:
     /// initialize coroframe
     void initialize_coroframe(const Expression *expr, const Expression *coro_id) noexcept;
     /// bind local to promise
-    void bind_promise_(uint suspend_id, const Expression *var, const luisa::string &name) noexcept;
+    void bind_promise_(uint coro_token, const Expression *var, const luisa::string &name) noexcept;
     /// read local from promise
     const MemberExpr *read_promise_(const Expression *expr, const luisa::string &name) noexcept;
     /// Return coroutine id in coroframe

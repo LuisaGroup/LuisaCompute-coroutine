@@ -120,17 +120,17 @@ void FunctionBuilder::check_is_coroutine() noexcept {
 }
 uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
     check_is_coroutine();
-    uint id = _suspend_ids.size() + 1;
-    _suspend_ids.insert(std::make_pair(desc, id));
-    _create_and_append_statement<SuspendStmt>(id);
-    return id;
+    uint token = _coro_tokens.size() + 1;
+    _coro_tokens.insert(std::make_pair(desc, token));
+    _create_and_append_statement<SuspendStmt>(token);
+    return token;
 }
-void FunctionBuilder::bind_promise_(const uint suspend_id, const Expression *expr, const luisa::string &name) noexcept {
+void FunctionBuilder::bind_promise_(const uint coro_token, const Expression *expr, const luisa::string &name) noexcept {
     check_is_coroutine();
     auto type = _arguments[0].type();
     auto res = const_cast<Type *>(type)->add_member(name);
     LUISA_ASSERT(res != -1, "Failed in promise binding");
-    _create_and_append_statement<CoroBindStmt>(suspend_id, expr, res);
+    _create_and_append_statement<CoroBindStmt>(coro_token, expr, res);
 }
 const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const luisa::string &name) noexcept {
     LUISA_ASSERT(expr->type()->is_coroframe(), "Promise reading is only allowed for CoroFrame type");

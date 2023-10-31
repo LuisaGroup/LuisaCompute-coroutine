@@ -470,12 +470,12 @@ auto get_var_list(std::pair<U, V> &&p, Args &&...args) noexcept {
     return rets;
 }
 template<typename... Args>
-inline void suspend(luisa::string &&suspend_id, Args &&...args) noexcept {
+inline void suspend(luisa::string &&desc, Args &&...args) noexcept {
     auto rets = get_var_list(std::forward<Args>(args)...);
-    auto id = detail::FunctionBuilder::current()->suspend_(suspend_id);
+    auto coro_token = detail::FunctionBuilder::current()->suspend_(desc);
     for (auto &ret : rets) {
         detail::FunctionBuilder::current()->bind_promise_(
-            id, ret.first, ret.second);
+            coro_token, ret.first, ret.second);
     }
 }
 inline void return_() noexcept {

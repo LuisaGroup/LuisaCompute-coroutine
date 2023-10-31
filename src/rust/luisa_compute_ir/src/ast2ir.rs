@@ -2024,16 +2024,16 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 builder.ad_scope(body)
             }
             "SUSPEND" => {
-                let id = j["id"].as_u32().unwrap();
+                let token = j["token"].as_u32().unwrap();
                 let (builder, ..) = self.unwrap_ctx();
-                builder.coro_split_mark(id)
+                builder.coro_split_mark(token)
             }
             "COROBIND" => {
-                let id = j["suspend_id"].as_u32().unwrap();
+                let token = j["token"].as_u32().unwrap();
                 let expr = self._convert_expression(&j["expression"], false);
                 let var = j["var_id"].as_u32().unwrap();
                 let (builder, ..) = self.unwrap_ctx();
-                builder.coro_register(id, expr, var)
+                builder.coro_register(token, expr, var)
             }
             _ => panic!("Invalid statement tag: {}", tag),
         }

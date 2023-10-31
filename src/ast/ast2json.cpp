@@ -629,7 +629,7 @@ private:
                     t["element"] = _type_index(type->element());
                     break;
                 }
-                case Type::Tag::COROFRAME:
+                case Type::Tag::COROFRAME: [[fallthrough]];
                 case Type::Tag::CUSTOM: {
                     t["id"] = type->description();
                     break;
@@ -1000,10 +1000,10 @@ private:
         j["body"] = _convert_stmt(stmt->body());
     }
     void _convert_suspend_stmt(JSON &j, const SuspendStmt *stmt) noexcept {
-        j["id"] = stmt->id();
+        j["token"] = stmt->token();
     }
     void _convert_corobind_stmt(JSON &j, const CoroBindStmt *stmt) noexcept {
-        j["suspend_id"] = stmt->suspend_id();
+        j["token"] = stmt->token();
         j["var_id"] = stmt->var_id();
         j["expression"] = _convert_expr(stmt->expression());
     }

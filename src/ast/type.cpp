@@ -679,13 +679,13 @@ void Type::update_from(const Type *type) {
     detail::_update(this, type);
 }
 size_t Type::add_member(const luisa::string &name) noexcept {
-    LUISA_ASSERT(name != "coro_id" && name != "coro_token", "{} is a reserved name for coroframe type.", name);
+    LUISA_ASSERT(name != "coro_id" && name != "token", "{} is a reserved name for coroframe type.", name);
     return detail::_add_member(this, name);
 }
 
 size_t Type::member(const luisa::string &name) const noexcept {
     if (name == "coro_id") return 0;
-    if (name == "coro_token") return 1u;
+    if (name == "token") return 1u;
     auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;
     auto it = map.find(name);
     if (it == map.end()) {

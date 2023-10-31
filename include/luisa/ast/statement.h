@@ -497,33 +497,33 @@ public:
 class SuspendStmt : public Statement {
 
 private:
-    const uint _id;
+    const uint _token;
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
 
 public:
-    explicit SuspendStmt(const uint id) noexcept
-        : Statement{Tag::SUSPEND}, _id{id} {
+    explicit SuspendStmt(const uint token) noexcept
+        : Statement{Tag::SUSPEND}, _token{token} {
     }
-    [[nodiscard]] auto id() const noexcept { return _id; }
+    [[nodiscard]] auto token() const noexcept { return _token; }
     LUISA_STATEMENT_COMMON()
 };
 /// Bind Promise statement
 class CoroBindStmt : public Statement {
 
 private:
-    const uint _suspend_id;
+    const uint _token;
     const Expression *_expr;
     const uint _var_id;
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
 
 public:
-    explicit CoroBindStmt(const uint suspend_id, const Expression *expr, const uint var_id) noexcept
-        : Statement{Tag::COROBIND}, _suspend_id{suspend_id}, _expr{expr}, _var_id{var_id} {
+    explicit CoroBindStmt(const uint token, const Expression *expr, const uint var_id) noexcept
+        : Statement{Tag::COROBIND}, _token{token}, _expr{expr}, _var_id{var_id} {
     }
-    [[nodiscard]] auto suspend_id() const noexcept { return _suspend_id; }
+    [[nodiscard]] auto token() const noexcept { return _token; }
     [[nodiscard]] auto var_id() const noexcept { return _var_id; }
     [[nodiscard]] auto expression() const noexcept { return _expr; }
     LUISA_STATEMENT_COMMON()

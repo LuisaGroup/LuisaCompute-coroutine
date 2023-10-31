@@ -89,7 +89,7 @@ int main(int argc, char *argv[]) {
     Kernel1D resume_kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
         auto frame = frame_buffer->read(id);
-        auto token = read_promise<uint>(frame, "coro_token");
+        auto token = read_promise<uint>(frame, "token");
         $switch (token) {
             for (int i = 1; i <= coro.suspend_count(); ++i) {
                 $case (i) {

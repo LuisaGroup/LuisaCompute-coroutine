@@ -27,10 +27,10 @@ uint64_t ReturnStmt::_compute_hash() const noexcept {
 }
 
 uint64_t SuspendStmt::_compute_hash() const noexcept {
-    return luisa::hash<uint>{}(_id);
+    return luisa::hash<uint>{}(_token);
 }
 uint64_t CoroBindStmt::_compute_hash() const noexcept {
-    auto id1 = luisa::hash<uint>{}(_suspend_id);
+    auto id1 = luisa::hash<uint>{}(_token);
     auto id2 = luisa::hash<uint>{}(_var_id);
     auto expr = _expr->hash();
     return hash_combine({id1, id2, expr});

@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{display::DisplayIR, CArc, CBoxedSlice, Pooled};
 use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
+use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
 use crate::context::register_type;
 use crate::ir::{SwitchCase, Instruction, BasicBlock, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType, ModuleFlags, ModuleKind};
 
@@ -102,11 +103,8 @@ impl SplitManager {
         // coroutine cannot return to entry scope, so do not resume here
 
         // visit
-        let mut sb_vec = sm.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
-        while !sb_vec.is_empty() {
-            let scope_builder = sb_vec.remove(0);
-            sm.build_scope(scope_builder, true);
-        }
+        let sb_vec = sm.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
+        assert!(sm.build_scopes(sb_vec, true).is_empty());
         sm.build_coroutines(callable)
     }
 
@@ -283,11 +281,18 @@ impl SplitManager {
         ScopeBuilder::new(entry_token, pools.clone())
     }
 
-    fn build_scope(&mut self, scope_builder: ScopeBuilder, force: bool) {
-        assert!(scope_builder.finished || force);
+    fn build_scope(&mut self, mut scope_builder: ScopeBuilder, force: bool) {
+        if !(scope_builder.finished || force) {
+            return;
+        }
 
         // build scope
         let frame_token = scope_builder.token;
+        if !scope_builder.finished {
+            scope_builder.finished = true;
+            scope_builder.builder.coro_suspend(INVALID_FRAME_TOKEN_MASK);
+            scope_builder.builder.return_(INVALID_REF);
+        }
         let scope_bb = scope_builder.builder.finish();
         self.coro_scopes.insert(frame_token, scope_bb);
     }
@@ -364,7 +369,7 @@ impl SplitManager {
             let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
+            // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
 
             match instruction {
                 // coroutine related instructions

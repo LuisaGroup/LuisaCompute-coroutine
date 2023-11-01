@@ -28,13 +28,12 @@ pub struct CanonicalizeControlFlow;
  *       loop_break = false;
  *       prepare();
  *       if (!cond()) break;
- *       loop {
+ *       do {
  *           body {
  *               // break => { loop_break = true; break; }
  *               // continue => { break; }
  *           }
- *           break;
- *       }
+ *       } while (false)
  *       if (loop_break) break;
  *       update();
  *   } while (true)
@@ -89,15 +88,9 @@ impl LowerGenericLoops {
                 builder.if_(cond.clone(), if_cond_true, if_cond_false);
                 // build the loop body
                 builder.comment(CBoxedSlice::from(
-                    "lowered generic loop: loop { body; break; }".to_string(),
+                    "lowered generic loop: do { body } while (false)".to_string(),
                 ));
-                let loop_body = {
-                    let mut loop_body_builder = IrBuilder::new(self.pools.clone());
-                    loop_body_builder.append_block(body.clone());
-                    loop_body_builder.break_();
-                    loop_body_builder.finish()
-                };
-                builder.loop_(loop_body, const_true);
+                builder.loop_(body.clone(), const_false);
                 // insert the loop break
                 builder.comment(CBoxedSlice::from(
                     "lowered generic loop: if (break_flag) { break; }".to_string(),
@@ -423,6 +416,7 @@ struct LowerBreakContinue {
     current_loop: Option<NodeRef>,
     flags: BreakContinueFlags,
     transformed: HashSet<*const BasicBlock>,
+    loops: Vec<(CArc<ModulePools>, NodeRef)>,
 }
 
 impl LowerBreakContinue {
@@ -501,6 +495,7 @@ impl LowerBreakContinue {
                 }
                 Instruction::Return(_) => {}
                 Instruction::Loop { body, cond } => {
+                    self.loops.push((self.pools.clone(), node.clone()));
                     let old_current_loop = self.current_loop.take();
                     self.current_loop = Some(node);
                     self.transform_block(body, stack);
@@ -649,8 +644,22 @@ impl LowerBreakContinue {
             current_loop: None,
             flags: LowerBreakContinuePreprocess::process(module),
             transformed: HashSet::new(),
+            loops: Vec::new(),
         };
         lower_break_continue.transform_module(&module);
+        // flatten do {} while (false) loops
+        for (pool, loop_) in lower_break_continue.loops {
+            if let Instruction::Loop { body, cond } = loop_.get().instruction.as_ref() {
+                if cond.is_const() && !cond.get_bool() {
+                    let mut builder = IrBuilder::new(pool);
+                    builder.set_insert_point(loop_.get().prev);
+                    loop_.remove();
+                    builder.comment(CBoxedSlice::from("flattened loop begin".to_string()));
+                    builder.append_block(body.clone());
+                    builder.comment(CBoxedSlice::from("flattened loop end".to_string()));
+                }
+            }
+        }
     }
 }
 

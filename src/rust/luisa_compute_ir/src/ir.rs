@@ -2524,8 +2524,11 @@ impl IrBuilder {
         self.insert_point = node;
     }
     pub fn append_block(&mut self, block: Pooled<BasicBlock>) {
-        self.bb.merge(block);
-        self.insert_point = self.bb.last.get().prev;
+        while !block.first.get().next.is_sentinel() {
+            let node = block.first.get().next;
+            node.remove();
+            self.append(node);
+        }
     }
     pub fn comment(&mut self, msg: CBoxedSlice<u8>) -> NodeRef {
         let new_node = new_node(

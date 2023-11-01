@@ -684,7 +684,7 @@ size_t Type::add_member(const luisa::string &name) noexcept {
 }
 
 size_t Type::member(const luisa::string &name) const noexcept {
-    if (name == "coro_id") return 0;
+    if (name == "coro_id") return 0u;
     if (name == "token") return 1u;
     auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;
     auto it = map.find(name);

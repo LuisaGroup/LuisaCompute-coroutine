@@ -1,54 +1,25 @@
 //
-// Created by Mike Smith on 2021/2/27.
+// Created by ChenXin on 2023/9/13.
 //
 
-#include "luisa/ast/type_registry.h"
-#include "luisa/dsl/soa.h"
-#include "luisa/dsl/struct.h"
-#include <fstream>
 #include <luisa/luisa-compute.h>
-#include <luisa/ir/ast2ir.h>
-#include <luisa/ir/ir2ast.h>
 #include<luisa/coro/coro_dispatcher.h>
-//#include <luisa/coro/coro_dispatcher.h>
 using namespace luisa;
 using namespace luisa::compute;
+
 struct alignas(4) CoroFrame {
-    //uint id;
-    //uint x;
 };
-struct CoroTest {
-    uint id;
-    uint x;
-};
-LUISA_DERIVE_FMT(CoroTest, CoroTest, id, x)
-template<>
-struct luisa::compute::struct_member_tuple<CoroTest> {
-    using this_type = CoroTest;
-    using type = std::tuple<LUISA_MAP_LIST(LUISA_STRUCTURE_MAP_MEMBER_TO_TYPE, id, x)>;
-    using offset = std::integer_sequence<size_t, LUISA_MAP_LIST(LUISA_STRUCTURE_MAP_MEMBER_TO_OFFSET, id, x)>;
-    static_assert(alignof(this_type) >= 4);
-    static_assert(luisa::compute::detail::is_valid_reflection_v<this_type, type, offset>);
-};
-template<>
-struct luisa::compute::detail::TypeDesc<CoroTest> {
-    using this_type = CoroTest;
-    static luisa::string_view description() noexcept {
-        static auto s = luisa::compute::detail::make_struct_description(alignof(CoroTest), {LUISA_MAP_LIST(LUISA_STRUCTURE_MAP_MEMBER_TO_DESC, id, x)});
-        return s;
-    }
-};
-template<>
-struct luisa_compute_extension<CoroTest>;
-LUISA_DERIVE_DSL_STRUCT(CoroTest, id, x)
-LUISA_DERIVE_SOA(CoroTest, id, x)
-template<>
-struct luisa_compute_extension<CoroTest> final : luisa::compute::detail::Ref<CoroTest> {};
 LUISA_COROFRAME_STRUCT(CoroFrame){};
 
-int main(int argc, char *argv[]) {
+struct alignas(8) User {
+public:
+    uint age;
+    float savings;
+};
+LUISA_STRUCT(User, age, savings) {};
 
-    luisa::log_level_verbose();
+int main(int argc, char *argv[]) {
+    log_level_verbose();
 
     auto context = Context{argv[0]};
     if (argc <= 1) {
@@ -56,75 +27,97 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
     auto device = context.create_device(argv[1]);
-    constexpr auto n = 7u;
-    auto x_buffer = device.create_buffer<float>(n);
-    auto stream = device.create_stream(StreamTag::GRAPHICS);
+    auto stream = device.create_stream(StreamTag::COMPUTE);
 
-    std::vector<float> x(n);
-    std::vector<float> x_out(n);
-    for (auto i = 0u; i < n; i++) {
-        x[i] = i;
-    }
-    stream << x_buffer.copy_from(x.data())
-           << synchronize();
-    static constexpr auto f = [](auto x, auto y) noexcept { return x * sin(y); };
-    Coroutine test_coro = [](Var<CoroFrame> &frame, BufferFloat x_buffer) noexcept {
-        auto i = coro_id().x;//(=== auto i = frame.m0.x)
+    constexpr auto n = 40u;
+    auto x_buffer = device.create_buffer<uint>(n);
+    auto x_vec = std::vector<uint>(n, 0u);
 
-        auto x = x_buffer->read(i);
-        auto y=sin(x);
+    Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
+        auto id = coro_id().x;
+        //        x_buffer.write(id, id * 2u);
+        x_buffer.write(id, coro_token() +1000u + 10 * id);
         $suspend("1");
-
-        x += 10;
-        x_buffer.write(i, x);
-        $suspend("2");
-        x += 100;
-        x_buffer.write(i, x);
-        $suspend("3u");
-        $suspend("4u");
+        x_buffer.write(id, coro_token() +2000u + 20 * id);
+        //        $if(id % 2u == 0u) {
+        //            $suspend("1");
+        //            x_buffer.write(id, 1000u + coro_token() * 2u);
+        //        };
+        //        auto user = def<User>(20u, 1000.0f);
+        //        auto i = def(0u);
+        //        $while (i <= 3u) {
+        //            auto x = x_buffer.read(id) + user.age;
+        //            $switch (1u) {
+        //                $case (1u) {
+        //                    $if (id < 5u) {
+        //                        x_buffer.write(id, x + 1000u);
+        //                        $if (i == 0u) {
+        //                            $suspend("1");
+        //                        };
+        //                        x = x_buffer.read(id);
+        //                        $if (i == 1u) {
+        //                            $suspend("2");
+        //                        };
+        //                        x = x;
+        //                        $suspend("3u");
+        //                        x_buffer.write(id, x + n);
+        //                    }
+        //                    $else {
+        //                        x_buffer.write(id, x + 2000u);
+        //                    };
+        //                };
+        //                $default {
+        //                    x_buffer.write(id, x + 3000u);
+        //                };
+        //            };
+        //            i += 1u;
+        //        };
     };
-    //coro::WavefrontCoroDispatcher<CoroFrame&,Buffer<float>> dispatcher{&test_coro, device, x_buffer,10,10};
-    auto test = (Type::of<CoroFrame>())->tag();
+    auto type = Type::of<CoroFrame>();
     auto frame_buffer = device.create_buffer<CoroFrame>(n);
-    auto frame_soa = device.create_soa<CoroFrame>(n);
-    //auto a = coro::WavefrontDispatcher{&test_coro, device};
-    Kernel1D gen = [&](BufferFloat x_buffer) noexcept {
+    Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_id();
         auto id_x = id.x;
-        auto frame = frame_soa->read(id_x);
+        x_buffer.write(id_x, id_x);
+        auto frame = frame_buffer->read(id_x);
         initialize_coroframe(frame, id);
-        test_coro(frame, x_buffer);
+        coro(frame, x_buffer, n);
         frame_buffer->write(id_x, frame);
     };
-    Kernel1D next = [&](BufferFloat x_buffer) noexcept {
+    auto shader = device.compile(kernel);
+    Kernel1D resume_kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
-        auto frame = frame_soa->read(dispatch_x());
-        test_coro(frame_buffer->read(dispatch_x()), x_buffer);
-        //if (frame.x != 1) {
-        frame_buffer->write(dispatch_x(), frame);
-        //}
+        auto frame = frame_buffer->read(id);
+        auto token = read_promise<uint>(frame, "token");
+        $switch (token) {
+            for (int i = 1; i <= coro.suspend_count(); ++i) {
+                $case (i) {
+                    coro[i](frame, x_buffer, n);
+                };
+            }
+        };
+        frame_buffer->write(id, frame);
     };
-    ShaderOption option{};
-    option.enable_debug_info = true;
-    auto gen_shader = device.compile(gen, option);
-    auto next_shader = device.compile(next);
-    LUISA_INFO("start execution...");
-    stream << x_buffer.copy_from(x.data())
-           << synchronize();
-    stream << gen_shader(x_buffer).dispatch(n)
-           << synchronize();
-    stream << x_buffer.copy_to(x_out.data())
-           << synchronize();
-    for (int j = 0; j < n; ++j) {
-        LUISA_INFO("gen: x[{}] = {}", j, x_out[j]);
+    coro::WavefrontCoroDispatcher dispatcher{&coro,device,stream,20u};
+    dispatcher(x_buffer,n,200);
+    for (auto iter = 0u; iter < 6; ++iter) {
+        stream << dispatcher.await_step()
+               << x_buffer.copy_to(x_vec.data())
+               << synchronize();
+        for (auto i = 0u; i < n; ++i) {
+            LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
+        }
     }
-    stream << x_buffer.copy_from(x.data())
+    auto resume_shader = device.compile(resume_kernel);
+    stream << shader(x_buffer).dispatch(n)
+           << x_buffer.copy_to(x_vec.data())
            << synchronize();
-    stream << next_shader(x_buffer).dispatch(n)
-           << synchronize();
-    stream << x_buffer.copy_to(x_out.data())
-           << synchronize();
-    for (int j = 0; j < n; ++j) {
-        LUISA_INFO("gen: x[{}] = {}", j, x_out[j]);
+    for (auto iter = 0u; iter < 6; ++iter) {
+        for (auto i = 0u; i < n; ++i) {
+            LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
+        }
+        stream << resume_shader(x_buffer).dispatch(n)
+               << x_buffer.copy_to(x_vec.data())
+               << synchronize();
     }
 }

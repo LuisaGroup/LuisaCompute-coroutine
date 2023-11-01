@@ -1,10 +1,10 @@
-use half::f16;
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize, Serializer};
 use crate::analysis::usage_detect::detect_usage;
 use crate::ast2ir;
 use crate::*;
 use bitflags::bitflags;
+use half::f16;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -1022,6 +1022,37 @@ impl Const {
             _ => panic!("cannot convert to i32"),
         }
     }
+    pub fn get_bool(&self) -> bool {
+        match self {
+            Const::Bool(v) => *v,
+            Const::One(t) => {
+                assert!(
+                    t.is_primitive() && t.is_bool(),
+                    "cannot convert {:?} to bool",
+                    t
+                );
+                true
+            }
+            Const::Zero(t) => {
+                assert!(
+                    t.is_primitive() && t.is_bool(),
+                    "cannot convert {:?} to bool",
+                    t
+                );
+                false
+            }
+            Const::Generic(slice, t) => {
+                assert!(
+                    t.is_primitive() && t.is_bool(),
+                    "cannot convert {:?} to bool",
+                    t
+                );
+                assert_eq!(slice.len(), 1, "invalid slice length for bool");
+                slice[0] != 0
+            }
+            _ => panic!("cannot convert to bool"),
+        }
+    }
     pub fn type_(&self) -> CArc<Type> {
         match self {
             Const::Zero(ty) => ty.clone(),
@@ -1240,27 +1271,59 @@ pub enum Instruction {
 impl Debug for Instruction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Instruction::Buffer => { write!(f, "Buffer") }
-            Instruction::Bindless => { write!(f, "Bindless") }
-            Instruction::Texture2D => { write!(f, "Texture2D") }
-            Instruction::Texture3D => { write!(f, "Texture3D") }
-            Instruction::Accel => { write!(f, "Accel") }
-            Instruction::Shared => { write!(f, "Shared") }
-            Instruction::Uniform => { write!(f, "Uniform") }
-            Instruction::Local { init } => { write!(f, "Local({:?})", init) }
-            Instruction::Argument { by_value } => { write!(f, "{}Argument", if *by_value {""} else {"&"}) }
-            Instruction::UserData(_) => { write!(f, "UserData") }
-            Instruction::Invalid => { write!(f, "Invalid") }
-            Instruction::Const(c) => { write!(f, "Const({})", c) }
-            Instruction::Update { var, value } => { write!(f, "Update {} = {}", var.0, value.0) }
+            Instruction::Buffer => {
+                write!(f, "Buffer")
+            }
+            Instruction::Bindless => {
+                write!(f, "Bindless")
+            }
+            Instruction::Texture2D => {
+                write!(f, "Texture2D")
+            }
+            Instruction::Texture3D => {
+                write!(f, "Texture3D")
+            }
+            Instruction::Accel => {
+                write!(f, "Accel")
+            }
+            Instruction::Shared => {
+                write!(f, "Shared")
+            }
+            Instruction::Uniform => {
+                write!(f, "Uniform")
+            }
+            Instruction::Local { init } => {
+                write!(f, "Local({:?})", init)
+            }
+            Instruction::Argument { by_value } => {
+                write!(f, "{}Argument", if *by_value { "" } else { "&" })
+            }
+            Instruction::UserData(_) => {
+                write!(f, "UserData")
+            }
+            Instruction::Invalid => {
+                write!(f, "Invalid")
+            }
+            Instruction::Const(c) => {
+                write!(f, "Const({})", c)
+            }
+            Instruction::Update { var, value } => {
+                write!(f, "Update {} = {}", var.0, value.0)
+            }
             Instruction::Call(func, args) => {
-                let args = args.iter().map(|node| format!("{}", node.0)).collect::<Vec<_>>();
+                let args = args
+                    .iter()
+                    .map(|node| format!("{}", node.0))
+                    .collect::<Vec<_>>();
                 // use ", " to join args
                 let args = args.join(", ");
                 write!(f, "Call {:?}({})", func, args)
             }
             Instruction::Phi(incomings) => {
-                let incomings = incomings.iter().map(|i| format!("{:?}", i)).collect::<Vec<_>>();
+                let incomings = incomings
+                    .iter()
+                    .map(|i| format!("{:?}", i))
+                    .collect::<Vec<_>>();
                 let incomings = incomings.join(", ");
                 write!(f, "Phi({})", incomings)
             }
@@ -1271,37 +1334,111 @@ impl Debug for Instruction {
                     write!(f, "Return")
                 }
             }
-            Instruction::Loop { body, cond } => { write!(f, "Loop {{ {:?} }} Cond({:?})", body.as_ptr(), cond) }
-            Instruction::GenericLoop { prepare, cond, body, update } => {
-                write!(f, "GenericLoop Prepare({:?}) Cond({}) Body({:?}) Update({:?})", prepare.as_ptr(), cond.0, body.as_ptr(), update.as_ptr())
+            Instruction::Loop { body, cond } => {
+                write!(f, "Loop {{ {:?} }} Cond({:?})", body.as_ptr(), cond)
             }
-            Instruction::Break => { write!(f, "Break") }
-            Instruction::Continue => { write!(f, "Continue") }
-            Instruction::If { cond, true_branch, false_branch } => {
-                write!(f, "If Cond({}) True({:?}) False({:?})", cond.0, true_branch.as_ptr(), false_branch.as_ptr())
+            Instruction::GenericLoop {
+                prepare,
+                cond,
+                body,
+                update,
+            } => {
+                write!(
+                    f,
+                    "GenericLoop Prepare({:?}) Cond({}) Body({:?}) Update({:?})",
+                    prepare.as_ptr(),
+                    cond.0,
+                    body.as_ptr(),
+                    update.as_ptr()
+                )
             }
-            Instruction::Switch { value, default, cases } => {
+            Instruction::Break => {
+                write!(f, "Break")
+            }
+            Instruction::Continue => {
+                write!(f, "Continue")
+            }
+            Instruction::If {
+                cond,
+                true_branch,
+                false_branch,
+            } => {
+                write!(
+                    f,
+                    "If Cond({}) True({:?}) False({:?})",
+                    cond.0,
+                    true_branch.as_ptr(),
+                    false_branch.as_ptr()
+                )
+            }
+            Instruction::Switch {
+                value,
+                default,
+                cases,
+            } => {
                 let cases = cases.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>();
                 let cases = cases.join(", ");
-                write!(f, "Switch Value({}) Default({:?}) Cases({})", value.0, default.as_ptr(), cases)
+                write!(
+                    f,
+                    "Switch Value({}) Default({:?}) Cases({})",
+                    value.0,
+                    default.as_ptr(),
+                    cases
+                )
             }
-            Instruction::AdScope { body, forward, n_forward_grads } => {
-                write!(f, "AdScope Body({:?}) Forward({}) n_forward_grads({})", body.as_ptr(), forward, n_forward_grads)
+            Instruction::AdScope {
+                body,
+                forward,
+                n_forward_grads,
+            } => {
+                write!(
+                    f,
+                    "AdScope Body({:?}) Forward({}) n_forward_grads({})",
+                    body.as_ptr(),
+                    forward,
+                    n_forward_grads
+                )
             }
-            Instruction::RayQuery { ray_query, on_triangle_hit, on_procedural_hit } => {
-                write!(f, "RayQuery RayQuery({}) OnTriangleHit({:?}) OnProceduralHit({:?})", ray_query.0, on_triangle_hit.as_ptr(), on_procedural_hit.as_ptr())
+            Instruction::RayQuery {
+                ray_query,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                write!(
+                    f,
+                    "RayQuery RayQuery({}) OnTriangleHit({:?}) OnProceduralHit({:?})",
+                    ray_query.0,
+                    on_triangle_hit.as_ptr(),
+                    on_procedural_hit.as_ptr()
+                )
             }
             Instruction::Print { fmt, args } => {
                 let args = args.iter().map(|a| format!("{:?}", a)).collect::<Vec<_>>();
                 let args = args.join(", ");
                 write!(f, "Print Fmt({}) Args({})", fmt.to_string(), args)
             }
-            Instruction::AdDetach(body) => { write!(f, "AdDetach Body({:?})", body.as_ptr()) }
-            Instruction::Comment(comment) => { write!(f, "Comment: {:?}", comment.to_string()) }
-            Instruction::CoroSplitMark { token } => { write!(f, "CoroSplitMark({})", token) }
-            Instruction::CoroSuspend { token } => { write!(f, "CoroSuspend({})", token) }
-            Instruction::CoroResume { token } => { write!(f, "CoroResume({})", token) }
-            Instruction::CoroRegister{ token,value,var} =>{ write!(f, "CoroRegister(token:{}, value:{}, var:{})",token,value.0,var)}
+            Instruction::AdDetach(body) => {
+                write!(f, "AdDetach Body({:?})", body.as_ptr())
+            }
+            Instruction::Comment(comment) => {
+                write!(f, "Comment: {:?}", comment.to_string())
+            }
+            Instruction::CoroSplitMark { token } => {
+                write!(f, "CoroSplitMark({})", token)
+            }
+            Instruction::CoroSuspend { token } => {
+                write!(f, "CoroSuspend({})", token)
+            }
+            Instruction::CoroResume { token } => {
+                write!(f, "CoroResume({})", token)
+            }
+            Instruction::CoroRegister { token, value, var } => {
+                write!(
+                    f,
+                    "CoroRegister(token:{}, value:{}, var:{})",
+                    token, value.0, var
+                )
+            }
         }
     }
 }
@@ -1426,14 +1563,13 @@ impl Serialize for BasicBlock {
 
 pub struct BasicBlockIter<'a> {
     cur: NodeRef,
-    last: NodeRef,
     _block: &'a BasicBlock,
 }
 
 impl Iterator for BasicBlockIter<'_> {
     type Item = NodeRef;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.cur == self.last {
+        if self.cur.is_sentinel() {
             None
         } else {
             let ret = self.cur;
@@ -1447,7 +1583,6 @@ impl BasicBlock {
     pub fn iter(&self) -> BasicBlockIter {
         BasicBlockIter {
             cur: self.first.get().next,
-            last: self.last,
             _block: self,
         }
     }
@@ -1513,7 +1648,7 @@ impl BasicBlock {
         }
     }
     /// split the block into two at @at
-    /// @at is not transfered into the other block
+    /// @at is not transferred into the other block
     pub fn split(&self, at: NodeRef, pools: &CArc<ModulePools>) -> Pooled<BasicBlock> {
         #[cfg(debug_assertions)]
         {
@@ -1553,6 +1688,12 @@ impl NodeRef {
         match self.get().instruction.as_ref() {
             Instruction::Const(c) => c.get_i32(),
             _ => panic!("not i32 node; found: {:?}", self.get().instruction),
+        }
+    }
+    pub fn get_bool(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Const(c) => c.get_bool(),
+            _ => panic!("not bool node; found: {:?}", self.get().instruction),
         }
     }
     pub fn is_unreachable(&self) -> bool {
@@ -1677,6 +1818,13 @@ impl NodeRef {
     pub fn is_linked(&self) -> bool {
         assert!(self.valid());
         self.get().prev.valid() || self.get().next.valid()
+    }
+    pub fn is_sentinel(&self) -> bool {
+        assert!(self.valid());
+        match self.get().instruction.as_ref() {
+            Instruction::Invalid => true,
+            _ => false,
+        }
     }
     pub fn remove(&self) {
         assert!(self.valid());
@@ -2217,7 +2365,9 @@ impl ModuleDuplicator {
             Instruction::CoroSuspend { .. }
             | Instruction::CoroRegister { .. }
             | Instruction::CoroResume { .. } => {
-                unreachable!("Unexpected coroutine instruction in ModuleDuplicator::duplicate_node");
+                unreachable!(
+                    "Unexpected coroutine instruction in ModuleDuplicator::duplicate_node"
+                );
             }
             Instruction::Print { fmt, args } => {
                 let args = args
@@ -2738,7 +2888,10 @@ impl IrBuilder {
     pub fn coro_split_mark(&mut self, token: u32) -> NodeRef {
         let new_node = new_node(
             &self.pools,
-            Node::new(CArc::new(Instruction::CoroSplitMark { token }), Type::void()),
+            Node::new(
+                CArc::new(Instruction::CoroSplitMark { token }),
+                Type::void(),
+            ),
         );
         self.append(new_node);
         new_node
@@ -2825,7 +2978,7 @@ pub extern "C" fn luisa_compute_ir_node_usage(kernel: &KernelModule) -> CBoxedSl
                         "Requested resource {} not exist in usage map",
                         captured.node.0
                     )
-                        .as_str(),
+                    .as_str(),
                 )
                 .to_u8(),
         );

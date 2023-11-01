@@ -6,12 +6,9 @@
  */
 
 use crate::ir::debug::dump_ir_human_readable;
-use crate::ir::{
-    new_node, BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModulePools, Node, NodeRef,
-};
+use crate::ir::{BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModulePools, NodeRef};
 use crate::transform::Transform;
 use crate::{CArc, CBoxedSlice, Pooled, TypeOf};
-use log::debug;
 use std::collections::{HashMap, HashSet};
 
 pub struct CanonicalizeControlFlow;
@@ -237,20 +234,426 @@ impl LowerGenericLoops {
     fn transform_module(&mut self, module: &Module) {
         if self.transformed.insert(module.entry.as_ptr()) {
             // not transformed before, so transform it
-            self.transform_block(&module.entry)
+            let old_loop_break = self.generic_loop_break.take();
+            let old_pools = self.pools.clone();
+            self.pools = module.pools.clone();
+            self.transform_block(&module.entry);
+            self.generic_loop_break = old_loop_break;
+            self.pools = old_pools;
         }
     }
 
-    pub fn transform(module: Module) -> Module {
+    fn transform(module: &Module) {
         let mut lower_generic_loops = LowerGenericLoops {
-            pools: module.pools.clone(),
+            pools: CArc::null(),
             transformed: HashSet::new(),
             generic_loop_break: None,
         };
-        lower_generic_loops.transform_module(&module);
-        module
+        lower_generic_loops.transform_module(module);
     }
 }
+
+// This analysis checks whether a flag variable is necessary in a loop.
+// If so, it generates the flag variable and records it with the loop.
+struct BreakContinueFlags {
+    break_: HashMap<NodeRef, NodeRef>,
+    continue_: HashMap<NodeRef, NodeRef>,
+}
+
+struct LowerBreakContinuePreprocess {
+    pools: CArc<ModulePools>,
+    processed: HashSet<*const BasicBlock>,
+    flags: BreakContinueFlags,
+    current_loop: Option<NodeRef>,
+}
+
+impl LowerBreakContinuePreprocess {
+    fn process_block(&mut self, bb: &Pooled<BasicBlock>) {
+        for node in bb.iter() {
+            match node.get().instruction.as_ref() {
+                Instruction::Buffer => {}
+                Instruction::Bindless => {}
+                Instruction::Texture2D => {}
+                Instruction::Texture3D => {}
+                Instruction::Accel => {}
+                Instruction::Shared => {}
+                Instruction::Uniform => {}
+                Instruction::Local { .. } => {}
+                Instruction::Argument { .. } => {}
+                Instruction::UserData(_) => {}
+                Instruction::Invalid => {}
+                Instruction::Const(_) => {}
+                Instruction::Update { .. } => {}
+                Instruction::Call(func, _) => match func {
+                    Func::Callable(callable) => {
+                        self.process_module(&callable.0.module);
+                    }
+                    _ => {}
+                },
+                Instruction::Phi(_) => {
+                    panic!("Phi nodes should be eliminated before this transform");
+                }
+                Instruction::Return(_) => {
+                    // remove all nodes after the return node as they are unreachable
+                    while !node.get().next.is_sentinel() {
+                        node.get().next.remove();
+                    }
+                }
+                Instruction::Loop { body, cond: _ } => {
+                    let old_current_loop = self.current_loop.take();
+                    self.current_loop = Some(node);
+                    self.process_block(body);
+                    self.current_loop = old_current_loop;
+                }
+                Instruction::GenericLoop { .. } => {
+                    panic!("GenericLoop nodes should be eliminated before this transform");
+                }
+                Instruction::Break => {
+                    if let Some(current_loop) = self.current_loop {
+                        // if the flag variable is not generated yet, generate it
+                        if !self.flags.break_.contains_key(&current_loop) {
+                            let mut builder = IrBuilder::new(self.pools.clone());
+                            builder.set_insert_point(current_loop.get().prev);
+                            builder.comment(CBoxedSlice::from("loop break flag".to_string()));
+                            let const_false = builder.const_(Const::Bool(false));
+                            let loop_break = builder.local(const_false);
+                            self.flags.break_.insert(current_loop.clone(), loop_break);
+                        }
+                    } else {
+                        // error
+                        panic!("Break outside of loop");
+                    }
+                    // remove all nodes after the break node as they are unreachable
+                    while !node.get().next.is_sentinel() {
+                        node.get().next.remove();
+                    }
+                }
+                Instruction::Continue => {
+                    if let Some(current_loop) = self.current_loop {
+                        if !self.flags.continue_.contains_key(&current_loop) {
+                            let mut builder = IrBuilder::new(self.pools.clone());
+                            builder.set_insert_point(current_loop.get().prev);
+                            builder.comment(CBoxedSlice::from("loop continue flag".to_string()));
+                            let const_false = builder.const_(Const::Bool(false));
+                            let loop_continue = builder.local(const_false);
+                            self.flags
+                                .continue_
+                                .insert(current_loop.clone(), loop_continue);
+                        }
+                    } else {
+                        // error
+                        panic!("Continue outside of loop");
+                    }
+                    // remove all nodes after the continue node as they are unreachable
+                    while !node.get().next.is_sentinel() {
+                        node.get().next.remove();
+                    }
+                }
+                Instruction::If {
+                    cond: _,
+                    true_branch,
+                    false_branch,
+                } => {
+                    self.process_block(true_branch);
+                    self.process_block(false_branch);
+                }
+                Instruction::Switch {
+                    value: _,
+                    default,
+                    cases,
+                } => {
+                    self.process_block(default);
+                    for case in cases.iter() {
+                        self.process_block(&case.block);
+                    }
+                }
+                Instruction::AdScope { body, .. } => {
+                    self.process_block(body);
+                }
+                Instruction::RayQuery {
+                    on_triangle_hit,
+                    on_procedural_hit,
+                    ..
+                } => {
+                    self.process_block(on_triangle_hit);
+                    self.process_block(on_procedural_hit);
+                }
+                Instruction::Print { .. } => {}
+                Instruction::AdDetach(body) => {
+                    self.process_block(body);
+                }
+                Instruction::Comment(_) => {}
+                Instruction::CoroSplitMark { .. } => {}
+                Instruction::CoroSuspend { .. } => {}
+                Instruction::CoroResume { .. } => {}
+                Instruction::CoroRegister { .. } => {}
+            }
+        }
+    }
+
+    fn process_module(&mut self, module: &Module) {
+        if self.processed.insert(module.entry.as_ptr()) {
+            // not processed before, so process it
+            let old_current_loop = self.current_loop.take();
+            let old_pools = self.pools.clone();
+            self.pools = module.pools.clone();
+            self.process_block(&module.entry);
+            self.current_loop = old_current_loop;
+            self.pools = old_pools;
+        }
+    }
+
+    fn process(module: &Module) -> BreakContinueFlags {
+        let mut lower_break_continue_preprocess = LowerBreakContinuePreprocess {
+            pools: CArc::null(),
+            processed: HashSet::new(),
+            flags: BreakContinueFlags {
+                break_: HashMap::new(),
+                continue_: HashMap::new(),
+            },
+            current_loop: None,
+        };
+        lower_break_continue_preprocess.process_module(&module);
+        lower_break_continue_preprocess.flags
+    }
+}
+
+struct LowerBreakContinue {
+    pools: CArc<ModulePools>,
+    current_loop: Option<NodeRef>,
+    flags: BreakContinueFlags,
+    transformed: HashSet<*const BasicBlock>,
+}
+
+impl LowerBreakContinue {
+    fn extract_guarded_block(&self, node: NodeRef) -> Pooled<BasicBlock> {
+        let mut builder = IrBuilder::new(self.pools.clone());
+        while !node.get().next.is_sentinel() {
+            let next = node.get().next;
+            next.remove();
+            builder.append(next);
+        }
+        builder.finish()
+    }
+
+    fn empty_block(&self) -> Pooled<BasicBlock> {
+        let mut builder = IrBuilder::new(self.pools.clone());
+        builder.finish()
+    }
+
+    fn transform_control_flow(&mut self, node: NodeRef, flag: NodeRef, stack: &Vec<NodeRef>) {
+        assert_eq!(stack.last(), Some(&node));
+        let mut builder = IrBuilder::new(self.pools.clone());
+        builder.set_insert_point(node.get().prev);
+        // mark the loop break/continue flag as true
+        builder.comment(CBoxedSlice::from(
+            "lower control flow: flag = true".to_string(),
+        ));
+        let const_true = builder.const_(Const::Bool(true));
+        let update = builder.update(flag.clone(), const_true);
+        // remove the break/continue node and replace it with the update
+        update.remove();
+        node.replace_with(update.get());
+        // recursively split the loop into if-guarded blocks
+        let current_loop = self.current_loop.as_ref().unwrap();
+        for node in stack.iter().rev().skip(1) {
+            if node == current_loop {
+                break;
+            }
+            let guarded = self.extract_guarded_block(node.clone());
+            builder.set_insert_point(node.clone());
+            builder.comment(CBoxedSlice::from(
+                "lower control flow: guarded block".to_string(),
+            ));
+            let flag = builder.load(flag.clone());
+            let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
+            builder.if_(not_flag, guarded, self.empty_block());
+        }
+    }
+
+    fn transform_block(&mut self, bb: &Pooled<BasicBlock>, stack: &mut Vec<NodeRef>) {
+        for node in bb.iter() {
+            stack.push(node);
+            match node.get().instruction.as_ref() {
+                Instruction::Buffer => {}
+                Instruction::Bindless => {}
+                Instruction::Texture2D => {}
+                Instruction::Texture3D => {}
+                Instruction::Accel => {}
+                Instruction::Shared => {}
+                Instruction::Uniform => {}
+                Instruction::Local { .. } => {}
+                Instruction::Argument { .. } => {}
+                Instruction::UserData(_) => {}
+                Instruction::Invalid => {}
+                Instruction::Const(_) => {}
+                Instruction::Update { .. } => {}
+                Instruction::Call(func, _) => match func {
+                    Func::Callable(callable) => {
+                        self.transform_module(&callable.0.module);
+                    }
+                    _ => {}
+                },
+                Instruction::Phi(_) => {
+                    panic!("Phi nodes should be eliminated before this transform");
+                }
+                Instruction::Return(_) => {}
+                Instruction::Loop { body, cond } => {
+                    let old_current_loop = self.current_loop.take();
+                    self.current_loop = Some(node);
+                    self.transform_block(body, stack);
+                    self.current_loop = old_current_loop;
+                    // reset the flag before the loop and edit the loop condition
+                    let break_flag = self.flags.break_.get(&node);
+                    let continue_flag = self.flags.continue_.get(&node);
+                    if break_flag.is_some() || continue_flag.is_some() {
+                        let mut builder = IrBuilder::new(self.pools.clone());
+                        // reset the flag before the loop
+                        builder.set_insert_point(body.first.clone());
+                        if let Some(flag) = break_flag {
+                            let const_false = builder.const_(Const::Bool(false));
+                            builder.update(flag.clone(), const_false);
+                        }
+                        if let Some(flag) = continue_flag {
+                            let const_false = builder.const_(Const::Bool(false));
+                            builder.update(flag.clone(), const_false);
+                        }
+                        // edit the loop condition
+                        builder.set_insert_point(body.last.get().prev);
+                        // process the break flag: do { body } while (cond && !flag)
+                        let cond = if let Some(flag) = break_flag {
+                            let flag = builder.load(flag.clone());
+                            let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
+                            if cond.is_const() {
+                                // simple constant folding
+                                if cond.get_bool() {
+                                    not_flag // true && any => any
+                                } else {
+                                    cond.clone() // false && any => false
+                                }
+                            } else {
+                                // not foldable
+                                builder.call(
+                                    Func::BitAnd,
+                                    &[cond.clone(), not_flag],
+                                    cond.type_().clone(),
+                                )
+                            }
+                        } else {
+                            cond.clone()
+                        };
+                        // process the continue flag: do { body } while (cond || flag)
+                        let cond = if let Some(flag) = continue_flag {
+                            let flag = builder.load(flag.clone());
+                            if cond.is_const() {
+                                // simple constant folding
+                                if cond.get_bool() {
+                                    cond.clone() // true || any => true
+                                } else {
+                                    flag // false || any => any
+                                }
+                            } else {
+                                // not foldable
+                                builder.call(
+                                    Func::BitOr,
+                                    &[cond.clone(), flag],
+                                    cond.type_().clone(),
+                                )
+                            }
+                        } else {
+                            cond.clone()
+                        };
+                        // update the loop condition
+                        node.get_mut().instruction = CArc::new(Instruction::Loop {
+                            body: body.clone(),
+                            cond,
+                        });
+                    }
+                }
+                Instruction::GenericLoop { .. } => {
+                    panic!("GenericLoop nodes should be eliminated before this transform");
+                }
+                Instruction::Break => {
+                    let flag = self
+                        .flags
+                        .break_
+                        .get(&self.current_loop.as_ref().unwrap())
+                        .unwrap();
+                    self.transform_control_flow(node, flag.clone(), stack);
+                }
+                Instruction::Continue => {
+                    let flag = self
+                        .flags
+                        .break_
+                        .get(&self.current_loop.as_ref().unwrap())
+                        .unwrap();
+                    self.transform_control_flow(node, flag.clone(), stack);
+                }
+                Instruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    self.transform_block(true_branch, stack);
+                    self.transform_block(false_branch, stack);
+                }
+                Instruction::Switch { default, cases, .. } => {
+                    self.transform_block(default, stack);
+                    for case in cases.iter() {
+                        self.transform_block(&case.block, stack);
+                    }
+                }
+                Instruction::AdScope { body, .. } => {
+                    self.transform_block(body, stack);
+                }
+                Instruction::RayQuery {
+                    on_triangle_hit,
+                    on_procedural_hit,
+                    ..
+                } => {
+                    self.transform_block(on_triangle_hit, stack);
+                    self.transform_block(on_procedural_hit, stack);
+                }
+                Instruction::Print { .. } => {}
+                Instruction::AdDetach(body) => {
+                    self.transform_block(body, stack);
+                }
+                Instruction::Comment(_) => {}
+                Instruction::CoroSplitMark { .. } => {}
+                Instruction::CoroSuspend { .. } => {}
+                Instruction::CoroResume { .. } => {}
+                Instruction::CoroRegister { .. } => {}
+            }
+            let popped = stack.pop();
+            assert_eq!(popped, Some(node));
+        }
+    }
+
+    fn transform_module(&mut self, module: &Module) {
+        if self.transformed.insert(module.entry.as_ptr()) {
+            let old_pools = self.pools.clone();
+            let old_current_loop = self.current_loop.take();
+            self.pools = module.pools.clone();
+            let mut stack = Vec::new();
+            self.transform_block(&module.entry, &mut stack);
+            self.pools = old_pools;
+            self.current_loop = old_current_loop;
+        }
+    }
+
+    fn transform(module: &Module) {
+        let mut lower_break_continue = LowerBreakContinue {
+            pools: CArc::null(),
+            current_loop: None,
+            flags: LowerBreakContinuePreprocess::process(module),
+            transformed: HashSet::new(),
+        };
+        lower_break_continue.transform_module(&module);
+    }
+}
+
+// TODO
+struct LowerEarlyReturn;
 
 impl Transform for CanonicalizeControlFlow {
     fn transform_module(&self, module: Module) -> Module {
@@ -259,9 +662,20 @@ impl Transform for CanonicalizeControlFlow {
             "Before LowerGenericLoops::transform:\n{}",
             dump_ir_human_readable(&module)
         );
-        let module = LowerGenericLoops::transform(module);
+        LowerGenericLoops::transform(&module);
         println!(
             "After LowerGenericLoops::transform:\n{}",
+            dump_ir_human_readable(&module)
+        );
+        // 2. lower break/continue nodes
+        LowerBreakContinuePreprocess::process(&module);
+        println!(
+            "After LowerBreakContinuePreprocess::process:\n{}",
+            dump_ir_human_readable(&module)
+        );
+        LowerBreakContinue::transform(&module);
+        println!(
+            "After LowerBreakContinue::transform:\n{}",
             dump_ir_human_readable(&module)
         );
         module // TODO

@@ -36,9 +36,9 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
         auto id = coro_id().x;
         //        x_buffer.write(id, id * 2u);
-        x_buffer.write(id, coro_token() + 100u);
+        x_buffer.write(id, coro_token() + 1000u + 100 * id);
         $suspend("1");
-        x_buffer.write(id, coro_token() + 200u);
+        x_buffer.write(id, coro_token() + 2000u + 200 * id);
         //        $if(id % 2u == 0u) {
         //            $suspend("1");
         //            x_buffer.write(id, 1000u + coro_token() * 2u);

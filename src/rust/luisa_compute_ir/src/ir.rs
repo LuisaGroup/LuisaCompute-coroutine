@@ -1630,7 +1630,7 @@ impl BasicBlock {
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.first.valid()
+        self.first.get().next.is_sentinel()
     }
     pub fn any_non_comment_node(&self) -> bool {
         self.iter().any(|n| !n.is_comment())
@@ -2524,7 +2524,7 @@ impl IrBuilder {
         self.insert_point = node;
     }
     pub fn append_block(&mut self, block: Pooled<BasicBlock>) {
-        while !block.first.get().next.is_sentinel() {
+        while !block.is_empty() {
             let node = block.first.get().next;
             node.remove();
             self.append(node);

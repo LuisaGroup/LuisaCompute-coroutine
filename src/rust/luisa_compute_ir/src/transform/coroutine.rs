@@ -68,6 +68,7 @@ struct CallableModuleInfo {
     captures: Vec<Capture>,
     frame_node: NodeRef,
     old2frame_index: HashMap<NodeRef, usize>,
+    register_var2index: HashMap<u32, usize>,
 }
 
 
@@ -366,7 +367,7 @@ impl SplitManager {
 
         let mut visit_state = visit_state;
         while visit_state.present != visit_state.end {
-            let node = visit_state.present.get();
+            let mut node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
             // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
@@ -387,6 +388,13 @@ impl SplitManager {
                 }
                 Instruction::CoroResume { token } => {
                     unreachable!("Split: CoroResume");
+                }
+                Instruction::CoroRegister { token, value, var } => {
+                    // var <-> frame[token][index] <-> value
+                    assert_eq!(*token, scope_builder.token);
+                    let callable_info = self.coro_callable_info.get_mut(token).unwrap();
+                    let index = callable_info.old2frame_index.get(value).unwrap();
+                    callable_info.register_var2index.insert(*var, *index);
                 }
 
                 // 3 Instructions after CCF
@@ -1122,10 +1130,8 @@ impl SplitManager {
 
                 node_new
             }
-            Instruction::CoroRegister { .. } => {
-                todo!("Coroutine register");
-            }
-            Instruction::CoroSplitMark { .. }
+            Instruction::CoroRegister { .. }
+            | Instruction::CoroSplitMark { .. }
             | Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
         };
         // insert the duplicated node into the map

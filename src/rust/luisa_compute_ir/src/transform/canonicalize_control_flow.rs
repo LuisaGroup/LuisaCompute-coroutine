@@ -461,13 +461,15 @@ impl LowerBreakContinue {
                 break;
             }
             let guarded = self.extract_guarded_block(node.clone());
-            builder.set_insert_point(node.clone());
-            builder.comment(CBoxedSlice::from(
-                "lower control flow: guarded block".to_string(),
-            ));
-            let flag = builder.load(flag.clone());
-            let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
-            builder.if_(not_flag, guarded, self.empty_block());
+            if guarded.any_non_comment_node() {
+                builder.set_insert_point(node.clone());
+                builder.comment(CBoxedSlice::from(
+                    "lower control flow: guarded block".to_string(),
+                ));
+                let flag = builder.load(flag.clone());
+                let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
+                builder.if_(not_flag, guarded, self.empty_block());
+            }
         }
     }
 

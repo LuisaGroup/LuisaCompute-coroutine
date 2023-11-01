@@ -1632,6 +1632,9 @@ impl BasicBlock {
     pub fn is_empty(&self) -> bool {
         !self.first.valid()
     }
+    pub fn any_non_comment_node(&self) -> bool {
+        self.iter().any(|n| !n.is_comment())
+    }
     pub fn len(&self) -> usize {
         let mut len = 0;
         let mut cur = self.first.get().next;
@@ -1719,6 +1722,12 @@ impl NodeRef {
         assert_eq!(data.tag, type_id_u64::<T>());
         let data = data.data as *const T;
         unsafe { &*data }
+    }
+    pub fn is_comment(&self) -> bool {
+        match self.get().instruction.as_ref() {
+            Instruction::Comment(_) => true,
+            _ => false,
+        }
     }
     pub fn is_local(&self) -> bool {
         match self.get().instruction.as_ref() {

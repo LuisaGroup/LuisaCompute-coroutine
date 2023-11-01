@@ -500,6 +500,7 @@ private:
     luisa::shared_ptr<const detail::FunctionBuilder> _builder;
     luisa::unordered_map<CoroID, Callable<void(FrameType, Args...)>> _sub_callables;
     uint _uniform_size;
+    luisa::unordered_map<luisa::string, uint> _coro_tokens;
 
 public:
     template<typename Def>
@@ -524,6 +525,7 @@ public:
             create(std::forward<Def>(f), std::index_sequence_for<FrameType, Args...>{});
             detail::FunctionBuilder::current()->return_(nullptr);// to check if any previous $return called with non-void types
         });
+        _coro_tokens = ast->coro_tokens();
         Type *frame = const_cast<Type *>(Type::of<expr_value_t<FrameType>>());
         auto sub_builder = luisa::unordered_map<uint, luisa::shared_ptr<const detail::FunctionBuilder>>{};
         _builder = detail::transform_coroutine(frame, sub_builder, ast->function());
@@ -538,7 +540,7 @@ public:
     [[nodiscard]] auto function() const noexcept { return Function{_builder.get()}; }
     [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
     [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
-    [[nodiscard]] auto const suspend_count() noexcept { return _builder->coro_tokens().size(); }
+    [[nodiscard]] auto const suspend_count() noexcept { return _coro_tokens.size(); }
     //Call from start of coroutine
     auto operator()(detail::prototype_to_callable_invocation_t<FrameType> type,
                     detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {

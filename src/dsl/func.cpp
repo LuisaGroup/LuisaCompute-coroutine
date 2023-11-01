@@ -65,7 +65,10 @@ transform_function(Function function) noexcept {
     return function.shared_builder();
 }
 
-luisa::shared_ptr<const FunctionBuilder> transform_coroutine(Type *corotype, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function function) noexcept {
+luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
+    Type *corotype,
+    luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders,
+    Function function) noexcept {
     if (true) {
 #ifndef LUISA_ENABLE_IR
         LUISA_ERROR_WITH_LOCATION(

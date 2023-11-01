@@ -1092,6 +1092,15 @@ impl SplitManager {
                 scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default)
             }
 
+            Instruction::Print { fmt, args } => {
+                let args = args
+                    .iter()
+                    .map(|x| self.find_duplicated_node(scope_builder, *x))
+                    .collect::<Vec<_>>();
+                scope_builder.builder.print(fmt.clone(), &args)
+            }
+
+            // Coro
             Instruction::CoroSuspend { token: token_next } => {
                 self.coro_suspend(&mut scope_builder, *token_next);
                 let node_new = scope_builder.builder.coro_suspend(*token_next);
@@ -1102,16 +1111,11 @@ impl SplitManager {
 
                 node_new
             }
-            Instruction::CoroSplitMark { .. }
-            | Instruction::CoroRegister { .. }
-            | Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
-            Instruction::Print { fmt, args } => {
-                let args = args
-                    .iter()
-                    .map(|x| self.find_duplicated_node(scope_builder, *x))
-                    .collect::<Vec<_>>();
-                scope_builder.builder.print(fmt.clone(), &args)
+            Instruction::CoroRegister { .. } => {
+                todo!("Coroutine register");
             }
+            Instruction::CoroSplitMark { .. }
+            | Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
         };
         // insert the duplicated node into the map
         self.record_node_mapping(frame_token, node_ref, dup_node);

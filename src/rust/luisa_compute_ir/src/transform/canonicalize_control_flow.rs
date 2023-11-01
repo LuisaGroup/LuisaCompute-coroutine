@@ -5,13 +5,14 @@
  * 2.
  */
 
+use crate::ir::debug::dump_ir_human_readable;
 use crate::ir::{
     new_node, BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModulePools, Node, NodeRef,
 };
 use crate::transform::Transform;
-use crate::{CArc, Pooled, TypeOf};
+use crate::{CArc, CBoxedSlice, Pooled, TypeOf};
+use log::debug;
 use std::collections::{HashMap, HashSet};
-use crate::ir::debug::dump_ir_human_readable;
 
 pub struct CanonicalizeControlFlow;
 
@@ -51,6 +52,7 @@ impl LowerGenericLoops {
     fn transform_generic_loop(&mut self, node: NodeRef) {
         let mut builder = IrBuilder::new(self.pools.clone());
         builder.set_insert_point(node.get().prev);
+        builder.comment(CBoxedSlice::from("lowered generic loop".to_string()));
         let const_true = builder.const_(Const::Bool(true));
         let const_false = builder.const_(Const::Bool(false));
         let loop_body = match node.get().instruction.as_ref() {
@@ -62,6 +64,9 @@ impl LowerGenericLoops {
             } => {
                 // create a new block for the transformed generic loop
                 let mut builder = IrBuilder::new(self.pools.clone());
+                builder.comment(CBoxedSlice::from(
+                    "lowered generic loop: break_flag = false".to_string(),
+                ));
                 let loop_break = builder.local(const_false);
                 self.generic_loop_break = Some(loop_break.clone());
                 // recursively transform the nested blocks
@@ -69,8 +74,14 @@ impl LowerGenericLoops {
                 self.transform_block(body);
                 self.transform_block(update);
                 // move the prepare block to the new block
+                builder.comment(CBoxedSlice::from(
+                    "lowered generic loop: { prepare }".to_string(),
+                ));
                 builder.append_block(prepare.clone());
                 // insert the loop condition
+                builder.comment(CBoxedSlice::from(
+                    "lowered generic loop: if (!cond) { break; }".to_string(),
+                ));
                 let cond = builder.call(Func::Not, &[cond.clone()], cond.type_().clone());
                 let (if_cond_true, if_cond_false) = {
                     let mut true_branch_builder = IrBuilder::new(self.pools.clone());
@@ -80,6 +91,9 @@ impl LowerGenericLoops {
                 };
                 builder.if_(cond.clone(), if_cond_true, if_cond_false);
                 // build the loop body
+                builder.comment(CBoxedSlice::from(
+                    "lowered generic loop: loop { body; break; }".to_string(),
+                ));
                 let loop_body = {
                     let mut loop_body_builder = IrBuilder::new(self.pools.clone());
                     loop_body_builder.append_block(body.clone());
@@ -88,6 +102,9 @@ impl LowerGenericLoops {
                 };
                 builder.loop_(loop_body, const_true);
                 // insert the loop break
+                builder.comment(CBoxedSlice::from(
+                    "lowered generic loop: if (break_flag) { break; }".to_string(),
+                ));
                 let (if_loop_break_true, if_loop_break_false) = {
                     let mut true_branch_builder = IrBuilder::new(self.pools.clone());
                     true_branch_builder.break_();
@@ -97,6 +114,9 @@ impl LowerGenericLoops {
                 let loop_break = builder.load(loop_break);
                 builder.if_(loop_break, if_loop_break_true, if_loop_break_false);
                 // insert the loop update
+                builder.comment(CBoxedSlice::from(
+                    "lowered generic loop: { update }".to_string(),
+                ));
                 builder.append_block(update.clone());
                 builder.finish()
             }
@@ -149,6 +169,10 @@ impl LowerGenericLoops {
                         // break => { loop_break = true; break; }
                         let mut builder = IrBuilder::new(self.pools.clone());
                         builder.set_insert_point(node.get().prev);
+                        builder.comment(CBoxedSlice::from(
+                            "lowered generic loop: break => { break_flag = true; break; }"
+                                .to_string(),
+                        ));
                         let const_true = builder.const_(Const::Bool(true));
                         builder.update(generic_loop_break.clone(), const_true);
                     }
@@ -156,6 +180,11 @@ impl LowerGenericLoops {
                 Instruction::Continue => {
                     if let Some(generic_loop_break) = self.generic_loop_break {
                         // continue => { break; }
+                        let mut builder = IrBuilder::new(self.pools.clone());
+                        builder.set_insert_point(node.get().prev);
+                        builder.comment(CBoxedSlice::from(
+                            "lowered generic loop: continue => { break; }".to_string(),
+                        ));
                         node.get_mut().instruction = CArc::new(Instruction::Break);
                     }
                 }
@@ -226,9 +255,15 @@ impl LowerGenericLoops {
 impl Transform for CanonicalizeControlFlow {
     fn transform_module(&self, module: Module) -> Module {
         // 1. Lower generic loops to do-while loops.
-        println!("Before LowerGenericLoops::transform:\n{}", dump_ir_human_readable(&module));
+        println!(
+            "Before LowerGenericLoops::transform:\n{}",
+            dump_ir_human_readable(&module)
+        );
         let module = LowerGenericLoops::transform(module);
-        println!("After LowerGenericLoops::transform:\n{}", dump_ir_human_readable(&module));
+        println!(
+            "After LowerGenericLoops::transform:\n{}",
+            dump_ir_human_readable(&module)
+        );
         module // TODO
     }
 }

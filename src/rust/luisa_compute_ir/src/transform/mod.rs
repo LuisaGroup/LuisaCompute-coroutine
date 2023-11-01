@@ -1,6 +1,5 @@
 pub mod autodiff;
 pub mod canonicalize_control_flow;
-pub mod coroutine;
 pub mod ssa;
 // pub mod validate;
 pub mod vectorize;
@@ -12,7 +11,7 @@ pub mod reg2mem;
 
 use bitflags::Flags;
 
-pub mod coroutine_split;
+pub mod coroutine;
 
 use crate::ir::{self, ModuleFlags, CallableModule, Module, KernelModule};
 
@@ -113,7 +112,7 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         "coroutine" => {
-            let transform = coroutine_split::CoroutineSplit;
+            let transform = coroutine::CoroutineSplit;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),

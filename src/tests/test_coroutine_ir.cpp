@@ -34,35 +34,36 @@ int main(int argc, char *argv[]) {
     auto x_vec = std::vector<uint>(n, 0u);
 
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
-        x_buffer.write(coro_id().x, coro_id().x);
+        auto coro_id_ = coro_id().x;
+        x_buffer.write(coro_id_, coro_id_);
         auto user = def<User>(20u, 1000.0f);
         auto i = def(0u);
-        auto x = x_buffer.read(coro_id().x) + user.age;
-        $switch (coro_id().x) {
+        auto x = x_buffer.read(coro_id_) + user.age;
+        $switch (coro_id_) {
             $case (1u) {
-                $if (coro_id().x < 5u) {
-                    x_buffer.write(coro_id().x, 10000u + 100u * coro_id().x + coro_token());
+                $if (coro_id_ < 5u) {
+                    x_buffer.write(coro_id_, 10000u + 100u * coro_id_ + coro_token());
                     $if (i == 0u) {
-                        x_buffer.write(coro_id().x, 20000u + 100u * coro_id().x + coro_token());
+                        x_buffer.write(coro_id_, 20000u + 100u * coro_id_ + coro_token());
                         $suspend("1");
                     };
-                    x = x_buffer.read(coro_id().x);
+                    x = x_buffer.read(coro_id_);
                     $if (i == 1u) {
-                        x_buffer.write(coro_id().x, 30000u + 100u * coro_id().x + coro_token());
+                        x_buffer.write(coro_id_, 30000u + 100u * coro_id_ + coro_token());
                         $suspend("2");
                     };
-                    x_buffer.write(coro_id().x, 40000u + 100u * coro_id().x + coro_token());
+                    x_buffer.write(coro_id_, 40000u + 100u * coro_id_ + coro_token());
                     $suspend("3u");
-                    x_buffer.write(coro_id().x, x + n);
+                    x_buffer.write(coro_id_, x + n);
                 }
                 $else {
-                    x_buffer.write(coro_id().x, x + 2000u);
+                    x_buffer.write(coro_id_, x + 2000u);
                 };
             };
             $default {
-                x_buffer.write(coro_id().x, x + 3000u);
+                x_buffer.write(coro_id_, x + 3000u);
                 $suspend("4u");
-                x_buffer.write(coro_id().x, x + 4000u);
+                x_buffer.write(coro_id_, x + 4000u);
             };
         };
     };

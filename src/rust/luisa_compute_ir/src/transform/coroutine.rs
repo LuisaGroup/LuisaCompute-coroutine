@@ -1,449 +1,1172 @@
-use std::collections::{BTreeSet, HashSet};
-
 use super::Transform;
 
-use crate::{display::DisplayIR, *};
-use indexmap::IndexSet;
-use ir::*;
-/*
-Remove all Instruction::Update nodes
+use std::collections::{HashMap, HashSet};
 
-*/
-pub struct Coroutine;
+use crate::{display::DisplayIR, CArc, CBoxedSlice, Pooled};
+use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
+use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
+use crate::context::register_type;
+use crate::ir::{SwitchCase, Instruction, BasicBlock, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType, ModuleFlags, ModuleKind};
 
-struct CoroutineImpl {
-    map_blocks: HashMap<*mut BasicBlock, *mut BasicBlock>,
-    local_defs: HashSet<NodeRef>,
-    map_immutables: HashMap<NodeRef, NodeRef>,
-    suspend_count: u32,
-    corostate: NodeRef,
-    corostate_type: CArc<Type>,
+const STATE_INDEX_CORO_ID: usize = 0;
+const STATE_INDEX_FRAME_TOKEN: usize = 1;
+
+struct ScopeBuilder {
+    token: u32,
+    finished: bool,
+    builder: IrBuilder,
 }
 
-struct SSABlockRecord {
-    defined: NestedHashSet<NodeRef>,
-    stored: NestedHashMap<NodeRef, NodeRef>,
-    phis: IndexSet<NodeRef>,
-}
-
-impl SSABlockRecord {
-    fn from_parent(parent: &Self) -> Self {
+impl ScopeBuilder {
+    fn new(frame_token: u32, pools: CArc<ModulePools>) -> Self {
         Self {
-            defined: NestedHashSet::from_parent(&parent.defined),
-            stored: NestedHashMap::from_parent(&parent.stored),
-            phis: IndexSet::new(),
+            token: frame_token,
+            finished: false,
+            builder: IrBuilder::new(pools),
         }
     }
+}
+
+#[derive(Clone, Copy, Default)]
+struct SplitPossibility {
+    possibly: bool,
+    directly: bool,
+    definitely: bool,
+}
+
+struct VisitResult {
+    split_possibly: bool,
+    result: Vec<ScopeBuilder>,
+}
+
+impl VisitResult {
     fn new() -> Self {
         Self {
-            defined: NestedHashSet::new(),
-            stored: NestedHashMap::new(),
-            phis: IndexSet::new(),
+            split_possibly: true,
+            result: vec![],
         }
     }
 }
 
-impl CoroutineImpl {
-    fn new(model: &Module, state: NodeRef) -> Self {
-        Self {
-            map_blocks: HashMap::new(),
-            local_defs: model.collect_nodes().into_iter().collect(),
-            map_immutables: HashMap::new(),
-            suspend_count: 0,
-            corostate: state,
-            corostate_type: crate::context::register_type(Type::Struct(StructType {
-                fields: CBoxedSlice::new(vec![crate::context::register_type(Type::Primitive(
-                    Primitive::Uint32,
-                ))]),
-                alignment: 4,
-                size: 4,
-            })),
-        }
-    }
-    fn load(
-        &mut self,
-        node: NodeRef,
-        builder: &mut IrBuilder,
-        record: &mut SSABlockRecord,
-    ) -> NodeRef {
-        if !self.local_defs.contains(&node) {
-            return builder.call(Func::Load, &[node], node.type_().clone());
-        }
-        if let Some((var, indices)) = node.access_chain() {
-            let mut cur = self.promote(var, builder, record);
-            for (t, i) in &indices {
-                let i = builder.const_(Const::Int32(*i as i32));
-                let el = builder.call(Func::ExtractElement, &[cur, i], t.clone());
-                cur = el;
-            }
-            cur
-        } else {
-            self.promote(node, builder, record)
-        }
-    }
-    fn update(
-        &mut self,
-        var: NodeRef,
-        value: NodeRef,
-        builder: &mut IrBuilder,
-        record: &mut SSABlockRecord,
-    ) {
-        if var.is_local() {
-            let value = self.promote(value, builder, record);
-            record.phis.insert(var);
-            record.stored.insert(var, value);
-        } else {
-            // the hardpart
-            let (var, indices) = var.access_chain().unwrap();
-            let var = self.promote(var, builder, record);
-            let mut st = vec![var];
-            let mut cur = var;
-            for (t, i) in &indices[..indices.len() - 1] {
-                let i = builder.const_(Const::Int32(*i as i32));
-                let el = builder.call(Func::ExtractElement, &[cur, i], t.clone());
-                st.push(el);
-                cur = el;
-            }
-            let mut value = value;
-            for (t, i) in indices.iter().rev() {
-                let i = builder.const_(Const::Int32(*i as i32));
-                let el = builder.call(Func::InsertElement, &[cur, value, i], t.clone());
-                value = el;
-                cur = st.pop().unwrap();
-            }
-            record.phis.insert(var);
-            record.stored.insert(var, cur);
-        }
-        if !self.local_defs.contains(&var) {
-            builder.update(var, value);
-        }
-    }
-    fn promote(
-        &mut self,
-        node: NodeRef,
-        builder: &mut IrBuilder,
-        record: &mut SSABlockRecord,
-    ) -> NodeRef {
-        // assert!(record.stored.get(&node).is_none(), "promote called on already promoted node {:?}", node.get());
-        if let Some(v) = record.stored.get(&node) {
-            return *v;
-        }
-        if !node.is_lvalue() && !self.local_defs.contains(&node) {
-            return node;
-        }
-        if !node.is_lvalue() && self.map_immutables.contains_key(&node) {
-            return self.map_immutables[&node];
-        }
-        let instruction = &node.get().instruction;
-        let type_ = &node.get().type_;
-        match instruction.as_ref() {
-            Instruction::Buffer => return node,
-            Instruction::Bindless => return node,
-            Instruction::Texture2D => return node,
-            Instruction::Texture3D => return node,
-            Instruction::Accel => return node,
-            Instruction::Shared => return node,
-            Instruction::Uniform => return node,
-            Instruction::Local { init } => {
-                if !self.local_defs.contains(&node) {
-                    return node;
-                }
-                let init = self.promote(*init, builder, record);
-                let var = builder.local(init);
-                record.defined.insert(node);
-                record.stored.insert(node, init);
-                return var;
-            }
-            Instruction::Argument { .. } => todo!(),
-            Instruction::UserData(_) => return node,
-            Instruction::Invalid => return node,
-            Instruction::Const(c) => {
-                let c = builder.const_(c.clone());
-                self.map_immutables.insert(node, c);
-                return c;
-            }
-            Instruction::Update { var, value } => {
-                self.update(*var, *value, builder, record);
-                // no need to return the value as it is already stored in `value`
-                return INVALID_REF;
-            }
-            Instruction::Call(func, args) => {
-                if *func == Func::Load {
-                    return self.load(args[0], builder, record);
-                }
-                let promoted_args = args
-                    .as_ref()
-                    .iter()
-                    .map(|a| self.promote(*a, builder, record))
-                    .collect::<Vec<_>>();
-                let v = builder.call(func.clone(), &promoted_args, type_.clone());
-                self.map_immutables.insert(node, v);
-                return v;
-            }
-            Instruction::Phi(incomings) => {
-                let mut new_incomings = vec![];
-                for incoming in incomings.iter() {
-                    let value = self.promote(incoming.value, builder, record);
-                    new_incomings.push(PhiIncoming {
-                        value,
-                        block: Pooled {
-                            ptr: self.map_blocks[&incoming.block.ptr],
-                        },
-                    });
-                }
-                let v = builder.phi(&new_incomings, type_.clone());
-                self.map_immutables.insert(node, v);
-                return v;
-            }
-            Instruction::Break => {
-                let v = builder.break_();
-                return v;
-            }
-            Instruction::Continue => {
-                let v = builder.continue_();
-                return v;
-            }
-            Instruction::RayQuery { .. } => panic!("ray query not supported"),
-            Instruction::If {
-                cond,
-                true_branch,
-                false_branch,
-            } => {
-                let cond = self.promote(*cond, builder, record);
-                let mut true_record = SSABlockRecord::from_parent(record);
-                let true_branch = self.promote_bb(
-                    *true_branch,
-                    IrBuilder::new(builder.pools.clone()),
-                    &mut true_record,
-                );
-                let mut false_record = SSABlockRecord::from_parent(record);
-                let false_branch = self.promote_bb(
-                    *false_branch,
-                    IrBuilder::new(builder.pools.clone()),
-                    &mut false_record,
-                );
-                let phis = true_record
-                    .phis
-                    .union(&false_record.phis)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                builder.if_(cond, true_branch, false_branch);
-                let mut new_phis = vec![];
-                for phi in &phis {
-                    let incomings = [
-                        PhiIncoming {
-                            value: *true_record.stored.get(phi).unwrap(),
-                            block: true_branch,
-                        },
-                        PhiIncoming {
-                            value: *false_record.stored.get(phi).unwrap(),
-                            block: false_branch,
-                        },
-                    ];
-                    if incomings[0].value == incomings[1].value {
-                        continue;
-                    }
-                    let new_phi = builder.phi(&incomings, phi.get().type_.clone());
-                    new_phis.push(new_phi);
-                    // if record.defined.contains(phi) {
-                    self.map_immutables.insert(*phi, new_phi);
-                    record.phis.insert(*phi);
-                    // }
-                }
-                for phi in new_phis {
-                    record.defined.insert(phi);
-                }
-                return INVALID_REF;
-            }
-            Instruction::Switch {
-                value,
-                default,
-                cases,
-            } => {
-                let value = self.promote(*value, builder, record);
-                let mut default_record = SSABlockRecord::from_parent(record);
-                let default_branch = self.promote_bb(
-                    *default,
-                    IrBuilder::new(builder.pools.clone()),
-                    &mut default_record,
-                );
-                let mut processed_cases = vec![];
-                for case in cases.iter() {
-                    let mut record = SSABlockRecord::from_parent(record);
-                    let bb = self.promote_bb(
-                        case.block,
-                        IrBuilder::new(builder.pools.clone()),
-                        &mut record,
-                    );
-                    processed_cases.push((bb, record));
-                }
-                let mut phis = default_record.phis.clone();
-                for case in &processed_cases {
-                    phis = phis.union(&case.1.phis).cloned().collect();
-                }
-                builder.switch(
-                    value,
-                    &processed_cases
-                        .iter()
-                        .enumerate()
-                        .map(|(i, x)| SwitchCase {
-                            value: cases[i].value,
-                            block: x.0,
-                        })
-                        .collect::<Vec<_>>(),
-                    default_branch,
-                );
-                let mut new_phis = vec![];
-                for phi in &phis {
-                    let mut incomings = vec![];
-                    incomings.push(PhiIncoming {
-                        value: *default_record.stored.get(phi).unwrap(),
-                        block: default_branch,
-                    });
-                    for case in &processed_cases {
-                        incomings.push(PhiIncoming {
-                            value: *case.1.stored.get(phi).unwrap(),
-                            block: case.0,
-                        });
-                    }
-                    let new_phi = builder.phi(&incomings, phi.get().type_.clone());
-                    new_phis.push(new_phi);
-                    // if record.defined.contains(phi) {
-                    self.map_immutables.insert(*phi, new_phi);
-                    record.phis.insert(*phi);
-                    // }
-                }
-                for phi in new_phis {
-                    record.defined.insert(phi);
-                }
-                return INVALID_REF;
-            }
-            Instruction::Loop { body, cond } => {
-                let mut body_record = SSABlockRecord::from_parent(record);
-                let body = self.promote_bb(
-                    *body,
-                    IrBuilder::new(builder.pools.clone()),
-                    &mut body_record,
-                );
-                let cond = self.promote(*cond, builder, record);
-                builder.loop_(body, cond)
-            }
-            Instruction::GenericLoop { .. } => todo!(),
-            Instruction::AdScope { .. } => todo!(),
-            Instruction::AdDetach(_) => todo!(),
-            Instruction::Comment(_) => return node,
-            Instruction::Return(_) => {
-                builder.return_(INVALID_REF);
-                INVALID_REF
-            }
-            Instruction::CoroRegister { .. } => {
-                todo!()
-            }
-            Instruction::CoroSplitMark { token } => {
-                let suspend_id = builder.const_(Const::Uint32(*token));
-                let const0 = builder.const_(Const::Uint32(0));
-                let const1 = builder.const_(Const::Uint32(1));
-                let id_handle = builder.call(
-                    Func::ExtractElement,
-                    &[self.corostate, const0],
-                    crate::context::register_type(Type::Primitive(Primitive::Uint32)),
-                );
-                let cond = builder.call(
-                    Func::Eq,
-                    &[suspend_id, id_handle],
-                    crate::context::register_type(Type::Primitive(Primitive::Bool)),
-                );
-                let mut true_builder = IrBuilder::new(builder.pools.clone());
-                let left_id = true_builder.call(
-                    Func::GetElementPtr,
-                    &[self.corostate, const0],
-                    crate::context::register_type(Type::Primitive(Primitive::Uint32)),
-                );
-                let inc1 = true_builder.call(
-                    Func::Add,
-                    &[id_handle, const1],
-                    crate::context::register_type(Type::Primitive(Primitive::Uint32)),
-                );
-                true_builder.update(left_id, inc1);
-                true_builder.return_(INVALID_REF);
-                let true_branch = true_builder.finish();
-                let false_branch = IrBuilder::new(builder.pools.clone()).finish();
-                builder.if_(cond, true_branch, false_branch)
-            }
-            Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
-                todo!()
-            }
-            Instruction::Print { .. } => {
-                todo!()
-            }
-        }
-    }
-    fn promote_bb(
-        &mut self,
-        bb: Pooled<BasicBlock>,
-        mut builder: IrBuilder,
-        record: &mut SSABlockRecord,
-    ) -> Pooled<BasicBlock> {
-        for node in bb.nodes().iter() {
-            self.promote(*node, &mut builder, record);
-        }
-        let out = builder.finish();
-        assert!(self.map_blocks.insert(bb.ptr, out.ptr).is_none());
-        out
-    }
+#[derive(Default)]
+struct Old2NewMap {
+    callables: HashMap<*const CallableModule, HashMap<u32, CArc<CallableModule>>>,
+    nodes: HashMap<NodeRef, HashMap<u32, NodeRef>>,
+    blocks: HashMap<*const BasicBlock, HashMap<u32, Pooled<BasicBlock>>>,
 }
 
-impl Transform for Coroutine {
-    fn transform_callable(&self, callable: CallableModule) -> CallableModule {
-        //let result=DisplayIR::new().display_ir(&module);
-        //println!("{}",result);
-        let module = callable.module;
-        let mut imp = CoroutineImpl::new(&module, callable.args[0]);
-        let mut builder = IrBuilder::new(module.pools.clone());
-        let const0 = builder.const_(Const::Uint32(0));
-        let const1 = builder.const_(Const::Uint32(1));
-        let left_id = builder.call(
-            Func::GetElementPtr,
-            &[imp.corostate, const0],
-            crate::context::register_type(Type::Primitive(Primitive::Uint32)),
-        );
-        builder.update(left_id, const1);
-        let new_bb = imp.promote_bb(module.entry, builder, &mut SSABlockRecord::new());
-        let mut entry = module.entry;
-        *entry.get_mut() = *new_bb;
-        let ret = Module {
+#[derive(Default)]
+struct New2OldMap {
+    callables: HashMap<*const CallableModule, *const CallableModule>,
+    nodes: HashMap<NodeRef, NodeRef>,
+    blocks: HashMap<*const BasicBlock, *const BasicBlock>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct CallableModuleInfo {
+    args: Vec<NodeRef>,
+    captures: Vec<Capture>,
+    frame_node: NodeRef,
+    old2frame_index: HashMap<NodeRef, usize>,
+}
+
+
+pub(crate) struct SplitManager {
+    frame_analyser: CoroFrameAnalyser,
+
+    old2new: Old2NewMap,
+    new2old: New2OldMap,
+
+    // TODO: set private and add an API
+    pub(crate) coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
+    coro_callable_info: HashMap<u32, CallableModuleInfo>,
+    frame_type: CArc<Type>,
+    frame_fields: Vec<CArc<Type>>,
+}
+
+impl SplitManager {
+    pub(crate) fn split(frame_analyser: CoroFrameAnalyser, callable: &CallableModule) -> CallableModule {
+        let mut sm = Self {
+            frame_analyser,
+            old2new: Default::default(),
+            new2old: Default::default(),
+            coro_scopes: HashMap::new(),
+            coro_callable_info: HashMap::new(),
+            frame_type: CArc::new(Type::Void),
+            frame_fields: vec![],
+        };
+
+        // prepare
+        let pools = &callable.pools;
+        let bb = &callable.module.entry;
+        let scope_builder = sm.pre_process(callable);
+        // coroutine cannot return to entry scope, so do not resume here
+
+        // visit
+        let sb_vec = sm.visit_bb(pools, VisitState::new_whole(bb), scope_builder);
+        assert!(sm.build_scopes(sb_vec, true).is_empty());
+        sm.build_coroutines(callable)
+    }
+
+    fn build_coroutines(&self, callable: &CallableModule) -> CallableModule {
+        let entry_token = self.frame_analyser.entry_token;
+        let mut subroutines = vec![];
+        let mut subroutine_ids = vec![];
+        for (token, callable_info) in self.coro_callable_info.iter() {
+            if *token == entry_token { continue; }
+            let scope = self.coro_scopes.get(token).unwrap();
+            let coroutine = CallableModule {
+                module: Module {
+                    kind: ModuleKind::Function,
+                    entry: *scope,
+                    flags: ModuleFlags::NONE,   // TODO: auto diff not allowed
+                    pools: callable.pools.clone(),
+                },
+                ret_type: CArc::new(Type::Void),    // TODO: coroutine return type: only void allowed
+                args: CBoxedSlice::from(callable_info.args.as_slice()),
+                captures: CBoxedSlice::from(callable_info.captures.as_slice()),
+                subroutines: CBoxedSlice::new(vec![]),
+                subroutine_ids: CBoxedSlice::new(vec![]),
+                cpu_custom_ops: callable.cpu_custom_ops.clone(),
+                pools: callable.pools.clone(),
+            };
+            let coroutine = CallableModuleRef(CArc::new(coroutine));
+            subroutines.push(coroutine);
+            subroutine_ids.push(*token);
+        }
+        {
+            let callable_info = self.coro_callable_info.get(&entry_token).unwrap();
+            let scope = self.coro_scopes.get(&entry_token).unwrap();
+            CallableModule {
+                module: Module {
+                    kind: ModuleKind::Function,
+                    entry: *scope,
+                    flags: ModuleFlags::NONE,   // TODO: auto diff not allowed
+                    pools: callable.pools.clone(),
+                },
+                ret_type: CArc::new(Type::Void),    // TODO: coroutine return type: only void allowed
+                args: CBoxedSlice::from(callable_info.args.as_slice()),
+                captures: CBoxedSlice::from(callable_info.captures.as_slice()),
+                subroutines: CBoxedSlice::from(subroutines.as_slice()),
+                subroutine_ids: CBoxedSlice::from(subroutine_ids.as_slice()),
+                cpu_custom_ops: callable.cpu_custom_ops.clone(),
+                pools: callable.pools.clone(),
+            }
+        }
+    }
+
+    // fn pre_process_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
+    //     bb.iter().for_each(|node_ref_present| {
+    //         let node = node_ref_present.get();
+    //         match node.instruction.as_ref() {
+    //             Instruction::CoroSplitMark { token } => {
+    //                 // TODO: args & captures
+    //                 let args = self.duplicate_args(*token, &callable_original.pools, &callable_original.args);
+    //                 let captures = self.duplicate_captures(*token, &callable_original.pools, &callable_original.captures);
+    //             }
+    //             // 3 Instructions after CCF
+    //             Instruction::Loop { body, cond } => {
+    //                 self.preprocess_bb(body, callable_original);
+    //             }
+    //             Instruction::If { cond, true_branch, false_branch } => {
+    //                 self.preprocess_bb(true_branch, callable_original);
+    //                 self.preprocess_bb(false_branch, callable_original);
+    //             }
+    //             Instruction::Switch {
+    //                 value: _,
+    //                 default,
+    //                 cases,
+    //             } => {
+    //                 self.preprocess_bb(default, callable_original);
+    //                 for SwitchCase { value: _, block } in cases.as_ref().iter() {
+    //                     self.preprocess_bb(block, callable_original);
+    //                 }
+    //             }
+    //             _ => {}
+    //         }
+    //     });
+    // }
+    fn pre_process(&mut self, callable: &CallableModule) -> ScopeBuilder {
+        let pools = &callable.pools;
+        let entry_token = self.frame_analyser.entry_token;
+
+        let coro_id_type = Type::Vector(VectorType {
+            element: VectorElementType::Scalar(Primitive::Uint32),
+            length: 3,
+        });
+        let token_type = Type::Primitive(Primitive::Uint32);
+        let mut frame_fields: Vec<CArc<Type>> = vec![CArc::new(coro_id_type), CArc::new(token_type)];
+        let mut index_counter: usize = frame_fields.len();
+
+        // calculate frame state
+        let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
+        let mut free_fields: HashMap<CArc<Type>, Vec<usize>> = HashMap::new();
+        for token in token_vec.iter() {
+            let mut args = self.duplicate_args(*token, pools, &callable.args);
+            let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
+            let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
+
+            input_var = input_var.difference(&callable.args.as_ref().iter()
+                .map(|arg| *arg).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
+            input_var = input_var.difference(&callable.captures.as_ref().iter()
+                .map(|capture| capture.node).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
+
+            let callable_info = self.coro_callable_info.entry(*token).or_default();
+            callable_info.args.extend(args.to_vec());
+            callable_info.captures.extend(captures.to_vec());
+
+            // create coro frame for Load
+            // TODO: relocation temp vars
+            let input_var: Vec<NodeRef> = input_var.iter().map(ToOwned::to_owned).collect();
+            let fields: Vec<_> = input_var.iter().map(|node_ref| {
+                let node = node_ref.get();
+                node.type_.clone()
+            }).collect();
+
+            // TODO: join all fields together or reuse fields of the same type?
+            // reuse fields of the same type
+            let mut used: HashSet<usize> = HashSet::from([0, 1]);
+            let mut new_fields = Vec::new();
+            for i in 0..fields.len() {
+                let field = &fields[i];
+                let free_field = free_fields.entry(field.clone()).or_default();
+                let index = free_field.iter().find(|index| !used.contains(index));
+                let index = if let Some(index) = index {
+                    *index
+                } else {
+                    let index = index_counter;
+                    index_counter += 1;
+                    free_field.push(index);
+                    new_fields.push(field.clone());
+                    index
+                };
+                used.insert(index);
+                callable_info.old2frame_index.insert(input_var[i], index);
+            }
+            frame_fields.extend(new_fields);
+
+            // // join all fields together
+            // for i in 0..fields.len() {
+            //     callable_info.old2frame_index.insert(input_var[i], index_counter + i);
+            // }
+            // index_counter += fields.len();
+            // frame_fields.extend(fields);
+        }
+
+        let alignment = frame_fields.iter().map(|type_| type_.alignment()).max().unwrap();
+        let size = frame_fields.iter().map(|type_| type_.size()).sum();
+        self.frame_fields = frame_fields.clone();
+        self.frame_type = register_type(Type::Struct(StructType {
+            fields: CBoxedSlice::new(frame_fields),
+            alignment,
+            size,
+        }));
+
+        for token in token_vec.iter() {
+            let callable_info = self.coro_callable_info.get_mut(token).unwrap();
+
+            // // args[0] is frame by default
+            // let frame_node = Node::new(
+            //     CArc::new(Instruction::Argument { by_value: false }),
+            //     self.frame_type.clone(),
+            // );
+            // callable_info.frame_node = new_node(pools, frame_node);
+            // callable_info.args.insert(0, callable_info.frame_node);
+
+            // change the type of args here
+            callable_info.args[0].get_mut().type_ = self.frame_type.clone();
+            callable_info.frame_node = callable_info.args[0].clone();
+        }
+
+        ScopeBuilder::new(entry_token, pools.clone())
+    }
+
+    fn build_scope(&mut self, mut scope_builder: ScopeBuilder, force: bool) {
+        if !(scope_builder.finished || force) {
+            return;
+        }
+
+        // build scope
+        let frame_token = scope_builder.token;
+        if !scope_builder.finished {
+            scope_builder.finished = true;
+            scope_builder.builder.coro_suspend(INVALID_FRAME_TOKEN_MASK);
+            scope_builder.builder.return_(INVALID_REF);
+        }
+        let scope_bb = scope_builder.builder.finish();
+        self.coro_scopes.insert(frame_token, scope_bb);
+    }
+    fn build_scopes(&mut self, mut sb_vec: Vec<ScopeBuilder>, force: bool) -> Vec<ScopeBuilder> {
+        let mut sb_ans_vec = vec![];
+        while !sb_vec.is_empty() {
+            let scope_builder = sb_vec.remove(0);
+            if scope_builder.finished || force {
+                self.build_scope(scope_builder, force);
+            } else {
+                sb_ans_vec.push(scope_builder);
+            }
+        }
+        sb_ans_vec
+    }
+
+
+    fn coro_resume(&mut self, mut scope_builder: ScopeBuilder) -> ScopeBuilder {
+        let token = scope_builder.token;
+        let builder = &mut scope_builder.builder;
+        builder.coro_resume(token);   // TODO: delete
+        builder.comment(CBoxedSlice::from("CoroResume Start".as_bytes()));   // TODO: for DEBUG
+        let old2frame_index = self.coro_callable_info.get(&token).unwrap().old2frame_index.clone();
+        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
+        for (old_node, index) in old2frame_index.iter() {
+            let index_node = builder.const_(Const::Uint32(*index as u32));
+            let gep = builder.gep_chained(
+                frame_node,
+                &[index_node],
+                self.frame_fields[*index].clone());
+            self.record_node_mapping(token, *old_node, gep);
+        }
+        builder.comment(CBoxedSlice::from("CoroResume End".as_bytes()));   // TODO: for DEBUG
+        scope_builder
+    }
+    fn coro_suspend(&mut self, scope_builder: &mut ScopeBuilder, token_next: u32) {
+        let token = scope_builder.token;
+        let builder = &mut scope_builder.builder;
+        builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes()));   // TODO: for DEBUG
+        let old2frame_index = &self.coro_callable_info.get(&token_next).unwrap().old2frame_index;
+        let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
+        // store frame state
+        for (old_node, index) in old2frame_index.iter() {
+            let index_node = builder.const_(Const::Uint32(*index as u32));
+            let gep = builder.gep_chained(
+                frame_node,
+                &[index_node],
+                self.frame_fields[*index].clone());
+            let old2new_map = self.old2new.nodes.get(old_node).unwrap();
+            let value = old2new_map.get(&token).unwrap().clone();
+            let value = if value.is_lvalue() {
+                builder.load(value)
+            } else {
+                value
+            };
+            builder.update(gep, value);
+        }
+        // change frame token
+        let index_node = builder.const_(Const::Uint32(STATE_INDEX_FRAME_TOKEN as u32));
+        let gep = builder.gep_chained(
+            frame_node,
+            &[index_node],
+            self.frame_fields[STATE_INDEX_FRAME_TOKEN].clone());
+        let value = builder.const_(Const::Uint32(token_next));
+        builder.update(gep, value);
+        builder.comment(CBoxedSlice::from("CoroSuspend End".as_bytes()));   // TODO: for DEBUG
+    }
+
+    fn visit_bb(&mut self, pools: &CArc<ModulePools>, visit_state: VisitState, mut scope_builder: ScopeBuilder) -> Vec<ScopeBuilder> {
+        assert!(!scope_builder.finished);
+
+        let mut visit_state = visit_state;
+        while visit_state.present != visit_state.end {
+            let node = visit_state.present.get();
+            let type_ = &node.type_;
+            let instruction = node.instruction.as_ref();
+            // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
+
+            match instruction {
+                // coroutine related instructions
+                Instruction::CoroSplitMark { token } => {
+                    let (sb_before, sb_after) = self.visit_coro_split_mark(scope_builder, *token, visit_state.present.clone());
+                    let visit_state_after = VisitState::new(visit_state.get_bb_ref(), Some(visit_state.present.get().next), None, None);
+                    let mut sb_vec = self.visit_bb(pools, visit_state_after, sb_after);
+                    // index 0 for the scope block before coro split mark
+                    sb_vec.insert(0, sb_before);
+                    return sb_vec;
+                }
+                Instruction::CoroSuspend { token } => {
+                    let sb_before = self.visit_coro_suspend(scope_builder, *token);
+                    return vec![sb_before];
+                }
+                Instruction::CoroResume { token } => {
+                    unreachable!("Split: CoroResume");
+                }
+
+                // 3 Instructions after CCF
+                Instruction::Loop { body, cond } => {
+                    let mut visit_result = self.visit_loop(pools, scope_builder, visit_state.clone(), body, cond);
+                    if visit_result.split_possibly {
+                        return visit_result.result;
+                    } else {
+                        assert_eq!(visit_result.result.len(), 1);
+                        scope_builder = visit_result.result.pop().unwrap();
+                    }
+                }
+                Instruction::If { cond, true_branch, false_branch } => {
+                    let mut visit_result = self.visit_if(pools, scope_builder, visit_state.clone(), true_branch, false_branch, cond);
+                    if visit_result.split_possibly {
+                        return visit_result.result;
+                    } else {
+                        assert_eq!(visit_result.result.len(), 1);
+                        scope_builder = visit_result.result.pop().unwrap();
+                    }
+                }
+                Instruction::Switch { value, cases, default } => {
+                    let mut visit_result = self.visit_switch(pools, scope_builder, visit_state.clone(), value, cases, default);
+                    if visit_result.split_possibly {
+                        return visit_result.result;
+                    } else {
+                        assert_eq!(visit_result.result.len(), 1);
+                        scope_builder = visit_result.result.pop().unwrap();
+                    }
+                }
+
+                Instruction::Return(..) => {}
+
+                // other instructions, just deep clone and change the node_ref to new ones
+                _ => {
+                    self.duplicate_node(&mut scope_builder, visit_state.present);
+                }
+            }
+            visit_state.present = node.next;
+        }
+        vec![scope_builder]
+    }
+    fn visit_coro_split_mark(&mut self, mut sb_before: ScopeBuilder, token_next: u32, node_ref: NodeRef) -> (ScopeBuilder, ScopeBuilder) {
+        // replace CoroSplitMark with CoroSuspend
+        self.coro_suspend(&mut sb_before, token_next);
+        let coro_suspend = sb_before.builder.coro_suspend(token_next);
+        node_ref.replace_with(coro_suspend.get());
+
+        // create a void type node for termination
+        // TODO: now use Instruction::Return for termination
+        sb_before.builder.return_(INVALID_REF);
+
+        // create a new scope builder for the next scope
+        // the next frame must have a CoroResume
+        let mut sb_after = ScopeBuilder::new(token_next, sb_before.builder.pools.clone());
+        sb_after = self.coro_resume(sb_after);
+        sb_before.finished = true;
+        (sb_before, sb_after)
+    }
+    fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
+        // create a void type node for termination
+        self.coro_suspend(&mut scope_builder, token_next);
+        scope_builder.builder.coro_suspend(token_next);
+        // TODO: now use Instruction::Return for termination
+        scope_builder.builder.return_(INVALID_REF);
+
+        scope_builder.finished = true;
+        scope_builder
+    }
+    fn visit_branch_split(&mut self, pools: &CArc<ModulePools>, frame_token: u32,
+                          branch: &Pooled<BasicBlock>, sb_after_vec: &mut Vec<ScopeBuilder>) -> ScopeBuilder {
+        let scope_builder = ScopeBuilder::new(frame_token, pools.clone());
+        let mut sb_vec = self.visit_bb(pools, VisitState::new_whole(branch), scope_builder);
+        let sb_before_split = sb_vec.remove(0);
+        sb_after_vec.extend(sb_vec);
+        sb_before_split
+    }
+    fn visit_if(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
+                visit_state: VisitState, true_branch: &Pooled<BasicBlock>, false_branch: &Pooled<BasicBlock>, cond: &NodeRef) -> VisitResult {
+        /*
+
+        BLOCK A;
+        if (cond_1) {
+            BLOCK B;
+            split(1);
+            BLOCK C;
+        } else {
+            BLOCK D;
+        }
+        BLOCK E;
+
+        ----------------------
+        | BLOCK A;           |
+        | if (cond_1) {      |
+        |     BLOCK B;       |
+        |     suspend(1);    |----
+        | } else {           |   |
+        |     BLOCK D;       |   |
+        | }                  |   |
+        | BLOCK E;           |   |
+        ----------------------   |
+                                 |
+                   ---------------
+                   |
+                   V
+        ----------------------
+        | resume(1);         |
+        | BLOCK C;           |
+        | BLOCK E;           |
+        ______________________
+
+
+        BLOCK A;
+        if (cond_1) {
+            BLOCK B;
+            split(1);
+            BLOCK C;
+        } else {
+            BLOCK D;
+            split(2);
+            BLOCK E;
+        }
+        BLOCK F;
+        if (cond_2) {
+            BLOCK G;
+            split(3);
+            BLOCK H;
+        } else {
+            BLOCK I;
+            split(4);
+            BLOCK J;
+        }
+        BLOCK K;
+
+        ----------------------
+        | BLOCK A;           |
+        | if (cond_1) {      |
+        |     BLOCK B;       |
+        |     suspend(1);    |----
+        | } else {           |   |
+        |     BLOCK D;       |   |
+        |     suspend(2);    |---|-----------
+        | }                  |   |          |
+        ----------------------   |          |
+                                 |          |
+                   ---------------          |
+                   |                        |
+                   V                        V
+        ----------------------    ----------------------
+        | resume(1);         |    | resume(2);         |
+        | BLOCK C;           |    | BLOCK E;           |
+        | BLOCK F;           |    | BLOCK F;           |
+        | if (cond_2) {      |    | if (cond_2) {      |
+        |     BLOCK G;       |    |     BLOCK G;       |
+        |     suspend(3);    |----|     suspend(3);    |----
+        | } else {           |    | } else {           |   |
+        |     BLOCK I;       |    |     BLOCK I;       |   |
+        |     suspend(4);    |----|     suspend(4);    |---|-----------
+        | }                  |    | }                  |   |          |
+        ----------------------    ----------------------   |          |
+                                                           |          |
+                   -----------------------------------------          |
+                   |                        ---------------------------
+                   |                        |
+                   V                        V
+        ----------------------    ----------------------
+        | resume(3);         |    | resume(4);         |
+        | BLOCK H;           |    | BLOCK J;           |
+        | BLOCK K;           |    | BLOCK K;           |
+        ______________________    ______________________
+
+         */
+        let mut visit_result = VisitResult::new();
+
+        let split_poss_true = self.frame_analyser.split_possibility.get(&true_branch.as_ptr()).unwrap().clone();
+        let split_poss_false = self.frame_analyser.split_possibility.get(&false_branch.as_ptr()).unwrap().clone();
+
+        if !split_poss_true.possibly && !split_poss_false.possibly {
+            // no split, duplicate the node
+            self.duplicate_node(&mut scope_builder, visit_state.present);
+            visit_result.split_possibly = false;
+            visit_result.result.push(scope_builder);
+        } else {
+            // split in true/false_branch
+            visit_result.split_possibly = true;
+            let mut sb_after_vec = vec![];
+
+            // process true/false branch
+            let mut all_branches_finished = true;
+            let dup_true_branch = if split_poss_true.possibly {
+                let sb_true = self.visit_branch_split(pools, scope_builder.token, true_branch, &mut sb_after_vec);
+                all_branches_finished &= sb_true.finished;
+                sb_true.builder.finish()
+            } else {
+                all_branches_finished = false;
+                self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, true_branch)
+            };
+            let dup_false_branch = if split_poss_false.possibly {
+                let sb_false = self.visit_branch_split(pools, scope_builder.token, false_branch, &mut sb_after_vec);
+                all_branches_finished &= sb_false.finished;
+                sb_false.builder.finish()
+            } else {
+                all_branches_finished = false;
+                self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, false_branch)
+            };
+            let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
+            scope_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch);
+            scope_builder.finished |= all_branches_finished;
+
+            // process next bb
+            sb_after_vec.insert(0, scope_builder);
+
+            let mut visit_state_after = visit_state.clone();
+            visit_state_after.present = visit_state.present.get().next;
+            for sb_after in sb_after_vec {
+                if sb_after.finished {
+                    visit_result.result.push(sb_after);
+                } else {
+                    visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
+                }
+            }
+        }
+        visit_result
+    }
+    fn visit_switch(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
+                    visit_state: VisitState, value: &NodeRef, cases: &CBoxedSlice<SwitchCase>, default: &Pooled<BasicBlock>) -> VisitResult {
+        let mut visit_result = VisitResult::new();
+
+        // split in cases/default
+        let cases_ref = cases.as_ref();
+        let mut split_poss_case_vec = Vec::with_capacity(cases_ref.len());
+        let mut split_poss_cases = SplitPossibility {
+            possibly: false,
+            definitely: true,
+            directly: false,
+        };
+        let split_poss_default = self.frame_analyser.split_possibility.get(&default.as_ptr()).unwrap().clone();
+        for case in cases_ref.iter() {
+            let split_poss_case = self.frame_analyser.split_possibility.get(&case.block.as_ptr()).unwrap();
+            split_poss_case_vec.push(split_poss_case.clone());
+            split_poss_cases.possibly |= split_poss_case.possibly;
+            split_poss_cases.definitely &= split_poss_case.definitely;
+        }
+
+        if !split_poss_cases.possibly && !split_poss_default.possibly {
+            // no split, duplicate the node
+            self.duplicate_node(&mut scope_builder, visit_state.present);
+            visit_result.split_possibly = false;
+            visit_result.result.push(scope_builder);
+        } else {
+            // split in cases/default
+            visit_result.split_possibly = true;
+            let mut sb_after_vec = vec![];
+
+            // process cases
+            let mut all_branches_finished = true;
+            let dup_cases: Vec<_> = cases_ref.iter().enumerate().map(|(i, case)| {
+                let dup_block = if split_poss_case_vec[i].possibly {
+                    let sb_case = self.visit_branch_split(pools, scope_builder.token, &case.block, &mut sb_after_vec);
+                    all_branches_finished &= sb_case.finished;
+                    sb_case.builder.finish()
+                } else {
+                    all_branches_finished = false;
+                    self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, &case.block)
+                };
+                SwitchCase {
+                    value: case.value,
+                    block: dup_block,
+                }
+            }).collect();
+            // process default
+            let dup_default = if split_poss_default.possibly {
+                let sb_default = self.visit_branch_split(pools, scope_builder.token, default, &mut sb_after_vec);
+                all_branches_finished &= sb_default.finished;
+                sb_default.builder.finish()
+            } else {
+                self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, default)
+            };
+            let dup_value = self.find_duplicated_node(&mut scope_builder, *value);
+            scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default);
+            scope_builder.finished |= all_branches_finished;
+
+            // process next bb
+            sb_after_vec.insert(0, scope_builder);
+
+            let mut visit_state_after = visit_state.clone();
+            visit_state_after.present = visit_state.present.get().next;
+            for sb_after in sb_after_vec {
+                if sb_after.finished {
+                    visit_result.result.push(sb_after);
+                } else {
+                    visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
+                }
+            }
+        }
+        visit_result
+    }
+    fn visit_loop(&mut self, pools: &CArc<ModulePools>, mut scope_builder: ScopeBuilder,
+                  visit_state: VisitState, body: &Pooled<BasicBlock>, cond: &NodeRef) -> VisitResult {
+        let mut visit_result = VisitResult::new();
+
+        let split_poss = self.frame_analyser.split_possibility.get(&body.as_ptr()).unwrap();
+
+        if split_poss.possibly {
+            visit_result.split_possibly = true;
+            // if split_poss.definitely {
+            if false {
+                /*
+                BLOCK A;
+                loop {
+                    BLOCK B;
+                    if (cond_0) {
+                        BLOCK E;
+                        split(1);
+                        BLOCK F;
+                    } else {
+                        BLOCK G;
+                        split(2);
+                        BLOCK H;
+                    }
+                    BLOCK C;
+                } cond(cond_1);
+                BLOCK D;
+
+
+                ----------------------
+                | BLOCK A;           |
+                | BLOCK B;           |
+                | if (cond_0) {      |
+                |     BLOCK E;       |
+                |     suspend(1);    |----
+                | } else {           |   |
+                |     BLOCK G;       |   |
+                |     suspend(2);    |---|------------------------------
+                | }                  |   |                             |
+                ----------------------   |                             |
+                                         |                             |
+                          ----------------                             |
+                          |                                            |
+                          |                          ----------------->|<--------------------
+                          |                          |                 |                    |
+                          |<-------------------- <---------------------|-----------------   |
+                          |                    |     |                 |                |   |
+                          V                    |     |                 V                |   |
+                --------------------------     |     |      --------------------------  |   |
+                | resume(1);             |     |     |      | resume(2);             |  |   |
+                | BLOCK F;               |     |     |      | BLOCK H;               |  |   |
+                | BLOCK C;               |     |     |      | BLOCK C;               |  |   |
+                | if (cond_1) {          |     |     |      | if (cond_1) {          |  |   |
+                |     loop {             |     |     |      |     loop {             |  |   |
+                |         BLOCK B;       |     |     |      |         BLOCK B;       |  |   |
+                |         if (cond_0) {  |     |     |      |         if (cond_0) {  |  |   |
+                |             BLOCK E;   |     |     |      |             BLOCK E;   |  |   |
+                |             suspend(1);|------     |      |             suspend(1);|---   |
+                |         } else {       |           |      |         } else {       |      |
+                |             BLOCK G;   |           |      |             BLOCK G;   |      |
+                |             suspend(2);|------------      |             suspend(2);|-------
+                |         }              |                  |         }              |
+                |     } cond(cond_1)     |                  |     } cond(cond_1)     |
+                | }                      |                  | }                      |
+                | BLOCK D;               |                  | BLOCK D;               |
+                --------------------------                  --------------------------
+                 */
+            } else {
+                /*
+                BLOCK A;
+                loop {
+                    BLOCK B;
+                    if (cond_0) {
+                        BLOCK E;
+                        split(1);
+                        BLOCK F;
+                    }
+                    BLOCK C;
+                } cond(cond_1);
+                BLOCK D;
+
+                ----------------------
+                | BLOCK A;           |
+                | loop {             |
+                |     BLOCK B;       |
+                |     if (cond_0) {  |
+                |         BLOCK E;   |
+                |         suspend(1);|
+                |     }              |
+                |     BLOCK C;       |
+                | } cond(cond_1)     |
+                | BLOCK D;           |
+                ----------------------
+                          |
+                          |<--------------------
+                          |                    |
+                          V                    |
+                --------------------------     |
+                | resume(1);             |     |
+                | BLOCK F;               |     |
+                | BLOCK C;               |     |
+                | if (cond_1) {          |     |
+                |     loop {             |     |
+                |         BLOCK B;       |     |
+                |         if (cond_0) {  |     |
+                |             BLOCK E;   |     |
+                |             suspend(1);|------
+                |         }              |
+                |         BLOCK C;       |
+                |     } cond(cond_1)     |
+                | }                      |
+                | BLOCK D;               |
+                --------------------------
+                 */
+
+                let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
+
+                let mut sb_after_vec = vec![];
+                let sb_before = self.visit_branch_split(pools, scope_builder.token, body, &mut sb_after_vec);
+                let body_before_split = sb_before.builder.finish();
+                scope_builder.builder.loop_(body_before_split, dup_cond);
+                scope_builder.finished |= sb_before.finished;
+
+                let mut visit_state_after = visit_state.clone();
+                visit_state_after.present = visit_state.present.get().next;
+
+                // process next bb
+                visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), scope_builder));
+
+                for mut sb_after in sb_after_vec {
+                    if sb_after.finished {
+                        visit_result.result.push(sb_after);
+                    } else {
+                        let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
+                        let dup_body = self.duplicate_block(sb_after.token, &pools, body);
+                        sb_after.builder.loop_(dup_body, dup_cond);
+                        visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
+                    }
+                }
+            }
+        } else {
+            // no split, duplicate the node
+            self.duplicate_node(&mut scope_builder, visit_state.present);
+            visit_result.split_possibly = false;
+            visit_result.result.push(scope_builder);
+        }
+        visit_result
+    }
+
+
+    // duplicate functions
+    fn find_duplicated_block(&mut self, frame_token: u32, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
+        self.old2new.blocks.get(&bb.as_ptr()).unwrap().get(&frame_token).unwrap().clone()
+    }
+    fn find_duplicated_node(&mut self, scope_builder: &mut ScopeBuilder, node: NodeRef) -> NodeRef {
+        if !node.valid() { return INVALID_REF; }
+        let frame_token = scope_builder.token;
+        if self.old2new.nodes.get(&node).unwrap().contains_key(&frame_token) {
+            self.old2new.nodes.get(&node).unwrap().get(&frame_token).unwrap().clone()
+        } else {
+            // FIXME: this is a temporary solution, local_zero_init
+            let type_ = node.type_().clone();
+            let local = scope_builder.builder.local_zero_init(type_);
+            self.record_node_mapping(frame_token, node, local);
+            self.old2new.nodes.get_mut(&node).unwrap().insert(frame_token, local.clone());
+            local
+        }
+    }
+    fn record_node_mapping(&mut self, frame_token: u32, old: NodeRef, new: NodeRef) {
+        let mut old_original = old;
+        while let Some(node_ref_t) = self.new2old.nodes.get(&old_original) {
+            old_original = node_ref_t.clone();
+        }
+        self.old2new.nodes.entry(old_original).or_default().insert(frame_token, new);
+        self.new2old.nodes.entry(new).or_insert(old_original);
+    }
+    fn record_block_mapping(&mut self, frame_token: u32, old: &Pooled<BasicBlock>, new: &Pooled<BasicBlock>) {
+        let mut old_original = old.as_ptr();
+        while let Some(bb_t) = self.new2old.blocks.get(&old_original) {
+            old_original = bb_t.clone();
+        }
+        self.old2new.blocks.entry(old_original).or_default().insert(frame_token, new.clone());
+        self.new2old.blocks.entry(new.as_ptr()).or_insert(old_original);
+    }
+    fn record_callable_mapping(&mut self, frame_token: u32, old: &CArc<CallableModule>, new: &CArc<CallableModule>) {
+        let mut old_original = old.as_ptr();
+        while let Some(callable_t) = self.new2old.callables.get(&old_original) {
+            old_original = callable_t.clone();
+        }
+        self.old2new.callables.entry(old_original).or_default().insert(frame_token, new.clone());
+        self.new2old.callables.entry(new.as_ptr()).or_insert(old_original);
+    }
+    fn duplicate_arg(&mut self, frame_token: u32, pools: &CArc<ModulePools>, node_ref: NodeRef) -> NodeRef {
+        let node = node_ref.get();
+        let instr = &node.instruction;
+        let dup_instr = match instr.as_ref() {
+            Instruction::Buffer => instr.clone(),
+            Instruction::Bindless => instr.clone(),
+            Instruction::Texture2D => instr.clone(),
+            Instruction::Texture3D => instr.clone(),
+            Instruction::Accel => instr.clone(),
+            Instruction::Shared => instr.clone(),
+            Instruction::Uniform => instr.clone(),
+            Instruction::Argument { .. } => CArc::new(instr.as_ref().clone()),
+            _ => unreachable!("Invalid argument type")
+        };
+        let dup_node = Node::new(dup_instr, node.type_.clone());
+        let dup_node_ref = new_node(pools, dup_node);
+
+        // add to node map
+        self.record_node_mapping(frame_token, node_ref, dup_node_ref);
+        dup_node_ref
+    }
+    fn duplicate_capture(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
+                         capture: &Capture) -> Capture {
+        Capture {
+            node: self.duplicate_arg(frame_token, pools, capture.node.clone()),
+            binding: capture.binding.clone(),
+        }
+    }
+    fn duplicate_args(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
+                      args: &CBoxedSlice<NodeRef>) -> CBoxedSlice<NodeRef> {
+        let dup_args: Vec<NodeRef> = args.iter().map(|arg| {
+            self.duplicate_arg(frame_token, pools, arg.clone())
+        }).collect();
+        CBoxedSlice::new(dup_args)
+    }
+    fn duplicate_captures(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
+                          captures: &CBoxedSlice<Capture>) -> CBoxedSlice<Capture> {
+        let dup_captures: Vec<Capture> = captures.iter().map(|capture| {
+            self.duplicate_capture(frame_token, pools, capture)
+        }).collect();
+        CBoxedSlice::new(dup_captures)
+    }
+    fn duplicate_shared(&mut self, frame_token: u32, pools: &CArc<ModulePools>,
+                        shared: &CBoxedSlice<NodeRef>) -> CBoxedSlice<NodeRef> {
+        let dup_shared: Vec<NodeRef> = shared.iter().map(|shared| {
+            self.duplicate_arg(frame_token, pools, shared.clone())
+        }).collect();
+        CBoxedSlice::new(dup_shared)
+    }
+
+    fn duplicate_callable(&mut self, frame_token: u32, callable: &CArc<CallableModule>) -> CArc<CallableModule> {
+        let pools = &callable.pools;
+        if let Some(copy) = self.old2new.callables.get(&callable.as_ptr()).unwrap().get(&frame_token) {
+            return copy.clone();
+        }
+        let dup_callable = {
+            let dup_args = self.duplicate_args(frame_token, pools, &callable.args);
+            let dup_captures = self.duplicate_captures(frame_token, pools, &callable.captures);
+            let dup_module = self.duplicate_module(frame_token, &callable.module);
+            CallableModule {
+                module: dup_module,
+                ret_type: callable.ret_type.clone(),
+                args: dup_args,
+                captures: dup_captures,
+                subroutines: callable.subroutines.clone(),
+                subroutine_ids: callable.subroutine_ids.clone(),
+                cpu_custom_ops: callable.cpu_custom_ops.clone(),
+                pools: pools.clone(),
+            }
+        };
+        let dup_callable = CArc::new(dup_callable);
+        // insert the duplicated callable into the map
+        self.record_callable_mapping(frame_token, callable, &dup_callable);
+        dup_callable
+    }
+    fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
+        // // FIXME: multiple duplication in loop transformation
+        // assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
+        //         "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
+        let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
+        for node in bb.iter() {
+            // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, node.0, node.get().instruction);
+            self.duplicate_node(&mut scope_builder, node);
+            match node.get().instruction.as_ref() {
+                Instruction::CoroSuspend { .. } => { break; }
+                _ => {}
+            }
+        }
+        let dup_bb = scope_builder.builder.finish();
+        // insert the duplicated block into the map
+        self.record_block_mapping(frame_token, bb, &dup_bb);
+        dup_bb
+    }
+    fn duplicate_module(&mut self, frame_token: u32, module: &Module) -> Module {
+        let dup_entry = self.duplicate_block(frame_token, &module.pools, &module.entry);
+        Module {
             kind: module.kind.clone(),
-            entry,
+            entry: dup_entry,
             flags: module.flags.clone(),
             pools: module.pools.clone(),
-        };
-        //println!("\n\n----------after------\n\n");
-        //let result=DisplayIR::new().display_ir(&ret);
-        //println!("{}",result);
-        /*         let sub_builder=IrBuilder::new(module.pools.clone());
-        let sub_bb = imp.promote_bb(
-            module.entry,
-            sub_builder,
-            &mut SSABlockRecord::new(),
-        );
-        let mut entry = module.entry;
-        *entry.get_mut() = *sub_bb;
-        let sub_module=Module {
-            kind: module.kind,
-            entry,
-            pools: module.pools.clone(),
-        };
-        let sub_callable=CallableModule {
-            module:sub_module,
-            ..callable,
-        };*/
-        callable.args[0].get_mut().type_ = imp.corostate_type;
-        CallableModule {
-            module: ret,
-            args: callable.args,
-            subroutine_ids: CBoxedSlice::new(vec![]),
-            subroutines: CBoxedSlice::new(vec![]),
-            ..callable
         }
+    }
+
+    fn duplicate_node(&mut self, mut scope_builder: &mut ScopeBuilder, node_ref: NodeRef) -> NodeRef {
+        if !node_ref.valid() { return INVALID_REF; }
+        let frame_token = scope_builder.token;
+        let node = node_ref.get();
+        // // TODO: for DEBUG
+        // if self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token) {
+        //     println!("\n{:?}\n", self.old2new.nodes.get(&node_ref).unwrap());
+        //     panic!("Frame token {}, noderef {:?}, node {:?} has already been duplicated", frame_token, node_ref, node);
+        // }
+        // // FIXME: multiple duplication in loop transformation
+        // assert!(!self.old2new.nodes.entry(node_ref).or_default().contains_key(&frame_token),
+        //         "Frame token {}, node {:?} has already been duplicated", frame_token, node);
+        let instruction = node.instruction.as_ref();
+        let dup_node = match instruction {
+            Instruction::Buffer
+            | Instruction::Bindless
+            | Instruction::Texture2D
+            | Instruction::Texture3D
+            | Instruction::Accel
+            | Instruction::Shared
+            | Instruction::Uniform
+            | Instruction::Argument { .. } => unreachable!("{:?} should not appear in basic block", instruction),
+            Instruction::Invalid => unreachable!("Invalid node should not appear in non-sentinel nodes"),
+
+            Instruction::Local { init } => {
+                let dup_init = self.find_duplicated_node(scope_builder, *init);
+                scope_builder.builder.local(dup_init)
+            }
+            Instruction::UserData(data) => scope_builder.builder.userdata(data.clone()),
+            Instruction::Const(const_) => scope_builder.builder.const_(const_.clone()),
+            Instruction::Update { var, value } => {
+                // unreachable if SSA
+                let dup_var = self.find_duplicated_node(scope_builder, *var);
+                let dup_value = self.find_duplicated_node(scope_builder, *value);
+                scope_builder.builder.update(dup_var, dup_value)
+            }
+            Instruction::Call(func, args) => {
+                let dup_func = match func {
+                    Func::Callable(callable) => {
+                        let dup_callable = self.duplicate_callable(frame_token, &callable.0);
+                        Func::Callable(CallableModuleRef(dup_callable))
+                    }
+                    _ => func.clone()
+                };
+                let mut dup_args: Vec<_> = args.iter().map(|arg| {
+                    let dup_arg = self.find_duplicated_node(scope_builder, *arg);
+                    dup_arg
+                }).collect();
+                if func == &Func::CoroId || func == &Func::CoroToken {
+                    assert!(dup_args.is_empty(), "Args of function {:?} is not empty", func);
+                    let frame_node = self.coro_callable_info.get(&frame_token).unwrap().frame_node;
+                    dup_args.push(frame_node);
+                }
+                scope_builder.builder.call(dup_func, dup_args.as_slice(), node.type_.clone())
+            }
+            Instruction::Phi(incomings) => {
+                let dup_incomings: Vec<_> = incomings.iter().map(|incoming| {
+                    let dup_block = self.find_duplicated_block(frame_token, &incoming.block);
+                    let dup_value = self.find_duplicated_node(scope_builder, incoming.value);
+                    PhiIncoming {
+                        value: dup_value,
+                        block: dup_block,
+                    }
+                }).collect();
+                scope_builder.builder.phi(dup_incomings.as_slice(), node.type_.clone())
+            }
+            Instruction::AdScope { body, .. } => {
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                scope_builder.builder.ad_scope(dup_body)
+            }
+            Instruction::RayQuery { ray_query, on_triangle_hit, on_procedural_hit } => {
+                let dup_ray_query = self.find_duplicated_node(scope_builder, *ray_query);
+                let dup_on_triangle_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_triangle_hit);
+                let dup_on_procedural_hit = self.duplicate_block(frame_token, &scope_builder.builder.pools, on_procedural_hit);
+                scope_builder.builder.ray_query(dup_ray_query, dup_on_triangle_hit, dup_on_procedural_hit, node.type_.clone())
+            }
+            Instruction::AdDetach(body) => {
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                scope_builder.builder.ad_detach(dup_body)
+            }
+            Instruction::Comment(msg) => scope_builder.builder.comment(msg.clone()),
+
+            Instruction::Return(value) => {
+                let dup_value = self.find_duplicated_node(scope_builder, *value);
+                scope_builder.builder.return_(dup_value)
+            }
+
+            // Instruction::GenericLoop { prepare, cond, body, update } => {
+            //     let dup_prepare = self.duplicate_block(frame_token, &scope_builder.builder.pools, prepare);
+            //     let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+            //     let dup_update = self.duplicate_block(frame_token, &scope_builder.builder.pools, update);
+            //     let dup_cond = self.find_duplicated_node(scope_builder, *cond);
+            //     scope_builder.builder.generic_loop(dup_prepare, dup_cond, dup_body, dup_update)
+            // }
+            // Instruction::Break => scope_builder.builder.break_(),
+            // Instruction::Continue => scope_builder.builder.continue_(),
+
+            Instruction::GenericLoop { .. }
+            | Instruction::Break
+            | Instruction::Continue => unreachable!("{:?} should be handled in CCF", instruction),
+
+            Instruction::Loop { body, cond } => {
+                let dup_body = self.duplicate_block(frame_token, &scope_builder.builder.pools, body);
+                let dup_cond = self.find_duplicated_node(scope_builder, *cond);
+                scope_builder.builder.loop_(dup_body, dup_cond)
+            }
+            Instruction::If { cond, true_branch, false_branch } => {
+                let dup_cond = self.find_duplicated_node(scope_builder, *cond);
+                let dup_true_branch = self.duplicate_block(frame_token, &scope_builder.builder.pools, true_branch);
+                let dup_false_branch = self.duplicate_block(frame_token, &scope_builder.builder.pools, false_branch);
+                scope_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch)
+            }
+            Instruction::Switch { value, cases, default } => {
+                let dup_value = self.find_duplicated_node(scope_builder, *value);
+                let dup_cases: Vec<_> = cases.iter().map(|case| {
+                    let dup_block = self.duplicate_block(frame_token, &scope_builder.builder.pools, &case.block);
+                    SwitchCase {
+                        value: case.value,
+                        block: dup_block,
+                    }
+                }).collect();
+                let dup_default = self.duplicate_block(frame_token, &scope_builder.builder.pools, default);
+                scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default)
+            }
+
+            Instruction::Print { fmt, args } => {
+                let args = args
+                    .iter()
+                    .map(|x| self.find_duplicated_node(scope_builder, *x))
+                    .collect::<Vec<_>>();
+                scope_builder.builder.print(fmt.clone(), &args)
+            }
+
+            // Coro
+            Instruction::CoroSuspend { token: token_next } => {
+                self.coro_suspend(&mut scope_builder, *token_next);
+                let node_new = scope_builder.builder.coro_suspend(*token_next);
+
+                // create a void type node for termination
+                // TODO: now use Instruction::Return for termination
+                scope_builder.builder.return_(INVALID_REF);
+
+                node_new
+            }
+            Instruction::CoroRegister { .. } => {
+                todo!("Coroutine register");
+            }
+            Instruction::CoroSplitMark { .. }
+            | Instruction::CoroResume { .. } => unreachable!("Unexpected instruction {:?} in SplitManager::duplicate_node", instruction),
+        };
+        // insert the duplicated node into the map
+        self.record_node_mapping(frame_token, node_ref, dup_node);
+        dup_node
+    }
+}
+
+
+pub struct CoroutineSplit;
+
+struct CoroutineSplitImpl {}
+
+impl CoroutineSplitImpl {
+    fn split_coroutine(callable: CallableModule) -> CallableModule {
+        println!("{:-^40}", " Before split ");
+        let mut display_ir = DisplayIR::new();
+        let result = display_ir.display_ir_callable(&callable);
+        println!("{}", result);
+
+        let mut coro_frame_analyser = CoroFrameAnalyser::new();
+        coro_frame_analyser.analyse_callable(&callable);
+        println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
+        println!("{}", coro_frame_analyser.display_continuations());
+
+        let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
+        println!("{:-^40}", " After split ");
+        let result = DisplayIR::new().display_ir_callable(&coroutine_entry);
+        println!("{:-^40}\n{}", format!(" CoroScope {} ", 0), result);
+        for (token, coro) in coroutine_entry.subroutine_ids.iter().zip(coroutine_entry.subroutines.iter()) {
+            let result = DisplayIR::new().display_ir_callable(coro.as_ref());
+            println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
+        }
+
+        coroutine_entry
+        // unimplemented!("Coroutine split");
+    }
+}
+
+impl Transform for CoroutineSplit {
+    fn transform_callable(&self, callable: CallableModule) -> CallableModule {
+        CoroutineSplitImpl::split_coroutine(callable)
     }
 }

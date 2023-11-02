@@ -2,11 +2,15 @@
  * This file implements the control flow canonicalization transform.
  * This transform removes all break/continue/early-return statements, in the following steps:
  * 1. Lower generic loops to do-while loops.
- * 2.
+ * 2. Lower break/continue nodes.
+ * 3. Lower early-return nodes.
  */
 
 use crate::ir::debug::dump_ir_human_readable;
-use crate::ir::{BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModulePools, NodeRef};
+use crate::ir::{
+    BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModulePools, NodeRef, Type,
+    INVALID_REF,
+};
 use crate::transform::Transform;
 use crate::{CArc, CBoxedSlice, Pooled, TypeOf};
 use std::collections::{HashMap, HashSet};
@@ -14,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 pub struct CanonicalizeControlFlow;
 
 /*
- * This transform lowers generic loops to do-while loops as the following template shows:
+ * This sub-transform lowers generic loops to do-while loops as the following template shows:
  * - Original
  *   generic_loop {
  *       prepare;// typically the computation of the loop condition
@@ -245,14 +249,28 @@ impl LowerGenericLoops {
         lower_generic_loops.transform_module(module);
     }
 }
-
-// This analysis checks whether a flag variable is necessary in a loop.
-// If so, it generates the flag variable and records it with the loop.
 struct BreakContinueFlags {
     break_: HashMap<NodeRef, NodeRef>,
     continue_: HashMap<NodeRef, NodeRef>,
 }
 
+/*
+ * This preprocessing stage checks whether a flag variable is necessary in
+ * a loop. If so, it generates flag variables and records it with the loop.
+ * e.g.
+ * loop #i {
+ *   if (cond) {
+ *     break;
+ *   }
+ * }
+ * will be transformed to
+ * local break_flag_i;
+ * loop #i {
+ *   if (cond) {
+ *     break;
+ * }
+ * and (loop #i, break_flag_i) will be recorded in the flag map.
+ */
 struct LowerBreakContinuePreprocess {
     pools: CArc<ModulePools>,
     processed: HashSet<*const BasicBlock>,
@@ -411,6 +429,64 @@ impl LowerBreakContinuePreprocess {
     }
 }
 
+/*
+ * This sub-transform lowers break/continue nodes as the following template shows:
+ * For break nodes
+ * - Original
+ *   local break_flag_i;
+ *   loop #i {
+ *     { A }
+ *     if (cond) {
+ *       { B }
+ *       break;
+ *     }
+ *     { C }
+ *   } while (cond);
+ *
+ * - Transformed
+ *   local break_flag_i;
+ *   loop #i {
+ *     break_flag_i = false;
+ *     { A }
+ *     if (cond) {
+ *       { B }
+ *       break_flag_i = true;
+ *     }
+ *     if (!break_flag_i) {
+ *       { C }
+ *     }
+ *   } while (cond && !break_flag_i);
+ *
+ * For continue nodes
+ * - Original
+ *   local continue_flag_i;
+ *   loop #i {
+ *     { A }
+ *     if (cond) {
+ *       { B }
+ *       continue;
+ *     }
+ *     { C }
+ *   } while (cond);
+ *
+ * - Transformed
+ *   local continue_flag_i;
+ *   loop #i {
+ *     continue_flag_i = false;
+ *     { A }
+ *     if (cond) {
+ *       { B }
+ *       continue_flag_i = true;
+ *     }
+ *     if (!continue_flag_i) {
+ *       { C }
+ *     }
+ *   } while (cond || continue_flag_i);
+ *
+ * - Note: if the break/continue node is inside nested blocks, the transform
+ *         will recursively split the parent blocks after the stacked parent
+ *         nodes throughout the loop body.
+ */
 struct LowerBreakContinue {
     pools: CArc<ModulePools>,
     current_loop: Option<NodeRef>,
@@ -420,8 +496,8 @@ struct LowerBreakContinue {
 }
 
 impl LowerBreakContinue {
-    fn extract_guarded_block(&self, node: NodeRef) -> Pooled<BasicBlock> {
-        let mut builder = IrBuilder::new(self.pools.clone());
+    fn extract_guarded_block(node: NodeRef, pools: CArc<ModulePools>) -> Pooled<BasicBlock> {
+        let mut builder = IrBuilder::new(pools);
         while !node.get().next.is_sentinel() {
             let next = node.get().next;
             next.remove();
@@ -430,12 +506,12 @@ impl LowerBreakContinue {
         builder.finish()
     }
 
-    fn empty_block(&self) -> Pooled<BasicBlock> {
-        let mut builder = IrBuilder::new(self.pools.clone());
+    fn empty_block(pools: CArc<ModulePools>) -> Pooled<BasicBlock> {
+        let mut builder = IrBuilder::new(pools);
         builder.finish()
     }
 
-    fn transform_control_flow(&mut self, node: NodeRef, flag: NodeRef, stack: &Vec<NodeRef>) {
+    fn lower_break_continue(&mut self, node: NodeRef, flag: NodeRef, stack: &Vec<NodeRef>) {
         assert_eq!(stack.last(), Some(&node));
         let mut builder = IrBuilder::new(self.pools.clone());
         builder.set_insert_point(node.get().prev);
@@ -445,7 +521,7 @@ impl LowerBreakContinue {
         ));
         let const_true = builder.const_(Const::Bool(true));
         let update = builder.update(flag.clone(), const_true);
-        // remove the break/continue node and replace it with the update
+        // replace the break/continue node with the update node
         update.remove();
         node.replace_with(update.get());
         // recursively split the loop into if-guarded blocks
@@ -454,7 +530,7 @@ impl LowerBreakContinue {
             if node == current_loop {
                 break;
             }
-            let guarded = self.extract_guarded_block(node.clone());
+            let guarded = Self::extract_guarded_block(node.clone(), self.pools.clone());
             if guarded.any_non_comment_node() {
                 builder.set_insert_point(node.clone());
                 builder.comment(CBoxedSlice::from(
@@ -462,7 +538,7 @@ impl LowerBreakContinue {
                 ));
                 let flag = builder.load(flag.clone());
                 let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
-                builder.if_(not_flag, guarded, self.empty_block());
+                builder.if_(not_flag, guarded, Self::empty_block(self.pools.clone()));
             }
         }
     }
@@ -519,17 +595,21 @@ impl LowerBreakContinue {
                         builder.set_insert_point(body.last.get().prev);
                         // process the break flag: do { body } while (cond && !flag)
                         let cond = if let Some(flag) = break_flag {
-                            let flag = builder.load(flag.clone());
-                            let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
                             if cond.is_const() {
                                 // simple constant folding
                                 if cond.get_bool() {
+                                    let flag = builder.load(flag.clone());
+                                    let not_flag =
+                                        builder.call(Func::Not, &[flag], flag.type_().clone());
                                     not_flag // true && any => any
                                 } else {
                                     cond.clone() // false && any => false
                                 }
                             } else {
                                 // not foldable
+                                let flag = builder.load(flag.clone());
+                                let not_flag =
+                                    builder.call(Func::Not, &[flag], flag.type_().clone());
                                 builder.call(
                                     Func::BitAnd,
                                     &[cond.clone(), not_flag],
@@ -541,16 +621,16 @@ impl LowerBreakContinue {
                         };
                         // process the continue flag: do { body } while (cond || flag)
                         let cond = if let Some(flag) = continue_flag {
-                            let flag = builder.load(flag.clone());
                             if cond.is_const() {
                                 // simple constant folding
                                 if cond.get_bool() {
                                     cond.clone() // true || any => true
                                 } else {
-                                    flag // false || any => any
+                                    builder.load(flag.clone()) // false || any => any
                                 }
                             } else {
                                 // not foldable
+                                let flag = builder.load(flag.clone());
                                 builder.call(
                                     Func::BitOr,
                                     &[cond.clone(), flag],
@@ -576,7 +656,7 @@ impl LowerBreakContinue {
                         .break_
                         .get(&self.current_loop.as_ref().unwrap())
                         .unwrap();
-                    self.transform_control_flow(node, flag.clone(), stack);
+                    self.lower_break_continue(node, flag.clone(), stack);
                 }
                 Instruction::Continue => {
                     let flag = self
@@ -584,7 +664,7 @@ impl LowerBreakContinue {
                         .break_
                         .get(&self.current_loop.as_ref().unwrap())
                         .unwrap();
-                    self.transform_control_flow(node, flag.clone(), stack);
+                    self.lower_break_continue(node, flag.clone(), stack);
                 }
                 Instruction::If {
                     true_branch,
@@ -663,8 +743,393 @@ impl LowerBreakContinue {
     }
 }
 
-// TODO
-struct LowerEarlyReturn;
+/*
+ * This sub-transform lowers early-return nodes. It is similar to the break/continue
+ * lowering, but will split the nodes reachable from the early-return node into new
+ * if-guarded blocks throughout the function body rather than the loop bodies.
+ */
+struct LowerEarlyReturn {
+    pools: CArc<ModulePools>,
+    transformed: HashSet<*const BasicBlock>,
+}
+
+impl LowerEarlyReturn {
+    fn glob_early_return_in_block(bb: &Pooled<BasicBlock>, is_top_level: bool) -> bool {
+        bb.iter().any(|node| match node.get().instruction.as_ref() {
+            Instruction::Return(ret) => {
+                // remove all nodes after the return node as they are unreachable
+                while !node.get().next.is_sentinel() {
+                    node.get().next.remove();
+                }
+                !is_top_level || !node.get().next.is_sentinel()
+            }
+            Instruction::Loop { body, .. } => Self::glob_early_return_in_block(body, false),
+            Instruction::GenericLoop { .. } => {
+                panic!("GenericLoop nodes should be eliminated before this transform")
+            }
+            Instruction::If {
+                true_branch,
+                false_branch,
+                ..
+            } => {
+                Self::glob_early_return_in_block(true_branch, false)
+                    || Self::glob_early_return_in_block(false_branch, false)
+            }
+            Instruction::Switch { default, cases, .. } => {
+                Self::glob_early_return_in_block(default, false)
+                    || cases
+                        .iter()
+                        .any(|case| Self::glob_early_return_in_block(&case.block, false))
+            }
+            Instruction::AdScope { body, .. } => Self::glob_early_return_in_block(body, false),
+            Instruction::RayQuery {
+                on_triangle_hit,
+                on_procedural_hit,
+                ..
+            } => {
+                Self::glob_early_return_in_block(on_triangle_hit, false)
+                    || Self::glob_early_return_in_block(on_procedural_hit, false)
+            }
+            Instruction::AdDetach(body) => Self::glob_early_return_in_block(body, false),
+            _ => false,
+        })
+    }
+
+    fn has_any_early_return(module: &Module) -> bool {
+        Self::glob_early_return_in_block(&module.entry, true)
+    }
+
+    fn get_return_type_from_block(bb: &Pooled<BasicBlock>) -> Option<CArc<Type>> {
+        bb.iter()
+            .find_map(|node| match node.get().instruction.as_ref() {
+                Instruction::Return(ret) => {
+                    if ret.valid() {
+                        Some(ret.type_().clone())
+                    } else {
+                        Some(Type::void())
+                    }
+                }
+                Instruction::Loop { body, .. } => return Self::get_return_type_from_block(body),
+                Instruction::GenericLoop { .. } => {
+                    panic!("GenericLoop nodes should be eliminated before this transform")
+                }
+                Instruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => Self::get_return_type_from_block(true_branch)
+                    .or_else(|| Self::get_return_type_from_block(false_branch)),
+                Instruction::Switch { default, cases, .. } => {
+                    Self::get_return_type_from_block(default).or_else(|| {
+                        cases
+                            .iter()
+                            .find_map(|case| Self::get_return_type_from_block(&case.block))
+                    })
+                }
+                Instruction::AdScope { body, .. } => Self::get_return_type_from_block(body),
+                Instruction::RayQuery {
+                    on_triangle_hit,
+                    on_procedural_hit,
+                    ..
+                } => Self::get_return_type_from_block(on_triangle_hit)
+                    .or_else(|| Self::get_return_type_from_block(on_procedural_hit)),
+                Instruction::AdDetach(body) => Self::get_return_type_from_block(body),
+                _ => None,
+            })
+    }
+
+    fn get_return_type(module: &Module) -> CArc<Type> {
+        Self::get_return_type_from_block(&module.entry).unwrap_or(Type::void())
+    }
+
+    fn transform(module: &Module) {
+        let mut lower_early_return = LowerEarlyReturn {
+            pools: CArc::null(),
+            transformed: HashSet::new(),
+        };
+        lower_early_return.transform_module(&module);
+    }
+
+    fn lower_early_return(
+        &mut self,
+        node: NodeRef,
+        ret_val: Option<NodeRef>,
+        ret_flag: NodeRef,
+        stack: &Vec<NodeRef>,
+        affected_loops: &mut HashSet<NodeRef>,
+    ) {
+        // Split the nodes reachable from the early-return node into new if-guarded
+        // blocks and mark the loops that are broken by the early-return node.
+        assert_eq!(stack.last(), Some(&node));
+        let mut builder = IrBuilder::new(self.pools.clone());
+        builder.set_insert_point(node.get().prev);
+        // set the return value if present
+        if let Some(ret_val) = ret_val {
+            builder.comment(CBoxedSlice::from(
+                "lower early return: set return value".to_string(),
+            ));
+            if let Instruction::Return(new_ret_val) = node.get().instruction.as_ref() {
+                builder.update(ret_val, new_ret_val.clone());
+            }
+        }
+        // mark the return flag as true
+        builder.comment(CBoxedSlice::from(
+            "lower early return: flag = true".to_string(),
+        ));
+        let const_true = builder.const_(Const::Bool(true));
+        let update_flag = builder.update(ret_flag.clone(), const_true);
+        // replace the return node with the update
+        update_flag.remove();
+        node.replace_with(update_flag.get());
+        // recursively split the blocks reachable from the early-return node
+        for node in stack.iter().rev().skip(1) {
+            // record the loops that are broken by the early-return node
+            match node.get().instruction.as_ref() {
+                Instruction::Loop { .. } => {
+                    affected_loops.insert(node.clone());
+                }
+                _ => {}
+            }
+            // split the block
+            let guarded =
+                LowerBreakContinue::extract_guarded_block(node.clone(), self.pools.clone());
+            if guarded.any_non_comment_node() {
+                builder.set_insert_point(node.clone());
+                builder.comment(CBoxedSlice::from(
+                    "lower early return: guarded block".to_string(),
+                ));
+                let flag = builder.load(ret_flag.clone());
+                let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
+                builder.if_(
+                    not_flag,
+                    guarded,
+                    LowerBreakContinue::empty_block(self.pools.clone()),
+                );
+            }
+        }
+    }
+
+    fn lower_final_return(&mut self, _node: NodeRef, _ret_val: Option<NodeRef>) {
+        // FIXME:
+        //  A final, unconditional return makes the former return value meaningless.
+        //   Currently we just leave it there, but it's possible to optimize the IR
+        //   by removing the former return value and all the nodes that are not used.
+    }
+
+    fn transform_block(
+        &mut self,
+        bb: &Pooled<BasicBlock>,
+        ret_val: Option<NodeRef>,
+        ret_flag: NodeRef,
+        stack: &mut Vec<NodeRef>,
+        affected_loops: &mut HashSet<NodeRef>,
+        is_top_level: bool,
+    ) {
+        for node in bb.iter() {
+            stack.push(node);
+            match node.get().instruction.as_ref() {
+                Instruction::Buffer => {}
+                Instruction::Bindless => {}
+                Instruction::Texture2D => {}
+                Instruction::Texture3D => {}
+                Instruction::Accel => {}
+                Instruction::Shared => {}
+                Instruction::Uniform => {}
+                Instruction::Local { .. } => {}
+                Instruction::Argument { .. } => {}
+                Instruction::UserData(_) => {}
+                Instruction::Invalid => {}
+                Instruction::Const(_) => {}
+                Instruction::Update { .. } => {}
+                Instruction::Call(func, _) => match func {
+                    Func::Callable(c) => {
+                        self.transform_module(&c.0.module);
+                    }
+                    _ => {}
+                },
+                Instruction::Phi(_) => {
+                    panic!("Phi nodes should be eliminated before this transform");
+                }
+                Instruction::Return(_) => {
+                    // remove all nodes after the return node as they are unreachable
+                    while !node.get().next.is_sentinel() {
+                        node.get().next.remove();
+                    }
+                    if is_top_level && node.get().next.is_sentinel() {
+                        self.lower_final_return(node, ret_val);
+                    } else {
+                        self.lower_early_return(node, ret_val, ret_flag, stack, affected_loops);
+                    }
+                }
+                Instruction::Loop { body, .. } => {
+                    self.transform_block(body, ret_val, ret_flag, stack, affected_loops, false);
+                }
+                Instruction::GenericLoop { .. } => {
+                    panic!("GenericLoop nodes should be eliminated before this transform");
+                }
+                Instruction::Break => {
+                    panic!("Break nodes should be eliminated before this transform")
+                }
+                Instruction::Continue => {
+                    panic!("Continue nodes should be eliminated before this transform")
+                }
+                Instruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    self.transform_block(
+                        true_branch,
+                        ret_val,
+                        ret_flag,
+                        stack,
+                        affected_loops,
+                        false,
+                    );
+                    self.transform_block(
+                        false_branch,
+                        ret_val,
+                        ret_flag,
+                        stack,
+                        affected_loops,
+                        false,
+                    );
+                }
+                Instruction::Switch { default, cases, .. } => {
+                    self.transform_block(default, ret_val, ret_flag, stack, affected_loops, false);
+                    for case in cases.iter() {
+                        self.transform_block(
+                            &case.block,
+                            ret_val,
+                            ret_flag,
+                            stack,
+                            affected_loops,
+                            false,
+                        );
+                    }
+                }
+                Instruction::AdScope { body, .. } => {
+                    self.transform_block(body, ret_val, ret_flag, stack, affected_loops, false);
+                }
+                Instruction::RayQuery {
+                    on_triangle_hit,
+                    on_procedural_hit,
+                    ..
+                } => {
+                    self.transform_block(
+                        on_triangle_hit,
+                        ret_val,
+                        ret_flag,
+                        stack,
+                        affected_loops,
+                        false,
+                    );
+                    self.transform_block(
+                        on_procedural_hit,
+                        ret_val,
+                        ret_flag,
+                        stack,
+                        affected_loops,
+                        false,
+                    );
+                }
+                Instruction::Print { .. } => {}
+                Instruction::AdDetach(body) => {
+                    self.transform_block(body, ret_val, ret_flag, stack, affected_loops, false);
+                }
+                Instruction::Comment(_) => {}
+                Instruction::CoroSplitMark { .. } => {}
+                Instruction::CoroSuspend { .. } => {}
+                Instruction::CoroResume { .. } => {}
+                Instruction::CoroRegister { .. } => {}
+            }
+            let popped = stack.pop();
+            assert_eq!(popped, Some(node));
+        }
+    }
+
+    fn transform_module(&mut self, module: &Module) {
+        if self.transformed.insert(module.entry.as_ptr()) && Self::has_any_early_return(module) {
+            let old_pools = self.pools.clone();
+            self.pools = module.pools.clone();
+            // ret flag
+            let mut builder = IrBuilder::new(module.pools.clone());
+            builder.set_insert_point(module.entry.first);
+            builder.comment(CBoxedSlice::from("early return flag".to_string()));
+            let const_false = builder.const_(Const::Bool(false));
+            let ret_flag = builder.local(const_false);
+            // ret val
+            let ret_type = Self::get_return_type(module);
+            let ret_val = if ret_type.is_void() {
+                None
+            } else {
+                builder.comment(CBoxedSlice::from("early return variable".to_string()));
+                Some(builder.local_zero_init(ret_type))
+            };
+            let mut stack = Vec::new();
+            let mut affected_loops = HashSet::new();
+            self.transform_block(
+                &module.entry,
+                ret_val,
+                ret_flag,
+                &mut stack,
+                &mut affected_loops,
+                true,
+            );
+            self.pools = old_pools;
+            let mut builder = IrBuilder::new(module.pools.clone());
+            // some remaining work:
+            // 1. fix the affected loops by replacing the loop condition
+            for loop_ in affected_loops {
+                if let Instruction::Loop { cond, body } = loop_.get().instruction.as_ref() {
+                    builder.set_insert_point(body.last.get().prev);
+                    let cond = if cond.is_const() {
+                        if cond.get_bool() {
+                            // true && any => any
+                            let flag = builder.load(ret_flag.clone());
+                            let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
+                            not_flag
+                        } else {
+                            // false && any => false
+                            cond.clone()
+                        }
+                    } else {
+                        // cond && !flag
+                        let flag = builder.load(ret_flag.clone());
+                        let not_flag = builder.call(Func::Not, &[flag], flag.type_().clone());
+                        builder.call(
+                            Func::BitAnd,
+                            &[cond.clone(), not_flag],
+                            cond.type_().clone(),
+                        )
+                    };
+                    loop_.get_mut().instruction = CArc::new(Instruction::Loop {
+                        body: body.clone(),
+                        cond,
+                    });
+                }
+            }
+            // 2. add a final return node if the function does not have one
+            if !module
+                .entry
+                .iter()
+                .any(|node| match node.get().instruction.as_ref() {
+                    Instruction::Return(_) => true,
+                    _ => false,
+                })
+            {
+                builder.set_insert_point(module.entry.last.get().prev);
+                builder.comment(CBoxedSlice::from("final return".to_string()));
+                if let Some(ret_val) = ret_val {
+                    let ret_val = builder.load(ret_val);
+                    builder.return_(ret_val);
+                } else {
+                    builder.return_(INVALID_REF);
+                }
+            };
+        }
+    }
+}
 
 impl Transform for CanonicalizeControlFlow {
     fn transform_module(&self, module: Module) -> Module {
@@ -687,6 +1152,12 @@ impl Transform for CanonicalizeControlFlow {
         LowerBreakContinue::transform(&module);
         println!(
             "After LowerBreakContinue::transform:\n{}",
+            dump_ir_human_readable(&module)
+        );
+        // 3. lower early-return nodes
+        LowerEarlyReturn::transform(&module);
+        println!(
+            "After LowerEarlyReturn::transform:\n{}",
             dump_ir_human_readable(&module)
         );
         module // TODO

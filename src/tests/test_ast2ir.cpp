@@ -77,89 +77,91 @@ int main(int argc, char *argv[]) {
 
     Kernel1D<Buffer<float>, uint> kernel_def = [&](BufferVar<float> buffer_float, Var<uint> count) noexcept -> void {
         for (auto n = 0u; n < 1u; n++) {
-//            Shared<float4> shared_floats{16};
-//
-//            count += 1u;
-//
-//            Constant float_consts = {1.0f, 2.0f};
-//            auto ff = float_consts.read(0);
-//
-//            Var mat = make_float2x2(1.0f, 2.0f, 3.0f, 4.0f);
-//            Var mat2 = make_float2x2(1.0f, 2.0f, 3.0f, 4.0f);
-//            Var mat3 = mat * mat2;
-//            Var mat4 = mat3 * make_float2(2.f);
+            //            Shared<float4> shared_floats{16};
+            //
+            //            count += 1u;
+            //
+            //            Constant float_consts = {1.0f, 2.0f};
+            //            auto ff = float_consts.read(0);
+            //
+            //            Var mat = make_float2x2(1.0f, 2.0f, 3.0f, 4.0f);
+            //            Var mat2 = make_float2x2(1.0f, 2.0f, 3.0f, 4.0f);
+            //            Var mat3 = mat * mat2;
+            //            Var mat4 = mat3 * make_float2(2.f);
 
-            Var v_int = 10;
-//            Var t = make_int3(1, 2, 3);
-//            Var vv = ite(t == 10, 1, 2);
-//
-//            Var vvv = min(vv, 10);
-//            Var xxx = make_uint4(5);
-//            Var vvvv = min(xxx, 1u);
-//
-//            Var am = add_mul(v_int, v_int);
-//            Var a_copy = am.get<0>();
-//            Var m_copy = am.get<1>();
-//
-//            loop([] {
-//                if_(true, break_);
-//            });
+            //            Var t = make_int3(1, 2, 3);
+            //            Var vv = ite(t == 10, 1, 2);
+            //
+            //            Var vvv = min(vv, 10);
+            //            Var xxx = make_uint4(5);
+            //            Var vvvv = min(xxx, 1u);
+            //
+            //            Var am = add_mul(v_int, v_int);
+            //            Var a_copy = am.get<0>();
+            //            Var m_copy = am.get<1>();
+            //
+            //            loop([] {
+            //                if_(true, break_);
+            //            });
 
-            for (auto v : dynamic_range(v_int)) {
-                v_int += v;
-                if_(v < 10, [&] {
-                    break_();
-                }).else_([&] {
-                    continue_();
-                });
-            }
-
-//            Var v_int_add_one = add(v_int, 1);
-//            Var vv_int = int_consts[v_int];
-//            Var v_float = buffer_float.read(count + thread_id().x);
-//            Var vv_float = float_consts[0];
-//            Var call_ret = callable(10, v_int, v_float);
-//
-//            Var v_float_copy = v_float;
-//
-//            Var z = -1 + v_int * v_float + 1.0f;
-//            z += 1;
-//            Var v_vec = float3{1.0f};
-//            Var v2 = float3{2.0f} - v_vec * 2.0f;
-//            v2 *= 5.0f + v_float;
-//
-//            Var<float2> w{cast<float>(v_int), v_float};
-//            w *= float2{1.2f};
-//
-//            if_(v_int == v_int, [] {
-//                Var a = 0.0f;
-//            }).else_([] {
-//                Var c = 2.0f;
-//            });
-//
-//            switch_(123)
-//                .case_(1, [] {
-//
-//                })
-//                .case_(2, [] {
-//
-//                })
-//                .default_([] {
-//
+            auto sum = def(0.f);
+            for (auto v : dynamic_range(10)) {
+                sum += v;
+                if_(sum < 10, [&] {
+                    return_();
+                });//.else_([&] {
+//                    continue_();
 //                });
-//
-//            Var x = w.x;
-//
-//            Var<int3> s;
-//            Var<Test> vvt{s, v_float_copy};
-//            Var<Test> vt{vvt};
-//
-//            Var vt_copy = vt;
-//            Var c = 0.5f + vt.a * 1.0f;
-//
-//            Var vec4 = buffer->read(10);           // indexing into captured buffer (with literal)
-//            Var another_vec4 = buffer->read(v_int);// indexing into captured buffer (with Var)
-//            buffer->write(v_int + 1, float4(123.0f));
+            }
+            buffer_float->write(dispatch_x(), sum);
+
+
+            //            Var v_int_add_one = add(v_int, 1);
+            //            Var vv_int = int_consts[v_int];
+            //            Var v_float = buffer_float.read(count + thread_id().x);
+            //            Var vv_float = float_consts[0];
+            //            Var call_ret = callable(10, v_int, v_float);
+            //
+            //            Var v_float_copy = v_float;
+            //
+            //            Var z = -1 + v_int * v_float + 1.0f;
+            //            z += 1;
+            //            Var v_vec = float3{1.0f};
+            //            Var v2 = float3{2.0f} - v_vec * 2.0f;
+            //            v2 *= 5.0f + v_float;
+            //
+            //            Var<float2> w{cast<float>(v_int), v_float};
+            //            w *= float2{1.2f};
+            //
+            //            if_(v_int == v_int, [] {
+            //                Var a = 0.0f;
+            //            }).else_([] {
+            //                Var c = 2.0f;
+            //            });
+            //
+            //            switch_(123)
+            //                .case_(1, [] {
+            //
+            //                })
+            //                .case_(2, [] {
+            //
+            //                })
+            //                .default_([] {
+            //
+            //                });
+            //
+            //            Var x = w.x;
+            //
+            //            Var<int3> s;
+            //            Var<Test> vvt{s, v_float_copy};
+            //            Var<Test> vt{vvt};
+            //
+            //            Var vt_copy = vt;
+            //            Var c = 0.5f + vt.a * 1.0f;
+            //
+            //            Var vec4 = buffer->read(10);           // indexing into captured buffer (with literal)
+            //            Var another_vec4 = buffer->read(v_int);// indexing into captured buffer (with Var)
+            //            buffer->write(v_int + 1, float4(123.0f));
         }
     };
     LUISA_INFO("Kernel definition parsed in {} ms.", clock.toc());
@@ -193,4 +195,3 @@ int main(int argc, char *argv[]) {
                       static_cast<std::streamsize>(binary.len));
     }
 }
-

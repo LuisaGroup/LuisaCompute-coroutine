@@ -134,9 +134,9 @@ void FunctionBuilder::bind_promise_(const uint coro_token, const Expression *exp
 }
 const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const luisa::string &name) noexcept {
     LUISA_ASSERT(expr->type()->is_coroframe(), "Promise reading is only allowed for CoroFrame type");
-    auto index = expr->type()->member(name);
-    if (index != -1) {
-        return _create_expression<MemberExpr>(expr->type()->corotype()->members()[index], expr, index);
+    auto var = expr->type()->member(name);
+    if (var != -1) {
+        return _create_expression<MemberExpr>(expr->type()->corotype()->members()[var], expr, var);
     }
 }
 void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {

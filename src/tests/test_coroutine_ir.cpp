@@ -29,49 +29,43 @@ int main(int argc, char *argv[]) {
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream(StreamTag::COMPUTE);
 
-    constexpr auto n = 10u;
+    constexpr auto n = 2u;
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = std::vector<uint>(n, 0u);
 
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
-        auto id = coro_id().x;
-        //        x_buffer.write(id, id * 2u);
-        x_buffer.write(id, coro_token() + 1000u + 100 * id);
-        $suspend("1");
-        x_buffer.write(id, coro_token() + 2000u + 200 * id);
-        //        $if(id % 2u == 0u) {
-        //            $suspend("1");
-        //            x_buffer.write(id, 1000u + coro_token() * 2u);
-        //        };
-        //        auto user = def<User>(20u, 1000.0f);
-        //        auto i = def(0u);
-        //        $while (i <= 3u) {
-        //            auto x = x_buffer.read(id) + user.age;
-        //            $switch (1u) {
-        //                $case (1u) {
-        //                    $if (id < 5u) {
-        //                        x_buffer.write(id, x + 1000u);
-        //                        $if (i == 0u) {
-        //                            $suspend("1");
-        //                        };
-        //                        x = x_buffer.read(id);
-        //                        $if (i == 1u) {
-        //                            $suspend("2");
-        //                        };
-        //                        x = x;
-        //                        $suspend("3u");
-        //                        x_buffer.write(id, x + n);
-        //                    }
-        //                    $else {
-        //                        x_buffer.write(id, x + 2000u);
-        //                    };
-        //                };
-        //                $default {
-        //                    x_buffer.write(id, x + 3000u);
-        //                };
-        //            };
-        //            i += 1u;
-        //        };
+        auto coro_id_ = coro_id().x;
+        x_buffer.write(coro_id_, coro_id_);
+        auto user = def<User>(20u, 1000.0f);
+        auto i = def(0u);
+        auto x = x_buffer.read(coro_id_) + user.age;
+        $switch (coro_id_) {
+            $case (1u) {
+                $if (coro_id_ < 5u) {
+                    x_buffer.write(coro_id_, 10000u + 100u * coro_id_ + coro_token());
+                    $if (i == 0u) {
+                        x_buffer.write(coro_id_, 20000u + 100u * coro_id_ + coro_token());
+                        $suspend("1");
+                    };
+                    x = x_buffer.read(coro_id_);
+                    $if (i == 1u) {
+                        x_buffer.write(coro_id_, 30000u + 100u * coro_id_ + coro_token());
+                        $suspend("2");
+                    };
+                    x_buffer.write(coro_id_, 40000u + 100u * coro_id_ + coro_token());
+                    $suspend("3u");
+                    x_buffer.write(coro_id_, x + n);
+                }
+                $else {
+                    x_buffer.write(coro_id_, x + 2000u);
+                };
+            };
+            $default {
+                x_buffer.write(coro_id_, x + 3000u);
+                $suspend("4u");
+                x_buffer.write(coro_id_, x + 4000u);
+            };
+        };
     };
     LUISA_INFO_WITH_LOCATION("Coro count = {}", coro.suspend_count());
     auto type = Type::of<CoroFrame>();
@@ -96,6 +90,7 @@ int main(int argc, char *argv[]) {
                     coro[i](frame, x_buffer, n);
                 };
             }
+            $default{};
         };
         frame_buffer->write(id, frame);
     };
@@ -103,7 +98,7 @@ int main(int argc, char *argv[]) {
     stream << shader(x_buffer).dispatch(n)
            << x_buffer.copy_to(x_vec.data())
            << synchronize();
-    for (auto iter = 0u; iter < 20; ++iter) {
+    for (auto iter = 0u; iter < 5; ++iter) {
         for (auto i = 0u; i < n; ++i) {
             LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
         }

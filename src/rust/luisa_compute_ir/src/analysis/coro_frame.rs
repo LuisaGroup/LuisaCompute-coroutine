@@ -2,11 +2,10 @@ use crate::analysis::frame_token_manager::FrameTokenManager;
 use crate::context::is_type_equal;
 use crate::display::DisplayIR;
 use crate::ir::{
-    BasicBlock, CallableModule, Instruction, KernelModule, ModulePools, NodeRef, SwitchCase, Type,
+    BasicBlock, CallableModule, Instruction, NodeRef, SwitchCase, Type,
 };
-use crate::{CArc, CBoxedSlice, Pooled};
+use crate::{CBoxedSlice, Pooled};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{format, Debug, Formatter};
 
 #[derive(Debug)]
 pub(crate) struct Continuation {
@@ -356,7 +355,7 @@ impl CoroFrameAnalyser {
 
                 Instruction::CoroSuspend { .. }
                 | Instruction::CoroResume { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),
-                Instruction::CoroRegister { .. } =>todo!(),
+                Instruction::CoroRegister { token, value, var } => {}
                 Instruction::Return(_) => {
                     // TODO
                 }
@@ -364,7 +363,7 @@ impl CoroFrameAnalyser {
                 | Instruction::Break
                 | Instruction::Continue => {
                     // TODO
-                    // unreachable!("{:?} should no longer exist after CCF", instruction)
+                    unreachable!("{:?} should no longer exist after CCF", instruction)
                 }
 
                 Instruction::Local { .. }
@@ -694,7 +693,14 @@ impl CoroFrameAnalyser {
                 Instruction::AdDetach(_) => {}
                 Instruction::Comment(_) => {}
                 Instruction::Print { .. } => {}
-                Instruction::CoroRegister { .. } => {}
+                Instruction::CoroRegister { token, value, var } => {
+                    // var <-> frame[token][index] <-> value
+                    let active_var_next = self
+                        .active_vars
+                        .entry(*token)
+                        .or_insert(ActiveVar::new(*token));
+                    active_var_next.record_use(*value);
+                }
                 Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => unreachable!(
                     "{:?} should not be defined as statement directly",
                     instruction

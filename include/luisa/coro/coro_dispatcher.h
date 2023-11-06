@@ -45,6 +45,7 @@ template<typename T>
 class CoroDispatcherBase {
     static_assert(always_false_v<T>);
 };
+const uint token_mask=0x7fffffff;
 template<typename FrameRef, typename... Args>
 class CoroDispatcherBase<void(FrameRef, Args...)> : public concepts::Noncopyable {
     using FuncType = void(FrameRef, Args...);
@@ -53,18 +54,23 @@ public:
 
     luisa::queue<luisa::unique_ptr<ShaderDispatchCommand>> _dispatcher;
 protected:
+    Printer _printer;
     std::tuple<prototype_to_coro_dispatcher_t<Args>...> _args;
     Coroutine<FuncType> *_coro;
     virtual void _await_step(Stream &stream) noexcept = 0;
     virtual void _await_all(Stream &stream) noexcept;
     uint _dispatch_size;
+    Device _device;
     ///helper function for calling a shader by omitting suffix coroutine args
     template<size_t dim, typename... T>
     detail::ShaderInvoke<dim> call_shader(Shader<dim, T..., Args...> &shader, prototype_to_coro_dispatcher_t<T>...prefix_args);
+
 protected:
 public:
-    CoroDispatcherBase(Coroutine<FuncType> *coro_ptr) noexcept
-        : _coro{std::move(coro_ptr)}{}
+    CoroDispatcherBase(Coroutine<FuncType> *coro_ptr,Device& device) noexcept
+        : _coro{std::move(coro_ptr)},_device{device} , _printer{device}{
+        _printer.reset();
+    }
     [[nodiscard]] virtual bool all_dispatched() const noexcept = 0;
     [[nodiscard]] virtual bool all_done() const noexcept = 0;
     [[nodiscard]] CoroAwait<FuncType> await_step() noexcept;
@@ -74,7 +80,6 @@ public:
         _dispatch_size=dispatch_size;
     }
 };
-
 
 
 template<typename FrameRef, typename... Args>
@@ -107,7 +112,7 @@ public:
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream& stream,
                             uint max_frame_count = 2000000) noexcept
-        : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine},
+        : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine,device},
           _max_frame_count{max_frame_count} {
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
@@ -142,7 +147,7 @@ public:
             count.atomic(0).fetch_add(-1u);
             (*coroutine)(frame, args...);
             frame_buffer.write(frame_id, frame);
-            auto nxt = read_promise<uint>(frame, "token");
+            auto nxt = read_promise<uint>(frame, "token")&token_mask;
             count.atomic(nxt).fetch_add(1u);
         };
         _gen_shader = device.compile(gen_kernel);
@@ -156,8 +161,10 @@ public:
                 auto frame_id = index.read(x);
                 auto frame = frame_buffer.read(frame_id);
                 count.atomic(i).fetch_add(-1u);
+                this->_printer.info("resume kernel {} : id {}", i, frame_id);
                 (*coroutine)[i](frame, args...);
-                auto nxt = read_promise<uint>(frame, "token");
+                auto nxt = read_promise<uint>(frame, "token")&token_mask;
+                this->_printer.info("resume kernel {} : id {} goto kernel {}", i, frame_id,nxt);
                 count.atomic(nxt).fetch_add(1u);
             };
             _resume_shaders[i] = device.compile(resume_kernel);
@@ -188,7 +195,7 @@ public:
         Kernel1D _collect_kernel = [](BufferUInt index, BufferUInt prefix, Var<Buffer<FrameType>> frame_buffer, UInt n) {
             auto x = dispatch_x();
             auto frame = frame_buffer.read(x);
-            auto r_id = read_promise<uint>(frame, "token");
+            auto r_id = read_promise<uint>(frame, "token")&token_mask;
             auto q_id = prefix.atomic(r_id).fetch_add(1u);
             index.write(q_id, x);
         };
@@ -198,7 +205,7 @@ public:
             auto x = dispatch_x();
             $if(empty_offset+x<n){
                 auto frame = frame_buffer.read(empty_offset+x);
-                $if(read_promise<uint>(frame,"token")!=0){
+                $if((read_promise<uint>(frame,"token")&token_mask)!=0){
                     auto res = _global_buffer->atomic(0).fetch_add(1u);
                     auto slot= index.read(res);
                     frame_buffer.write(slot,frame);
@@ -220,10 +227,137 @@ public:
         stream<<_initialize_shader(_resume_count,_frame,_max_frame_count).dispatch(_max_frame_count);
     }
 };
-template<typename T>
-class ThreadCoroDispatcher : public CoroDispatcherBase<T> {
+template<typename FrameRef, typename... Args>
+class PersistentCoroDispatcher: public CoroDispatcherBase<void(FrameRef, Args...)> {
+private:
+    using FrameType = std::remove_reference_t<FrameRef>;
+    Shader1D<Buffer<uint>, Args...> _pt_shader;
+    Buffer<uint> _global;
+    uint _max_sub_coro;
+    uint _max_thread_count;
+    uint _block_size;
+    bool _dispatched;
+    bool _done;
+    void _await_step(Stream &stream) noexcept;
+    void _await_all(Stream &stream) noexcept;
+public:
+    //TODO: check async problem with these two functions
+    bool all_dispatched() const noexcept;
+    bool all_done() const noexcept;
 
+    PersistentCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream& stream,
+                            uint max_thread_count=1024*128,uint block_size=128, uint fetch_size=128) noexcept
+        : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine,device},
+          _max_thread_count{max_thread_count}, _block_size{block_size} {
+        _global=device.create_buffer<uint>(1);
+        uint max_sub_coro = coroutine->suspend_count() + 1;
+        _max_sub_coro = max_sub_coro;
+        _dispatched = false;
+        _done = false;
+        Kernel1D main_kernel=[&](BufferUInt global, UInt dispatch_size, Var<Args>...args){
+            set_block_size(block_size, 1, 1);
+            auto q_fac=1u;
+            auto shared_queue_size = block_size*q_fac;
+            Shared<FrameType> frames{shared_queue_size};
+            Shared<uint> path_id{shared_queue_size};
+            Shared<uint> work_counter{max_sub_coro};
+            Shared<uint> work_offset{2u};
+            Shared<uint> workload{2};
+            Shared<uint> work_stat{2};//0 max_count,1 max_id
+            //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
+            //Shared<uint> tag_offset{pipeline().surfaces().size()};
+            frames[thread_x()].kernel_index = 0u;
+            global.write(0u,0u);
+            $if(thread_x() < max_sub_coro) {
+                $if(thread_x() == 0){
+                    work_counter[thread_x()] = shared_queue_size;
+                }
+                $else {
+                    work_counter[thread_x()] = 0u;
+                };
+            };
+            workload[0] = 0;
+            workload[1] = 0;
+            //Shared<uint> count{1u};
+            auto count = def(0);
+            Shared<uint> rem_global{1};
+            Shared<uint> rem_local{1};
+            rem_global[0] = 1u;
+            rem_local[0] = 0u;
+            sync_block();
+            //pipeline().printer().info("work counter {} of block {}: {}", -1, block_x(), -1);
+            auto count_limit = def<uint>((dispatch_size*2)/std::min(max_thread_count/block_size,50u)/(shared_queue_size/max_sub_coro));
+
+            $while((rem_global[0] != 0u | rem_local[0] != 0u) & (count!= count_limit)) {
+                sync_block();//very important, synchronize for condition
+                rem_local[0] = 0u;
+                count += 1;
+                work_stat[0] = 0;
+                work_stat[1] = -1;
+                /* $if(thread_x() < (uint)KERNEL_COUNT) {//clear counter
+                work_counter[thread_x()] = 0u;
+            };
+            sync_block();
+            $for(index, 0u, q_factor) {
+                for (auto i = 0u; i < KERNEL_COUNT; ++i) {//count the kernels
+                    auto state = path_state[index*block_size+thread_x()];
+                    $if(state.kernel_index == i) {
+                        if (i != (uint)INVALID) {
+                            rem_local[0] = 1u;
+                        } else {
+                            $if(workload[0] < workload[1]) {
+                                rem_local[0] = 1u;
+                            };
+                        }
+                        work_counter.atomic(i).fetch_add(1u);
+                    };
+                }
+            };*/
+                sync_block();
+                $if(thread_x() == block_size - 1) {
+                    $if((workload[0] >= workload[1]) & (rem_global[0]==1u)) {//fetch new workload
+                        workload[0] = global.atomic(0u).fetch_add(block_size * fetch_size);
+                        workload[1] = min(workload[0] + block_size * fetch_size, this->dispatch_size);
+                        $if(workload[0] >= this->dispatch_size) {
+                            rem_global[0] = 0u;
+                        };
+                    };
+                };
+                sync_block();
+                $if(thread_x() < max_sub_coro) {//get max
+                    $if((workload[0] < workload[1]) | (thread_x() != 0u)) {
+                        $if(work_counter[thread_x()] != 0) {
+                            rem_local[0] = 1u;
+                            work_stat.atomic(0).fetch_max(work_counter[thread_x()]);
+                        };
+                    };
+                    //pipeline().printer().info("work counter {} of block {}: {}", thread_x(), block_x(), work_counter[thread_x()]);
+
+                };
+                sync_block();
+                $if(thread_x() < max_sub_coro){//get argmax
+                    $if((work_stat[0] == work_counter[thread_x()]) & ((workload[0] < workload[1]) | (thread_x() != 0u))) {
+                        work_stat[1] = thread_x();
+                    };
+                };
+                sync_block();
+                work_offset[0] = 0;
+                work_offset[1] = 0;
+                sync_block();
+                $for(index, 0u, q_fac) {//collect indices
+                    auto frame = frames[index * block_size + thread_x()];
+                    $if((read_promise<uint>(frame,"token")&token_mask) == work_stat[1]) {
+                        auto id = work_offset.atomic(0).fetch_add(1u);
+                        path_id[id] = index * block_size + thread_x();
+                    };
+                };
+            };
+
+        };
+        _pt_shader=device.compile(main_kernel);
+    }
 };
+
 // a simple wrap that helps submit a coroutine dispatch to the stream
 enum struct CmdTag {
     AWAIT_STEP,
@@ -257,10 +391,11 @@ struct luisa::compute::detail::is_stream_event_impl<coro::CoroAwait<T>> : std::t
 
 
 namespace luisa::compute::inline coro {
-template<typename Frame, typename... T>
-void CoroDispatcherBase<void(Frame, T...)>::_await_all(Stream &stream) noexcept {
+template<typename FrameRef, typename... Args>
+void CoroDispatcherBase<void(FrameRef, Args...)>::_await_all(Stream &stream) noexcept {
     while (!this->all_done()) {
         this->_await_step(stream);
+        stream<<synchronize();
     }
 }
 template<typename Frame, typename... T>
@@ -299,12 +434,14 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
         if(_host_count[0]!=_max_frame_count) {
             stream << _compact_shader(_resume_index, _frame, _host_count[0], _max_frame_count).dispatch(_max_frame_count - _host_count[0]);
         }
-        stream << this->call_shader<1,Buffer<uint>,Buffer<uint>,Buffer<FrameType>,uint,uint>(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _frame, _dispatch_counter,_max_frame_count).dispatch(_host_count[0]);
+        stream << this->template call_shader<1,Buffer<uint>,Buffer<uint>,Buffer<FrameType>,uint,uint>
+            (_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _frame, _dispatch_counter,_max_frame_count).dispatch(_host_count[0]);
         _dispatch_counter+=_host_count[0];
     } else {
         for (uint i = 1; i < _max_sub_coro; i++) {
             if (_host_count[i] > 0) {
-                stream << this->call_shader<1,Buffer<uint>,Buffer<uint>,Buffer<FrameType>,uint>(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
+                stream << this->template call_shader<1,Buffer<uint>,Buffer<uint>,Buffer<FrameType>,uint>
+                    (_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
                                       _resume_count, _frame, _max_frame_count)
                               .dispatch(_host_count[i]);
             }
@@ -320,6 +457,7 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
         }
     };
     stream << _resume_count.view(0, _max_sub_coro).copy_to(_host_count.data())
+           <<this->_printer.retrieve()
            << host_update;
 };
 template<typename FrameRef, typename... Args>
@@ -331,4 +469,22 @@ bool WavefrontCoroDispatcher<FrameRef, Args...>::all_done() const noexcept {
     return all_dispatched() && _host_empty;
 };
 
+template<typename FrameRef, typename... Args>
+void PersistentCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noexcept {
+    LUISA_ERROR("PersistentCoroDispatcher can only be used with await_all!");
+}
+template<typename FrameRef, typename... Args>
+void PersistentCoroDispatcher<FrameRef, Args...>::_await_all(Stream &stream) noexcept {
+    stream<<this->template call_shader<1,Buffer<uint>,uint>(_pt_shader,_global,this->_dispatch_size).dispatch(_max_thread_count)
+        <<[&]{_done=true;};
+}
+
+template<typename FrameRef, typename... Args>
+bool PersistentCoroDispatcher<FrameRef, Args...>::all_dispatched() const noexcept {
+    return _dispatched;
+}
+template<typename FrameRef, typename... Args>
+bool PersistentCoroDispatcher<FrameRef, Args...>::all_done() const noexcept {
+    return _done;
+}
 }// namespace luisa::compute::inline coro

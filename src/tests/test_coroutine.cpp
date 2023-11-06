@@ -28,7 +28,6 @@ int main(int argc, char *argv[]) {
     }
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream(StreamTag::COMPUTE);
-
     constexpr auto n = 40u;
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = std::vector<uint>(n, 0u);

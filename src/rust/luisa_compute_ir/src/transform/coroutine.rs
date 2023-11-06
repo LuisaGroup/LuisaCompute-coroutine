@@ -291,6 +291,7 @@ impl SplitManager {
         let frame_token = scope_builder.token;
         if !scope_builder.finished {
             scope_builder.finished = true;
+            self.coro_store(&mut scope_builder, INVALID_FRAME_TOKEN_MASK);
             scope_builder.builder.coro_suspend(INVALID_FRAME_TOKEN_MASK);
             scope_builder.builder.return_(INVALID_REF);
         }
@@ -329,28 +330,32 @@ impl SplitManager {
         builder.comment(CBoxedSlice::from("CoroResume End".as_bytes()));   // TODO: for DEBUG
         scope_builder
     }
-    fn coro_suspend(&mut self, scope_builder: &mut ScopeBuilder, token_next: u32) {
+    fn coro_store(&mut self, scope_builder: &mut ScopeBuilder, token_next: u32) {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
         builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes()));   // TODO: for DEBUG
-        let old2frame_index = &self.coro_callable_info.get(&token_next).unwrap().old2frame_index;
+
         let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
-        // store frame state
-        for (old_node, index) in old2frame_index.iter() {
-            let index_node = builder.const_(Const::Uint32(*index as u32));
-            let gep = builder.gep_chained(
-                frame_node,
-                &[index_node],
-                self.frame_fields[*index].clone());
-            let old2new_map = self.old2new.nodes.get(old_node).unwrap();
-            let value = old2new_map.get(&token).unwrap().clone();
-            let value = if value.is_lvalue() {
-                builder.load(value)
-            } else {
-                value
-            };
-            builder.update(gep, value);
-        }
+        if token_next & INVALID_FRAME_TOKEN_MASK == 0 {
+            let old2frame_index = &self.coro_callable_info.get(&token_next).unwrap().old2frame_index;
+            // store frame state
+            for (old_node, index) in old2frame_index.iter() {
+                let index_node = builder.const_(Const::Uint32(*index as u32));
+                let old2new_map = self.old2new.nodes.get(old_node).unwrap();
+                let value = old2new_map.get(&token).unwrap().clone();
+                let value = if value.is_lvalue() {
+                    builder.load(value)
+                } else {
+                    value
+                };
+                let gep = builder.gep_chained(
+                    frame_node,
+                    &[index_node],
+                    self.frame_fields[*index].clone());
+                builder.update(gep, value);
+            }
+        };
+
         // change frame token
         let index_node = builder.const_(Const::Uint32(STATE_INDEX_FRAME_TOKEN as u32));
         let gep = builder.gep_chained(
@@ -439,7 +444,7 @@ impl SplitManager {
     }
     fn visit_coro_split_mark(&mut self, mut sb_before: ScopeBuilder, token_next: u32, node_ref: NodeRef) -> (ScopeBuilder, ScopeBuilder) {
         // replace CoroSplitMark with CoroSuspend
-        self.coro_suspend(&mut sb_before, token_next);
+        self.coro_store(&mut sb_before, token_next);
         let coro_suspend = sb_before.builder.coro_suspend(token_next);
         node_ref.replace_with(coro_suspend.get());
 
@@ -456,7 +461,7 @@ impl SplitManager {
     }
     fn visit_coro_suspend(&mut self, mut scope_builder: ScopeBuilder, token_next: u32) -> ScopeBuilder {
         // create a void type node for termination
-        self.coro_suspend(&mut scope_builder, token_next);
+        self.coro_store(&mut scope_builder, token_next);
         scope_builder.builder.coro_suspend(token_next);
         // TODO: now use Instruction::Return for termination
         scope_builder.builder.return_(INVALID_REF);
@@ -1121,7 +1126,7 @@ impl SplitManager {
 
             // Coro
             Instruction::CoroSuspend { token: token_next } => {
-                self.coro_suspend(&mut scope_builder, *token_next);
+                self.coro_store(&mut scope_builder, *token_next);
                 let node_new = scope_builder.builder.coro_suspend(*token_next);
 
                 // create a void type node for termination

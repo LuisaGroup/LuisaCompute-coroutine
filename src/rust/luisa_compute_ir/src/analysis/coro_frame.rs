@@ -278,7 +278,7 @@ impl CoroFrameAnalyser {
             .entry(bb.as_ptr())
             .or_default()
             .clone();
-        bb.iter().for_each(|node_ref_present| {
+        for node_ref_present in bb.iter() {
             let node = node_ref_present.get();
             let instruction = node.instruction.as_ref();
             match instruction {
@@ -379,7 +379,7 @@ impl CoroFrameAnalyser {
                 Instruction::AdDetach(_)
                 | Instruction::AdScope { .. } => unimplemented!("Auto-differentiate is not compatible with Coroutine"),
             }
-        });
+        }
         self.split_possibility.insert(bb.as_ptr(), split_poss);
     }
 
@@ -492,11 +492,15 @@ impl CoroFrameAnalyser {
         let mut all_branches_finished = true;
         // process true branch
         let fb_true = self.visit_branch_split(frame_builder.token, true_branch, &mut fb_after_vec);
-        assert_eq!(fb_true.finished, split_poss_true.definitely);
+        assert_eq!(fb_true.finished, split_poss_true.definitely,
+                   "If true.finished = {}, split_poss_true.definitely = {}",
+                   fb_true.finished, split_poss_true.definitely);
         all_branches_finished &= fb_true.finished;
         // process false branch
         let fb_false = self.visit_branch_split(frame_builder.token, false_branch, &mut fb_after_vec);
-        assert_eq!(fb_false.finished, split_poss_false.definitely);
+        assert_eq!(fb_false.finished, split_poss_false.definitely,
+                   "If false.finished = {}, split_poss_false.definitely = {}",
+                   fb_false.finished, split_poss_false.definitely);
         all_branches_finished &= fb_false.finished;
         frame_builder.finished |= all_branches_finished;
 
@@ -578,7 +582,7 @@ impl CoroFrameAnalyser {
             let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            // println!("{:?}: {:?}", visit_state.present, instruction);
+            println!("Token {}, Visit noderef {:?} : {:?}", frame_builder.token, visit_state.present.0, instruction);
 
             let active_var = self
                 .active_vars
@@ -611,6 +615,7 @@ impl CoroFrameAnalyser {
                         let fb_before = fb_vec.pop().unwrap();
                         let mut fb_vec = self.visit_bb(fb_after, visit_state_after);
                         fb_vec.insert(0, fb_before);
+                        println!("fb_vec = {:?}", fb_vec);
                         fb_vec
                     } else {
                         // coro suspend

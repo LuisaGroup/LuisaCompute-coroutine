@@ -350,13 +350,16 @@ static constexpr size_t call_op_count = to_underlying(CallOp::SHADER_EXECUTION_R
            op == CallOp::MAKE_FLOAT3X3 ||
            op == CallOp::MAKE_FLOAT4X4;
 }
+
+class CallableLibrary;
+
 /**
  * @brief Set of call operations.
  * 
  */
-class CallableLibrary;
 class LC_AST_API CallOpSet {
     friend class CallableLibrary;
+    
 public:
     using Bitset = std::bitset<call_op_count>;
 

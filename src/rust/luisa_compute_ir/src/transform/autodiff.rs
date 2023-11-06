@@ -1,5 +1,6 @@
 use indexmap::{IndexMap, IndexSet};
 
+use bitflags::Flags;
 use core::panic;
 use half::f16;
 use std::ops::Deref;
@@ -1775,13 +1776,14 @@ impl Backward {
             crate::ir::Instruction::Return(_) => {
                 panic!("should not have return in autodiff section")
             }
-            Instruction::CoroRegister { .. }
-            | Instruction::CoroSplitMark { .. } => {
+            Instruction::CoroRegister { .. } | Instruction::CoroSplitMark { .. } => {
                 unimplemented!("Coroutine is not supported yet");
             }
-            Instruction::CoroSuspend { .. }
-            | Instruction::CoroResume { .. } => {
-                unreachable!("{:?} should not be defined as statement directly", instruction);
+            Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
+                unreachable!(
+                    "{:?} should not be defined as statement directly",
+                    instruction
+                );
             }
         }
     }

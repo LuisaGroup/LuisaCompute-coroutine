@@ -1,11 +1,14 @@
+use crate::ir::collect_nodes;
 use crate::{
     context::is_type_equal,
-    ir::{BasicBlock, Instruction, Module, NodeRef, PhiIncoming, SwitchCase, Type, Func, CallableModule, KernelModule},
+    ir::{
+        BasicBlock, CallableModule, Func, Instruction, KernelModule, Module, NodeRef, PhiIncoming,
+        SwitchCase, Type,
+    },
     Pooled,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
-use crate::ir::collect_nodes;
 
 pub struct DisplayIR {
     output: String,
@@ -63,7 +66,8 @@ impl DisplayIR {
     pub fn display_ir_callable(&mut self, callable: &CallableModule) -> String {
         self.clear();
         self.defs.extend(callable.args.iter().clone());
-        self.defs.extend(callable.captures.iter().map(|arg| arg.node));
+        self.defs
+            .extend(callable.captures.iter().map(|arg| arg.node));
         self.output += &format!("\n{:-^40}\n", "Args");
         for arg in callable.args.as_ref() {
             self.display(*arg, 0, false);
@@ -76,7 +80,12 @@ impl DisplayIR {
         self.display_ir_bb(&callable.module.entry, 0, false)
     }
 
-    pub fn display_ir_bb(&mut self, bb: &Pooled<BasicBlock>, ident: usize, no_new_line: bool) -> String {
+    pub fn display_ir_bb(
+        &mut self,
+        bb: &Pooled<BasicBlock>,
+        ident: usize,
+        no_new_line: bool,
+    ) -> String {
         self.defs.extend(collect_nodes(bb.clone()).into_iter());
         for node in bb.nodes().iter() {
             self.display(*node, ident, no_new_line);
@@ -111,9 +120,7 @@ impl DisplayIR {
             self.map
                 .get(&node.0)
                 .map(ToOwned::to_owned)
-                .unwrap_or_else(|| {
-                    panic!("{:?} not found in map", node)
-                })
+                .unwrap_or_else(|| panic!("{:?} not found in map", node))
         } else {
             usize::MAX
         }
@@ -238,9 +245,9 @@ impl DisplayIR {
                     .collect::<Vec<_>>()
                     .join(", ");
                 if let Func::Assert(_) = func {
-                    self.output += format!("Call Assert({})", args, ).as_str();
+                    self.output += format!("Call Assert({})", args,).as_str();
                 } else {
-                    self.output += format!("Call {:?}({})", func, args, ).as_str();
+                    self.output += format!("Call {:?}({})", func, args,).as_str();
                 }
             }
             Instruction::Phi(incomings) => {
@@ -396,7 +403,7 @@ impl DisplayIR {
             Instruction::Comment(msg) => {
                 let msg = msg.as_ref();
                 let msg = std::str::from_utf8(msg).unwrap();
-                self.output += format!("Comment: {}", msg).as_str();
+                self.output += format!("// {}", msg).as_str();
                 // self.output += "Comment: ...";
             }
             Instruction::CoroSplitMark { token } => {
@@ -418,7 +425,11 @@ impl DisplayIR {
                 self.output += format!("CoroResume({})", token).as_str();
             }
             Instruction::Return(v) => {
-                let v_type = if v.valid() {v.type_().clone()} else {Type::void()};
+                let v_type = if v.valid() {
+                    v.type_().clone()
+                } else {
+                    Type::void()
+                };
                 let temp = if is_type_equal(&v_type, &Type::void()) {
                     String::from("return")
                 } else {

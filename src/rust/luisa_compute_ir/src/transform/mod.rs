@@ -12,6 +12,7 @@ pub mod reg2mem;
 use bitflags::Flags;
 
 pub mod coroutine;
+pub mod inliner;
 
 use crate::ir::{self, ModuleFlags, CallableModule, Module, KernelModule};
 

@@ -2,16 +2,33 @@
 // Created by Hercier on 2023/4/6.
 //
 #pragma once
-#include "optix_api.h"
 #include <luisa/core/logging.h>
-#include "cuda_device.h"
 #include <luisa/backends/ext/denoiser_ext.h>
 #include <luisa/runtime/image.h>
 #include <luisa/runtime/buffer.h>
+#include <luisa/runtime/stream.h>
+
+#include "../optix_api.h"
+#include "../cuda_device.h"
+
+#if LUISA_BACKEND_ENABLE_OIDN
+#include "../../common/oidn_denoiser.h"
+namespace luisa::compute::cuda {
+class CUDADenoiserExt final : public DenoiserExt {
+    CUDADevice *_device;
+public:
+    explicit CUDADenoiserExt(CUDADevice *device) noexcept : _device(device) {
+    }
+    luisa::shared_ptr<Denoiser> create(uint64_t stream) noexcept override;
+    luisa::shared_ptr<Denoiser> create(Stream &stream) noexcept {
+        return create(stream.handle());
+    }
+};
+}// namespace luisa::compute::cuda
+#endif
 
 namespace luisa::compute::cuda {
-
-class CUDADenoiserExt final : public DenoiserExt {
+class CUDAOldDenoiserExt final : public OldDenoiserExt {
     CUDADevice *_device;
     std::vector<optix::DenoiserLayer> _layers;
     optix::Denoiser _denoiser = nullptr;
@@ -32,9 +49,9 @@ class CUDADenoiserExt final : public DenoiserExt {
     void _destroy(Stream &stream) noexcept;
 
 public:
-    CUDADenoiserExt(CUDADevice *device) noexcept : _device(device) {
+    CUDAOldDenoiserExt(CUDADevice *device) noexcept : _device(device) {
     }
-    ~CUDADenoiserExt() noexcept {
+    ~CUDAOldDenoiserExt() noexcept {
     }
     void init(Stream &stream, DenoiserMode mode, DenoiserInput data, uint2 resolution) noexcept override;
 

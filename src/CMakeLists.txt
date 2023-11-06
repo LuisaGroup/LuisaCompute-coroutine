@@ -28,7 +28,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
             /Zc:preprocessor
             /Zc:__cplusplus)
 elseif (MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(luisa-compute-include INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:/EHsc>)
+    target_compile_options(luisa-compute-include INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     target_compile_options(luisa-compute-include INTERFACE
             -Wno-invalid-offsetof
@@ -48,6 +48,7 @@ add_subdirectory(osl)
 add_subdirectory(gui)
 add_subdirectory(backends)
 add_subdirectory(coro)
+add_subdirectory(ir_v2)
 
 add_library(compute INTERFACE)
 
@@ -62,7 +63,8 @@ target_link_libraries(compute INTERFACE
         luisa-compute-api
         luisa-compute-backends
         luisa-compute-ir
-        luisa-compute-coro)
+        luisa-compute-coro
+        luisa-compute-ir-v2)
 
 if (LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
     target_link_libraries(compute INTERFACE luisa-compute-cuda-ext-lcub)

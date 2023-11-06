@@ -677,6 +677,7 @@ const CallExpr *FunctionBuilder::call(const Type *type, Function custom, luisa::
         // propagate used builtin/custom callables and constants
         _propagated_builtin_callables.propagate(f->_propagated_builtin_callables);
         _requires_atomic_float |= f->_requires_atomic_float;
+        _requires_printing |= f->_requires_printing;
     }
     if (type == nullptr) {
         _void_expr(expr);
@@ -702,6 +703,17 @@ const RefExpr *FunctionBuilder::reference(const Type *type) noexcept {
 
 void FunctionBuilder::comment_(luisa::string comment) noexcept {
     _create_and_append_statement<CommentStmt>(std::move(comment));
+}
+
+void FunctionBuilder::print_(luisa::string_view format,
+                             luisa::span<const Expression *const> args) noexcept {
+    CallExpr::ArgumentList internalized_args;
+    internalized_args.reserve(args.size());
+    for (auto arg : args) { internalized_args.emplace_back(_internalize(arg)); }
+    _create_and_append_statement<PrintStmt>(
+        luisa::string{format},
+        std::move(internalized_args));
+    _requires_printing = true;
 }
 
 void FunctionBuilder::set_block_size(uint3 size) noexcept {
@@ -747,6 +759,10 @@ bool FunctionBuilder::requires_autodiff() const noexcept {
 void FunctionBuilder::coroframe_replace(const Type *type) noexcept {
     LUISA_ASSERT(_arguments.size() > 0, "Lack of parameter for coroutine generated callables!");
     _arguments[0]._type = type;
+}
+
+bool FunctionBuilder::requires_printing() const noexcept {
+    return _requires_printing;
 }
 
 void FunctionBuilder::sort_bindings() noexcept {
@@ -822,6 +838,11 @@ const Expression *FunctionBuilder::_internalize(const Expression *expr) noexcept
     if (expr->type() == nullptr) {
         LUISA_ASSERT(expr->builder() == this,
                      "Cannot internalize expression with no type.");
+        return expr;
+    }
+    if (_tag != Function::Tag::CALLABLE) {
+        // must be a leak from a callable, so postpone
+        // the fix until the kernel is encoded
         return expr;
     }
     // check if already internalized

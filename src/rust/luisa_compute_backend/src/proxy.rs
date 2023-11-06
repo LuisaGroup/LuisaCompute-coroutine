@@ -55,9 +55,19 @@ impl Backend for ProxyBackend {
         catch_abort!({ (self.device.native_handle)(self.device.device) })
     }
     #[inline]
-    fn create_buffer(&self, ty: &CArc<Type>, count: usize) -> api::CreatedBufferInfo {
+    fn create_buffer(
+        &self,
+        ty: &CArc<Type>,
+        count: usize,
+        ext_mem: *mut c_void,
+    ) -> api::CreatedBufferInfo {
         catch_abort!({
-            (self.device.create_buffer)(self.device.device, ty as *const _ as *const c_void, count)
+            (self.device.create_buffer)(
+                self.device.device,
+                ty as *const _ as *const c_void,
+                count,
+                ext_mem,
+            )
         })
     }
     #[inline]
@@ -270,6 +280,12 @@ impl Backend for ProxyBackend {
             let result_str = std::ffi::CStr::from_ptr(result as *const i8).to_str().unwrap().to_string();
             (self.interface.inner.free_string)(result);
             Some(result_str)
+        }}
+    }
+    #[inline]
+    fn denoiser_ext(&self) -> api::DenoiserExt {
+        catch_abort! {{
+            (self.device.denoiser_ext)(self.device.device)
         }}
     }
 }

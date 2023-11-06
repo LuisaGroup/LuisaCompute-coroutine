@@ -13,6 +13,7 @@ struct StmtVisitor;
  * 
  */
 class LC_AST_API Statement : public concepts::Noncopyable {
+
     friend class CallableLibrary;
 
 public:
@@ -34,13 +35,14 @@ public:
         RAY_QUERY,
         AUTO_DIFF,
         COROBIND,
-        SUSPEND
+        SUSPEND,
+        PRINT,
     };
 
 private:
     mutable uint64_t _hash{0u};
     mutable bool _hash_computed{false};
-    Tag _tag;
+    Tag _tag{};
 
 protected:
     Statement() noexcept = default;
@@ -75,6 +77,8 @@ class RayQueryStmt;
 class AutoDiffStmt;
 class SuspendStmt;
 class CoroBindStmt;
+class PrintStmt;
+
 struct LC_AST_API StmtVisitor {
     virtual void visit(const BreakStmt *) = 0;
     virtual void visit(const ContinueStmt *) = 0;
@@ -93,6 +97,7 @@ struct LC_AST_API StmtVisitor {
     virtual void visit(const AutoDiffStmt *stmt);
     virtual void visit(const SuspendStmt *stmt);
     virtual void visit(const CoroBindStmt *stmt);
+    virtual void visit(const PrintStmt *stmt);
     virtual ~StmtVisitor() noexcept = default;
 };
 
@@ -126,7 +131,7 @@ class ReturnStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const Expression *_expr;
+    const Expression *_expr{};
     ReturnStmt() noexcept = default;
 
 private:
@@ -169,8 +174,8 @@ class AssignStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const Expression *_lhs;
-    const Expression *_rhs;
+    const Expression *_lhs{};
+    const Expression *_rhs{};
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -199,7 +204,7 @@ class IfStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const Expression *_condition;
+    const Expression *_condition{};
     ScopeStmt _true_branch;
     ScopeStmt _false_branch;
     IfStmt() noexcept = default;
@@ -248,7 +253,7 @@ class ExprStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const Expression *_expr;
+    const Expression *_expr{};
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -273,7 +278,7 @@ class SwitchStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const Expression *_expr;
+    const Expression *_expr{};
     ScopeStmt _body;
     SwitchStmt() noexcept = default;
 
@@ -301,7 +306,7 @@ class SwitchCaseStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const Expression *_expr;
+    const Expression *_expr{};
     ScopeStmt _body;
     SwitchCaseStmt() noexcept = default;
 
@@ -346,9 +351,9 @@ class ForStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const Expression *_var;
-    const Expression *_cond;
-    const Expression *_step;
+    const Expression *_var{};
+    const Expression *_cond{};
+    const Expression *_step{};
     ScopeStmt _body;
 
 private:
@@ -456,7 +461,7 @@ class RayQueryStmt : public Statement {
     friend class CallableLibrary;
 
 private:
-    const RefExpr *_query;
+    const RefExpr *_query{};
     ScopeStmt _on_triangle_candidate;
     ScopeStmt _on_procedural_candidate;
 
@@ -528,6 +533,25 @@ public:
     [[nodiscard]] auto expression() const noexcept { return _expr; }
     LUISA_STATEMENT_COMMON()
 };
+
+class PrintStmt : public Statement {
+    friend class CallableLibrary;
+
+private:
+    luisa::string _format;
+    luisa::vector<const Expression *> _args;
+private:
+    PrintStmt() noexcept = default;// for Maxwell's dear CallableLibrary
+    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+
+public:
+    PrintStmt(luisa::string fmt, luisa::vector<const Expression *> args) noexcept
+        : Statement{Tag::PRINT}, _format{std::move(fmt)}, _args{std::move(args)} {}
+    [[nodiscard]] auto format() const noexcept { return luisa::string_view{_format}; }
+    [[nodiscard]] auto arguments() const noexcept { return luisa::span{_args}; }
+    LUISA_STATEMENT_COMMON()
+};
+
 #undef LUISA_STATEMENT_COMMON
 
 // helper function for easy traversal over the ASTs
@@ -636,6 +660,11 @@ void traverse_expressions(
             break;
         }
         case Statement::Tag::SUSPEND: {
+            break;
+        }
+        case Statement::Tag::PRINT: {
+            auto print_stmt = static_cast<const PrintStmt *>(stmt);
+            for (auto arg : print_stmt->arguments()) { do_visit(arg); }
             break;
         }
     }

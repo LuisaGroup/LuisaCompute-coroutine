@@ -577,7 +577,7 @@ impl CoroFrameAnalyser {
         }
         visit_result
     }
-    fn visit_bb(&mut self, mut frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
+    fn visit_bb(&mut self, frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
         while visit_state.present != visit_state.end {
             let node = visit_state.present.get();
             let type_ = &node.type_;

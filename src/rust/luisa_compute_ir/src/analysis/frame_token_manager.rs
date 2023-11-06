@@ -12,7 +12,7 @@ pub(crate) static INVALID_FRAME_TOKEN_MASK: u32 = 0x8000_0000;
 impl FrameTokenManager {
     pub(crate) fn register_frame_token(token: u32) {
         let ftm = Self::get_instance();
-        assert!(token < INVALID_FRAME_TOKEN_MASK, "Invalid frame token");
+        assert_eq!(token & INVALID_FRAME_TOKEN_MASK, 0, "Invalid frame token");
         assert!(!ftm.frame_token_occupied.contains(&token),
                 "Frame token already occupied");
         ftm.frame_token_occupied.insert(token);

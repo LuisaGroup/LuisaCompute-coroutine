@@ -90,7 +90,9 @@ int main(int argc, char *argv[]) {
                     coro[i](frame, x_buffer, n);
                 };
             }
-            $default{};
+            $default{
+                x_buffer.write(id, 0u);
+            };
         };
         frame_buffer->write(id, frame);
     };

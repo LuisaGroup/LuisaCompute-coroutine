@@ -112,7 +112,8 @@ public:
                             }
                             s.push_back('>');
                             commit_s();
-                        } else if (arg->is_structure()) {
+                        } else if (arg->is_structure() || arg->is_coroframe()) {
+                            if (arg->is_coroframe()) { arg = arg->corotype(); }
                             s.push_back('{');
                             commit_s();
                             for (auto i = 0u; i < arg->members().size(); i++) {

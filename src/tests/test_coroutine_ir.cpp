@@ -91,7 +91,7 @@ int main(int argc, char *argv[]) {
         coro(frame, x_buffer);
         frame_buffer->write(id_x, frame);
     };
-    auto shader = device.compile(kernel, {.name = R"(C:\OldNew\Graphics-Lab\LuisaCompute\LuisaCompute-coroutine\output\entry_debug)"});
+    auto shader = device.compile(kernel, {.name = R"(output\entry_debug)"});
     Kernel1D resume_kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
         auto frame = frame_buffer->read(id);
@@ -110,7 +110,7 @@ int main(int argc, char *argv[]) {
     };
     auto resume_shader = device.compile(
         resume_kernel,
-        {.name = R"(C:\OldNew\Graphics-Lab\LuisaCompute\LuisaCompute-coroutine\output\resume_debug)"});
+        {.name = R"(output\resume_debug)"});
     stream << shader(x_buffer).dispatch(n)
            << x_buffer.copy_to(x_vec.data())
            << synchronize();

@@ -28,9 +28,9 @@ template<typename T>
 }// namespace detail
 
 void IR2AST::_convert_block(const ir::BasicBlock *block) noexcept {
-    auto node_ref = block->first;
-    while (node_ref != ir::INVALID_REF) {
-        auto node = ir::luisa_compute_ir_node_get(node_ref);
+    auto node_ref = ir::luisa_compute_ir_node_get(block->first)->next;
+    auto node = ir::luisa_compute_ir_node_get(node_ref);
+    while (node->instruction->tag != ir::Instruction::Tag::Invalid) {
         switch (node->instruction->tag) {
             case ir::Instruction::Tag::Local: _convert_instr_local(node); break;
             case ir::Instruction::Tag::UserData: _convert_instr_user_data(node); break;
@@ -66,8 +66,13 @@ void IR2AST::_convert_block(const ir::BasicBlock *block) noexcept {
             case ir::Instruction::Tag::Shared: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Shared' in function body."); break;
             case ir::Instruction::Tag::Uniform: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Uniform' in function body."); break;
             case ir::Instruction::Tag::Argument: LUISA_ERROR_WITH_LOCATION("Unexpected instruction 'Argument' in function body."); break;
+            case ir::Instruction::Tag::CoroSplitMark: break;
+            case ir::Instruction::Tag::CoroSuspend: break;
+            case ir::Instruction::Tag::CoroResume: break;
+            case ir::Instruction::Tag::CoroRegister: break;
         }
         node_ref = node->next;
+        node = ir::luisa_compute_ir_node_get(node_ref);
     }
     if (auto iter = _ctx->block_to_phis.find(block);
         iter != _ctx->block_to_phis.end()) {
@@ -926,18 +931,21 @@ void IR2AST::_convert_instr_loop(const ir::Node *node) noexcept {
     //         break;
     //     }
     // }
-    auto loop_scope = detail::FunctionBuilder::current()->loop_();
-    detail::FunctionBuilder::current()->with(loop_scope->body(), [&] {
+    auto f = detail::FunctionBuilder::current();
+    auto loop_scope = f->loop_();
+    f->with(loop_scope->body(), [&] {
         // body
+        f->comment_("loop body begin");
         auto old_generic_loop_break = std::exchange(_ctx->generic_loop_break, nullptr);
         _convert_block(node->instruction->loop.body.get());
         _ctx->generic_loop_break = old_generic_loop_break;
+        f->comment_("loop body end");
         // if (!cond) break;
         auto cond = _convert_node(node->instruction->loop.cond);
-        auto not_cond = detail::FunctionBuilder::current()->unary(Type::of<bool>(), UnaryOp::NOT, cond);
-        auto if_scope = detail::FunctionBuilder::current()->if_(not_cond);
-        detail::FunctionBuilder::current()->with(if_scope->true_branch(), [&] {
-            detail::FunctionBuilder::current()->break_();
+        auto not_cond = f->unary(Type::of<bool>(), UnaryOp::NOT, cond);
+        auto if_scope = f->if_(not_cond);
+        f->with(if_scope->true_branch(), [&] {
+            f->break_();
         });
     });
 }

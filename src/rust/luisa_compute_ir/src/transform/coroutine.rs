@@ -838,12 +838,12 @@ impl SplitManager {
                     if sb_after.finished {
                         visit_result.result.push(sb_after);
                     } else {
-                        // FIXME: ir position wrong
+                        // FIXME: dup_cond multiple mapping may cause problems!
                         let dup_cond_if = self.find_duplicated_node(&mut sb_after, *cond);
-                        let dup_body = self.duplicate_block(sb_after.token, &pools, body);
-                        let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
+                        let dup_body_loop = self.duplicate_block(sb_after.token, &pools, body);
+                        let dup_cond_loop = self.find_duplicated_node(&mut sb_after, *cond);
                         let mut loop_builder = ScopeBuilder::new(sb_after.token, pools.clone());
-                        loop_builder.builder.loop_(dup_body, dup_cond);
+                        loop_builder.builder.loop_(dup_body_loop, dup_cond_loop);
                         let loop_ = loop_builder.builder.finish();
                         let empty_bb = IrBuilder::new(pools.clone()).finish();
                         sb_after.builder.if_(dup_cond_if, loop_, empty_bb);
@@ -979,9 +979,8 @@ impl SplitManager {
         dup_callable
     }
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
-        // // FIXME: multiple duplication in loop transformation
-        // assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
-        //         "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
+        assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
+                "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
         let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
         for node in bb.iter() {
             // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, node.0, node.get().instruction);

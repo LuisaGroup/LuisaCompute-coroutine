@@ -88,6 +88,7 @@ int main(int argc, char *argv[]) {
         x_buffer.write(id_x, id_x);
         auto frame = frame_buffer->read(id_x);
         initialize_coroframe(frame, id);
+        device_log("id = {}, coro_frame = {}", id, frame);
         coro(frame, x_buffer);
         frame_buffer->write(id_x, frame);
     };
@@ -96,6 +97,7 @@ int main(int argc, char *argv[]) {
         auto id = dispatch_x();
         auto frame = frame_buffer->read(id);
         auto token = read_promise<uint>(frame, "coro_token");
+        device_log("id = {}, coro_token = {}", id, token);
         $switch (token) {
             for (int i = 1; i <= coro.suspend_count(); ++i) {
                 $case (i) {

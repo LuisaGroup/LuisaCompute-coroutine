@@ -828,7 +828,7 @@ impl SplitManager {
                 visit_state_after.present = visit_state.present.get().next;
 
                 // process next bb
-                visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), scope_builder));
+                sb_after_vec.insert(0, scope_builder);
 
                 for mut sb_after in sb_after_vec {
                     if sb_after.finished {

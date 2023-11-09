@@ -1144,11 +1144,6 @@ impl Transform for CanonicalizeControlFlow {
             dump_ir_human_readable(&module)
         );
         // 2. lower break/continue nodes
-        LowerBreakContinuePreprocess::process(&module);
-        println!(
-            "After LowerBreakContinuePreprocess::process:\n{}",
-            dump_ir_human_readable(&module)
-        );
         LowerBreakContinue::transform(&module);
         println!(
             "After LowerBreakContinue::transform:\n{}",

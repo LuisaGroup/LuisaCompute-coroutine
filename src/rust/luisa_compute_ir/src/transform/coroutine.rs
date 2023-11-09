@@ -78,8 +78,8 @@ pub(crate) struct SplitManager {
     old2new: Old2NewMap,
     new2old: New2OldMap,
 
-    // TODO: set private and add an API
-    pub(crate) coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
+    coro_scopes: HashMap<u32, Pooled<BasicBlock>>,
+    coro_local_builder: HashMap<u32, IrBuilder>,
     coro_callable_info: HashMap<u32, CallableModuleInfo>,
     frame_type: CArc<Type>,
     frame_fields: Vec<CArc<Type>>,
@@ -92,6 +92,7 @@ impl SplitManager {
             old2new: Default::default(),
             new2old: Default::default(),
             coro_scopes: HashMap::new(),
+            coro_local_builder: HashMap::new(),
             coro_callable_info: HashMap::new(),
             frame_type: CArc::new(Type::Void),
             frame_fields: vec![],
@@ -206,6 +207,7 @@ impl SplitManager {
             let mut args = self.duplicate_args(*token, pools, &callable.args);
             let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
             let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
+            self.coro_local_builder.insert(*token, IrBuilder::new(pools.clone()));
 
             input_var = input_var.difference(&callable.args.as_ref().iter()
                 .map(|arg| *arg).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
@@ -289,13 +291,16 @@ impl SplitManager {
 
         // build scope
         let frame_token = scope_builder.token;
-        if !scope_builder.finished {
+        if !scope_builder.finished && force {
             scope_builder.finished = true;
             self.coro_store(&mut scope_builder, INVALID_FRAME_TOKEN_MASK);
             scope_builder.builder.coro_suspend(INVALID_FRAME_TOKEN_MASK);
             scope_builder.builder.return_(INVALID_REF);
         }
         let scope_bb = scope_builder.builder.finish();
+        let mut ir_builder = self.coro_local_builder.remove(&frame_token).unwrap();
+        ir_builder.append_block(scope_bb);
+        let scope_bb = ir_builder.finish();
         self.coro_scopes.insert(frame_token, scope_bb);
     }
     fn build_scopes(&mut self, mut sb_vec: Vec<ScopeBuilder>, force: bool) -> Vec<ScopeBuilder> {
@@ -811,11 +816,11 @@ impl SplitManager {
                 --------------------------
                  */
 
-                let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
-
                 let mut sb_after_vec = vec![];
                 let sb_before = self.visit_branch_split(pools, scope_builder.token, body, &mut sb_after_vec);
                 let body_before_split = sb_before.builder.finish();
+                // cond may be in the body block
+                let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
                 scope_builder.builder.loop_(body_before_split, dup_cond);
                 scope_builder.finished |= sb_before.finished;
 
@@ -829,9 +834,13 @@ impl SplitManager {
                     if sb_after.finished {
                         visit_result.result.push(sb_after);
                     } else {
-                        let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
                         let dup_body = self.duplicate_block(sb_after.token, &pools, body);
-                        sb_after.builder.loop_(dup_body, dup_cond);
+                        let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
+                        let mut loop_builder = ScopeBuilder::new(sb_after.token, pools.clone());
+                        loop_builder.builder.loop_(dup_body, dup_cond);
+                        let loop_ = loop_builder.builder.finish();
+                        let empty_bb = IrBuilder::new(pools.clone()).finish();
+                        sb_after.builder.if_(dup_cond, loop_, empty_bb);
                         visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
                     }
                 }
@@ -858,7 +867,7 @@ impl SplitManager {
         } else {
             // FIXME: this is a temporary solution, local_zero_init
             let type_ = node.type_().clone();
-            let local = scope_builder.builder.local_zero_init(type_);
+            let local = self.coro_local_builder.get_mut(&frame_token).unwrap().local_zero_init(type_);
             self.record_node_mapping(frame_token, node, local);
             self.old2new.nodes.get_mut(&node).unwrap().insert(frame_token, local.clone());
             local
@@ -972,7 +981,9 @@ impl SplitManager {
             // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, node.0, node.get().instruction);
             self.duplicate_node(&mut scope_builder, node);
             match node.get().instruction.as_ref() {
-                Instruction::CoroSuspend { .. } => { break; }
+                Instruction::CoroSuspend { .. } => {
+                    break;
+                }
                 _ => {}
             }
         }

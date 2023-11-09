@@ -2023,12 +2023,12 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 builder.ad_scope(body)
             }
             "SUSPEND" => {
-                let token = j["token"].as_u32().unwrap();
+                let token = j["coro_token"].as_u32().unwrap();
                 let (builder, ..) = self.unwrap_ctx();
                 builder.coro_split_mark(token)
             }
             "COROBIND" => {
-                let token = j["token"].as_u32().unwrap();
+                let token = j["coro_token"].as_u32().unwrap();
                 let expr = self._convert_expression(&j["expression"], false);
                 let var = j["var_id"].as_u32().unwrap();
                 let (builder, ..) = self.unwrap_ctx();

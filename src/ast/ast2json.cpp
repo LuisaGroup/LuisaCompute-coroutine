@@ -1001,10 +1001,10 @@ private:
         j["body"] = _convert_stmt(stmt->body());
     }
     void _convert_suspend_stmt(JSON &j, const SuspendStmt *stmt) noexcept {
-        j["token"] = stmt->token();
+        j["coro_token"] = stmt->token();
     }
     void _convert_corobind_stmt(JSON &j, const CoroBindStmt *stmt) noexcept {
-        j["token"] = stmt->token();
+        j["coro_token"] = stmt->token();
         j["var_id"] = stmt->var_id();
         j["expression"] = _convert_expr(stmt->expression());
     }

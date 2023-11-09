@@ -108,7 +108,9 @@ int main(int argc, char *argv[]) {
         };
         frame_buffer->write(id, frame);
     };
-    auto resume_shader = device.compile(resume_kernel, {.name = R"(C:\OldNew\Graphics-Lab\LuisaCompute\LuisaCompute-coroutine\output\resume_debug)"});
+    auto resume_shader = device.compile(
+        resume_kernel,
+        {.name = R"(C:\OldNew\Graphics-Lab\LuisaCompute\LuisaCompute-coroutine\output\resume_debug)"});
     stream << shader(x_buffer).dispatch(n)
            << x_buffer.copy_to(x_vec.data())
            << synchronize();

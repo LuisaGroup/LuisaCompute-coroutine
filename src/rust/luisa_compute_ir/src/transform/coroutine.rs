@@ -834,6 +834,7 @@ impl SplitManager {
                     if sb_after.finished {
                         visit_result.result.push(sb_after);
                     } else {
+                        // FIXME: ir position wrong
                         let dup_body = self.duplicate_block(sb_after.token, &pools, body);
                         let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
                         let mut loop_builder = ScopeBuilder::new(sb_after.token, pools.clone());

@@ -839,13 +839,14 @@ impl SplitManager {
                         visit_result.result.push(sb_after);
                     } else {
                         // FIXME: ir position wrong
+                        let dup_cond_if = self.find_duplicated_node(&mut sb_after, *cond);
                         let dup_body = self.duplicate_block(sb_after.token, &pools, body);
                         let dup_cond = self.find_duplicated_node(&mut sb_after, *cond);
                         let mut loop_builder = ScopeBuilder::new(sb_after.token, pools.clone());
                         loop_builder.builder.loop_(dup_body, dup_cond);
                         let loop_ = loop_builder.builder.finish();
                         let empty_bb = IrBuilder::new(pools.clone()).finish();
-                        sb_after.builder.if_(dup_cond, loop_, empty_bb);
+                        sb_after.builder.if_(dup_cond_if, loop_, empty_bb);
                         visit_result.result.extend(self.visit_bb(pools, visit_state_after.clone(), sb_after));
                     }
                 }

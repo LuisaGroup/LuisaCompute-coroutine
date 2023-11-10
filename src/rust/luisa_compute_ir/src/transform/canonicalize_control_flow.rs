@@ -1134,32 +1134,27 @@ impl LowerEarlyReturn {
 impl Transform for CanonicalizeControlFlow {
     fn transform_module(&self, module: Module) -> Module {
         // 1. Lower generic loops to do-while loops.
-        println!(
-            "Before LowerGenericLoops::transform:\n{}",
-            dump_ir_human_readable(&module)
-        );
+        // println!(
+        //     "Before LowerGenericLoops::transform:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
         LowerGenericLoops::transform(&module);
-        println!(
-            "After LowerGenericLoops::transform:\n{}",
-            dump_ir_human_readable(&module)
-        );
+        // println!(
+        //     "After LowerGenericLoops::transform:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
         // 2. lower break/continue nodes
-        LowerBreakContinuePreprocess::process(&module);
-        println!(
-            "After LowerBreakContinuePreprocess::process:\n{}",
-            dump_ir_human_readable(&module)
-        );
         LowerBreakContinue::transform(&module);
-        println!(
-            "After LowerBreakContinue::transform:\n{}",
-            dump_ir_human_readable(&module)
-        );
+        // println!(
+        //     "After LowerBreakContinue::transform:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
         // 3. lower early-return nodes
         LowerEarlyReturn::transform(&module);
-        println!(
-            "After LowerEarlyReturn::transform:\n{}",
-            dump_ir_human_readable(&module)
-        );
+        // println!(
+        //     "After LowerEarlyReturn::transform:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
         module // TODO
     }
 }

@@ -321,22 +321,13 @@ impl CoroFrameAnalyser {
                     let split_poss_false =
                         self.split_possibility.get(&false_branch.as_ptr()).unwrap();
                     split_poss.possibly |= split_poss_true.possibly || split_poss_false.possibly;
-                    split_poss.definitely |=
-                        split_poss_true.definitely && split_poss_false.definitely;
+                    split_poss.definitely |= split_poss_true.definitely && split_poss_false.definitely;
                 }
                 Instruction::Switch {
                     value: _,
                     default,
                     cases,
                 } => {
-                    self.preprocess_bb(default);
-                    let split_poss_default = self
-                        .split_possibility
-                        .get(&default.as_ptr())
-                        .unwrap()
-                        .clone();
-                    split_poss.possibly |= split_poss_default.possibly;
-                    split_poss.definitely |= split_poss_default.definitely;
                     let mut split_poss_cases = SplitPossibility {
                         possibly: false,
                         directly: false,
@@ -348,9 +339,14 @@ impl CoroFrameAnalyser {
                         split_poss_cases.possibly |= split_poss_case.possibly;
                         split_poss_cases.definitely &= split_poss_case.definitely;
                     }
+                    self.preprocess_bb(default);
+                    let split_poss_default = self
+                        .split_possibility
+                        .get(&default.as_ptr())
+                        .unwrap()
+                        .clone();
                     split_poss.possibly |= split_poss_default.possibly || split_poss_cases.possibly;
-                    split_poss.definitely |=
-                        split_poss_default.definitely && split_poss_cases.definitely;
+                    split_poss.definitely |= split_poss_default.definitely && split_poss_cases.definitely;
                 }
 
                 Instruction::CoroSuspend { .. }
@@ -577,12 +573,12 @@ impl CoroFrameAnalyser {
         }
         visit_result
     }
-    fn visit_bb(&mut self, mut frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
+    fn visit_bb(&mut self, frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
         while visit_state.present != visit_state.end {
             let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            println!("Token {}, Visit noderef {:?} : {:?}", frame_builder.token, visit_state.present.0, instruction);
+            // println!("Token {}, Visit noderef {:?} : {:?}", frame_builder.token, visit_state.present.0, instruction);
 
             let active_var = self
                 .active_vars

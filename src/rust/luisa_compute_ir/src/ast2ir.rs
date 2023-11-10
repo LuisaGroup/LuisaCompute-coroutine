@@ -8,7 +8,6 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::iter::zip;
 use bitflags::Flags;
-use crate::ir::Primitive::Uint32;
 
 struct AST2IRCtx<'a> {
     j: &'a JSON,
@@ -1491,13 +1490,13 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             }
             "REQUIRES_GRADIENT" => {
                 let args = convert_args(&[true]);
-                assert!(args[0].is_local());
+                assert!(args[0].is_local() || args[0].is_value_argument());
                 assert!(t.is_void());
                 args
             }
             "GRADIENT" => {
                 let args = convert_args(&[true]);
-                assert!(args[0].is_local());
+                assert!(args[0].is_local() || args[0].is_value_argument());
                 check_same_types!(t, args[0].type_());
                 args
             }
@@ -2024,16 +2023,25 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 builder.ad_scope(body)
             }
             "SUSPEND" => {
-                let token = j["token"].as_u32().unwrap();
+                let token = j["coro_token"].as_u32().unwrap();
                 let (builder, ..) = self.unwrap_ctx();
                 builder.coro_split_mark(token)
             }
             "COROBIND" => {
-                let token = j["token"].as_u32().unwrap();
+                let token = j["coro_token"].as_u32().unwrap();
                 let expr = self._convert_expression(&j["expression"], false);
                 let var = j["var_id"].as_u32().unwrap();
                 let (builder, ..) = self.unwrap_ctx();
                 builder.coro_register(token, expr, var)
+            }
+            "PRINT" => {
+                let fmt = j["format"].as_str().unwrap().to_string();
+                let args: Vec<_> = j["arguments"]
+                    .members()
+                    .map(|a| self._convert_expression(a, false))
+                    .collect();
+                let (builder, ..) = self.unwrap_ctx();
+                builder.print(fmt.into(), args.as_slice())
             }
             _ => panic!("Invalid statement tag: {}", tag),
         }

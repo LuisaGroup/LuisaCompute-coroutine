@@ -357,9 +357,12 @@ class CallableLibrary;
  * @brief Set of call operations.
  * 
  */
+class CallableLibrary;
+
 class LC_AST_API CallOpSet {
+
     friend class CallableLibrary;
-    
+
 public:
     using Bitset = std::bitset<call_op_count>;
 

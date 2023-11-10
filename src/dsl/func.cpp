@@ -83,7 +83,7 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
                                     "on function with hash {:016x}.",
                                     function.hash());
         //idea: send in function-> module with .subroutine-> seperate transform to callable-> register to coroutine
-        luisa::shared_ptr<FunctionBuilder> converted;
+        luisa::shared_ptr<const FunctionBuilder> converted;
         auto m = AST2IR::build_coroutine(function);
         perform_coroutine_transform(m->get());
         converted = IR2AST::build(m->get());
@@ -92,10 +92,10 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
         auto coroframe = corotype;
         auto coroframe_new = converted->arguments()[0].type();
         coroframe->update_from(coroframe_new);
-        converted->coroframe_replace(corotype);
+        const_cast<FunctionBuilder *>(converted.get())->coroframe_replace(corotype);
         for (int i = 0; i < subroutines.len; ++i) {
             auto sub = IR2AST::build(subroutines.ptr[i]._0.get());
-            sub->coroframe_replace(corotype);
+            const_cast<FunctionBuilder *>(sub.get())->coroframe_replace(corotype);
             sub_builders.insert(std::make_pair(subroutine_ids.ptr[i], sub));
         }
         LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "

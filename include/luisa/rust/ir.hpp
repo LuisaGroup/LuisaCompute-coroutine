@@ -330,8 +330,6 @@ struct Func {
         RasterDiscard,
         IndirectDispatchSetCount,
         IndirectDispatchSetKernel,
-        /// When referencing a Local in Call, it is always interpreted as a load
-        /// However, there are cases you want to do this explicitly
         Load,
         Cast,
         Bitcast,

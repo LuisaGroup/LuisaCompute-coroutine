@@ -111,6 +111,7 @@ private:
     Tag _tag;
     bool _hash_computed{false};
     bool _requires_atomic_float{false};
+    bool _requires_printing{false};
 
 protected:
     [[nodiscard]] static luisa::vector<FunctionBuilder *> &_function_stack() noexcept;
@@ -232,6 +233,8 @@ public:
     [[nodiscard]] bool requires_atomic_float() const noexcept;
     /// Return if uses automatic differentiation.
     [[nodiscard]] bool requires_autodiff() const noexcept;
+    /// Return if uses printing.
+    [[nodiscard]] bool requires_printing() const noexcept;
     /// Return suspend id to token map
     [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &coro_tokens() const noexcept { return _coro_tokens; }
 
@@ -401,6 +404,9 @@ public:
     [[nodiscard]] const CallExpr *coro_id() noexcept;
     /// Return coroutine token in coroframe
     [[nodiscard]] const CallExpr *coro_token() noexcept;
+
+    /// Add print statement
+    void print_(luisa::string_view format, luisa::span<const Expression *const> args) noexcept;
 
     // For autodiff use only
     [[nodiscard]] const Statement *pop_stmt() noexcept;

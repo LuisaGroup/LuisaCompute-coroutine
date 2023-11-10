@@ -110,12 +110,8 @@ impl Reg2MemImpl {
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
                 | Instruction::CoroRegister { .. }
-                | Instruction::CoroResume { .. } => {
-                    todo!()
-                }
-                Instruction::Print { .. } => {
-                    todo!()
-                }
+                | Instruction::CoroResume { .. } => {}
+                Instruction::Print { .. } => {}
             }
         }
     }
@@ -194,12 +190,8 @@ impl Reg2MemImpl {
                 Instruction::CoroSplitMark { .. }
                 | Instruction::CoroSuspend { .. }
                 | Instruction::CoroRegister { .. }
-                | Instruction::CoroResume { .. } => {
-                    todo!()
-                }
-                Instruction::Print { .. } => {
-                    todo!()
-                }
+                | Instruction::CoroResume { .. } => {}
+                Instruction::Print { .. } => {}
             }
         }
     }
@@ -244,7 +236,10 @@ impl Reg2MemImpl {
                     // move to the beginning of the function
                     if builder.insert_point != node_ref.clone() {
                         node_ref.remove();
+                        builder.append(zero);
                         builder.append(node_ref.clone());
+                    } else {
+                        node_ref.insert_before_self(zero);
                     }
                 }
                 _ => unreachable!(),

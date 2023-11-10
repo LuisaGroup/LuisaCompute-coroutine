@@ -923,6 +923,7 @@ private:
             case Statement::Tag::AUTO_DIFF: _convert_autodiff_stmt(j, static_cast<const AutoDiffStmt *>(stmt)); break;
             case Statement::Tag::SUSPEND: _convert_suspend_stmt(j, static_cast<const SuspendStmt *>(stmt)); break;
             case Statement::Tag::COROBIND: _convert_corobind_stmt(j, static_cast<const CoroBindStmt *>(stmt)); break;
+            case Statement::Tag::PRINT: _convert_print_stmt(j, static_cast<const PrintStmt *>(stmt)); break;
         }
         return j;
     }
@@ -1000,12 +1001,23 @@ private:
         j["body"] = _convert_stmt(stmt->body());
     }
     void _convert_suspend_stmt(JSON &j, const SuspendStmt *stmt) noexcept {
-        j["token"] = stmt->token();
+        j["coro_token"] = stmt->token();
     }
     void _convert_corobind_stmt(JSON &j, const CoroBindStmt *stmt) noexcept {
-        j["token"] = stmt->token();
+        j["coro_token"] = stmt->token();
         j["var_id"] = stmt->var_id();
         j["expression"] = _convert_expr(stmt->expression());
+    }
+    void _convert_print_stmt(JSON &j, const PrintStmt *stmt) noexcept {
+        j["format"] = stmt->format();
+        j["arguments"] = [&] {
+            JSON::Array a;
+            a.reserve(stmt->arguments().size());
+            for (auto &&arg : stmt->arguments()) {
+                a.emplace_back(_convert_expr(arg));
+            }
+            return a;
+        }();
     }
 
 public:

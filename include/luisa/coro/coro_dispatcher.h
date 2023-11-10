@@ -104,6 +104,7 @@ private:
     uint _dispatch_counter;
     uint _max_sub_coro;
     uint _max_frame_count;
+    bool _debug;
     void _await_step(Stream &stream) noexcept;
 public:
     //TODO: check async problem with these two functions
@@ -111,9 +112,9 @@ public:
     bool all_done() const noexcept;
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream& stream,
-                            uint max_frame_count = 2000000) noexcept
+                            uint max_frame_count = 2000000, bool debug=false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine,device},
-          _max_frame_count{max_frame_count} {
+          _max_frame_count{max_frame_count}, _debug{debug} {
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
         _resume_index = device.create_buffer<uint>(max_frame_count);
@@ -141,7 +142,8 @@ public:
                 $return();
             };
             //auto frame_id = index->read(x);
-            auto frame_id = x;
+            auto offset=_max_frame_count-count.read(0);
+            auto frame_id = offset+x;
             auto frame = frame_buffer.read(frame_id);
             initialize_coroframe(frame, def<uint3>(st_task_id + x,0,0));
             count.atomic(0).fetch_add(-1u);
@@ -156,15 +158,16 @@ public:
             Kernel1D resume_kernel = [&](BufferUInt index, BufferUInt count, Var<Buffer<FrameType>> frame_buffer, UInt n, Var<Args>... args) {
                 auto x = dispatch_x();
                 $if (x >= n) {
-                    return;
+                    $return();
                 };
                 auto frame_id = index.read(x);
                 auto frame = frame_buffer.read(frame_id);
                 count.atomic(i).fetch_add(-1u);
-                this->_printer.info("resume kernel {} : id {}", i, frame_id);
                 (*coroutine)[i](frame, args...);
                 auto nxt = read_promise<uint>(frame, "token")&token_mask;
-                this->_printer.info("resume kernel {} : id {} goto kernel {}", i, frame_id,nxt);
+                frame_buffer.write(frame_id,frame);
+                if(debug)
+                    this->_printer.info("resume kernel {} : id {} goto kernel {}", i, frame_id,nxt);
                 count.atomic(nxt).fetch_add(1u);
             };
             _resume_shaders[i] = device.compile(resume_kernel);
@@ -208,7 +211,9 @@ public:
                 $if((read_promise<uint>(frame,"token")&token_mask)!=0){
                     auto res = _global_buffer->atomic(0).fetch_add(1u);
                     auto slot= index.read(res);
+                    auto empty=frame_buffer.read(slot);
                     frame_buffer.write(slot,frame);
+                    frame_buffer.write(empty_offset,empty);
                 };
             };
         };
@@ -231,7 +236,8 @@ template<typename FrameRef, typename... Args>
 class PersistentCoroDispatcher: public CoroDispatcherBase<void(FrameRef, Args...)> {
 private:
     using FrameType = std::remove_reference_t<FrameRef>;
-    Shader1D<Buffer<uint>, Args...> _pt_shader;
+    Shader1D<Buffer<uint>, uint, Args...> _pt_shader;
+    Shader1D<Buffer<uint>> _clear_shader;
     Buffer<uint> _global;
     uint _max_sub_coro;
     uint _max_thread_count;
@@ -240,15 +246,14 @@ private:
     bool _done;
     void _await_step(Stream &stream) noexcept;
     void _await_all(Stream &stream) noexcept;
+    bool _debug;
 public:
-    //TODO: check async problem with these two functions
     bool all_dispatched() const noexcept;
     bool all_done() const noexcept;
-
     PersistentCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream& stream,
-                            uint max_thread_count=1024*128,uint block_size=128, uint fetch_size=128) noexcept
+                            uint max_thread_count=1024*128,uint block_size=128, uint fetch_size=128, bool debug=false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine,device},
-          _max_thread_count{max_thread_count}, _block_size{block_size} {
+          _max_thread_count{max_thread_count}, _block_size{block_size}, _debug{debug} {
         _global=device.create_buffer<uint>(1);
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
@@ -266,8 +271,7 @@ public:
             Shared<uint> work_stat{2};//0 max_count,1 max_id
             //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
             //Shared<uint> tag_offset{pipeline().surfaces().size()};
-            frames[thread_x()].kernel_index = 0u;
-            global.write(0u,0u);
+            initialize_coroframe(frames[thread_x()], def<uint3>(0,0,0));
             $if(thread_x() < max_sub_coro) {
                 $if(thread_x() == 0){
                     work_counter[thread_x()] = shared_queue_size;
@@ -278,15 +282,16 @@ public:
             };
             workload[0] = 0;
             workload[1] = 0;
-            //Shared<uint> count{1u};
-            auto count = def(0);
             Shared<uint> rem_global{1};
             Shared<uint> rem_local{1};
             rem_global[0] = 1u;
             rem_local[0] = 0u;
             sync_block();
-            //pipeline().printer().info("work counter {} of block {}: {}", -1, block_x(), -1);
-            auto count_limit = def<uint>((dispatch_size*2)/std::min(max_thread_count/block_size,50u)/(shared_queue_size/max_sub_coro));
+            auto count = def(0);
+            uint count_limit=-1;
+            if(_debug){
+                count_limit=20;
+            }
 
             $while((rem_global[0] != 0u | rem_local[0] != 0u) & (count!= count_limit)) {
                 sync_block();//very important, synchronize for condition
@@ -317,8 +322,10 @@ public:
                 $if(thread_x() == block_size - 1) {
                     $if((workload[0] >= workload[1]) & (rem_global[0]==1u)) {//fetch new workload
                         workload[0] = global.atomic(0u).fetch_add(block_size * fetch_size);
-                        workload[1] = min(workload[0] + block_size * fetch_size, this->dispatch_size);
-                        $if(workload[0] >= this->dispatch_size) {
+                        if(_debug)
+                            this->_printer.info("block {}, fetch workload: {}", block_x(), workload[0]);
+                        workload[1] = min(workload[0] + block_size * fetch_size, dispatch_size);
+                        $if(workload[0] >= dispatch_size) {
                             rem_global[0] = 0u;
                         };
                     };
@@ -331,7 +338,8 @@ public:
                             work_stat.atomic(0).fetch_max(work_counter[thread_x()]);
                         };
                     };
-                    //pipeline().printer().info("work counter {} of block {}: {}", thread_x(), block_x(), work_counter[thread_x()]);
+                    if(_debug)
+                        this->_printer.info("work counter {} of block {}: {}", thread_x(), block_x(), work_counter[thread_x()]);
 
                 };
                 sync_block();
@@ -351,10 +359,53 @@ public:
                         path_id[id] = index * block_size + thread_x();
                     };
                 };
-            };
+                auto gen_st = workload[0];
+                sync_block();
+                auto pid = def(0u);
+                pid = path_id[thread_x()];
+                auto launch_condition = def(true);
+                launch_condition = (thread_x() < work_offset[0]);
+                $if(launch_condition) {
+                    $switch(read_promise<uint>(frames[pid],"token")&token_mask) {
+                        $case(0u){
+                            $if(gen_st + thread_x() < workload[1]) {
+                                work_counter.atomic(0u).fetch_sub(1u);
+                                auto work_id = gen_st + thread_x();
+                                initialize_coroframe(frames[pid], def<uint3>(gen_st + thread_x(),0,0));
+                                (*coroutine)(frames[pid],args...);//only work when kernel 0s are continue
+                                auto nxt=read_promise<uint>(frames[pid],"token")&token_mask;
+                                work_counter.atomic(nxt).fetch_add(1u);
+                                if(_debug)
+                                    this->_printer.info("gen_load_st {}, work_id {}, goto {}", gen_st,work_id, nxt);
+                                workload.atomic(0).fetch_add(1u);
+                            };
+                        };
+                        for(auto i=1u;i < max_sub_coro;++i){
+                            $case (i){
+                                work_counter.atomic(i).fetch_sub(1u);
+                                (*coroutine)[i](frames[pid],args...);
+                                work_counter.atomic(read_promise<uint>(frames[pid],"token")&token_mask).fetch_add(1u);
+                                if(_debug)
+                                    this->_printer.info("resume kernel {} on block {}: id {} goto kernel {}", i, block_x(),read_promise<uint3>(frames[pid],"coro_id"),read_promise<uint>(frames[pid],"token")&token_mask);
+                            };
+                        }
+                    };
+                };
 
+            };
+            $if(count == count_limit) {
+                this->_printer.info("block_id{},thread_id {}, loop not break! local:{}, global:{}",block_x(),thread_x(), rem_local[0], rem_global[0]);
+                $if(thread_x() < max_sub_coro){
+                    this->_printer.info("work rem: id {}, size {}", thread_x(), work_counter[thread_x()]);
+                };
+            };
         };
         _pt_shader=device.compile(main_kernel);
+        Kernel1D clear=[&](BufferUInt global){
+            global->write(dispatch_x(),0u);
+        };
+        _clear_shader = device.compile(clear);
+        stream<<_clear_shader(_global).dispatch(1u);
     }
 };
 
@@ -395,7 +446,6 @@ template<typename FrameRef, typename... Args>
 void CoroDispatcherBase<void(FrameRef, Args...)>::_await_all(Stream &stream) noexcept {
     while (!this->all_done()) {
         this->_await_step(stream);
-        stream<<synchronize();
     }
 }
 template<typename Frame, typename... T>
@@ -425,9 +475,10 @@ void CoroAwait<T>::operator()(Stream &stream) &&noexcept {
 }
 template<typename FrameRef, typename... Args>
 void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noexcept {
-    for(int i=0;i<_max_sub_coro;++i){
-        LUISA_INFO("count:{}",_host_count[i]);
-    }
+    if(_debug)
+        for(int i=0;i<_max_sub_coro;++i){
+            LUISA_INFO("kernel {}: total {}",i,_host_count[i]);
+        }
     stream << _count_prefix_shader(_resume_count, _resume_offset, _max_sub_coro).dispatch(1u);
     stream << _gather_shader(_resume_index, _resume_offset, _frame, _max_frame_count).dispatch(_max_frame_count);
     if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
@@ -457,8 +508,11 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
         }
     };
     stream << _resume_count.view(0, _max_sub_coro).copy_to(_host_count.data())
-           <<this->_printer.retrieve()
            << host_update;
+    if(_debug){
+        stream<<this->_printer.retrieve();
+    }
+    stream << synchronize();
 };
 template<typename FrameRef, typename... Args>
 bool WavefrontCoroDispatcher<FrameRef, Args...>::all_dispatched() const noexcept {
@@ -477,6 +531,8 @@ template<typename FrameRef, typename... Args>
 void PersistentCoroDispatcher<FrameRef, Args...>::_await_all(Stream &stream) noexcept {
     stream<<this->template call_shader<1,Buffer<uint>,uint>(_pt_shader,_global,this->_dispatch_size).dispatch(_max_thread_count)
         <<[&]{_done=true;};
+    stream<<this->_printer.retrieve();
+    stream<<synchronize();
 }
 
 template<typename FrameRef, typename... Args>

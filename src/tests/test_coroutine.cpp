@@ -97,15 +97,21 @@ int main(int argc, char *argv[]) {
         };
         frame_buffer->write(id, frame);
     };
-    coro::WavefrontCoroDispatcher dispatcher{&coro,device,stream,20u};
-    dispatcher(x_buffer,n,200);
-    for (auto iter = 0u; iter < 6; ++iter) {
+    coro::PersistentCoroDispatcher dispatcher{&coro,device,stream,64u,32u,1u,true};
+    dispatcher(x_buffer,n,40);
+    /*for (auto iter = 0u; iter < 6; ++iter) {
         stream << dispatcher.await_step()
                << x_buffer.copy_to(x_vec.data())
                << synchronize();
         for (auto i = 0u; i < n; ++i) {
             LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
         }
+    }*/
+    stream<<dispatcher.await_all()
+           <<x_buffer.copy_to(x_vec.data())
+          <<synchronize();
+    for (auto i = 0u; i < n; ++i) {
+        LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
     auto resume_shader = device.compile(resume_kernel);
     stream << shader(x_buffer).dispatch(n)

@@ -87,7 +87,7 @@ int main(int argc, char *argv[]) {
     Kernel1D resume_kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
         auto frame = frame_buffer->read(id);
-        auto token = read_promise<uint>(frame, "token");
+        auto token = read_promise<uint>(frame, "coro_token");
         $switch (token) {
             for (int i = 1; i <= coro.suspend_count(); ++i) {
                 $case (i) {
@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
         };
         frame_buffer->write(id, frame);
     };
-    coro::PersistentCoroDispatcher dispatcher{&coro,device,stream,64u,32u,1u,true};
+    coro::PersistentCoroDispatcher dispatcher{&coro,device,stream,64u,32u,1u,false};
     dispatcher(x_buffer,n,40);
     /*for (auto iter = 0u; iter < 6; ++iter) {
         stream << dispatcher.await_step()

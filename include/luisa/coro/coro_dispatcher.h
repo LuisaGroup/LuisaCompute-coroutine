@@ -149,7 +149,7 @@ public:
             count.atomic(0).fetch_add(-1u);
             (*coroutine)(frame, args...);
             frame_buffer.write(frame_id, frame);
-            auto nxt = read_promise<uint>(frame, "token")&token_mask;
+            auto nxt = read_promise<uint>(frame, "coro_token")&token_mask;
             count.atomic(nxt).fetch_add(1u);
         };
         _gen_shader = device.compile(gen_kernel);
@@ -164,7 +164,7 @@ public:
                 auto frame = frame_buffer.read(frame_id);
                 count.atomic(i).fetch_add(-1u);
                 (*coroutine)[i](frame, args...);
-                auto nxt = read_promise<uint>(frame, "token")&token_mask;
+                auto nxt = read_promise<uint>(frame, "coro_token")&token_mask;
                 frame_buffer.write(frame_id,frame);
                 if(debug)
                     this->_printer.info("resume kernel {} : id {} goto kernel {}", i, frame_id,nxt);
@@ -198,7 +198,7 @@ public:
         Kernel1D _collect_kernel = [](BufferUInt index, BufferUInt prefix, Var<Buffer<FrameType>> frame_buffer, UInt n) {
             auto x = dispatch_x();
             auto frame = frame_buffer.read(x);
-            auto r_id = read_promise<uint>(frame, "token")&token_mask;
+            auto r_id = read_promise<uint>(frame, "coro_token")&token_mask;
             auto q_id = prefix.atomic(r_id).fetch_add(1u);
             index.write(q_id, x);
         };
@@ -208,7 +208,7 @@ public:
             auto x = dispatch_x();
             $if(empty_offset+x<n){
                 auto frame = frame_buffer.read(empty_offset+x);
-                $if((read_promise<uint>(frame,"token")&token_mask)!=0){
+                $if((read_promise<uint>(frame,"coro_token")&token_mask)!=0){
                     auto res = _global_buffer->atomic(0).fetch_add(1u);
                     auto slot= index.read(res);
                     auto empty=frame_buffer.read(slot);
@@ -354,7 +354,7 @@ public:
                 sync_block();
                 $for(index, 0u, q_fac) {//collect indices
                     auto frame = frames[index * block_size + thread_x()];
-                    $if((read_promise<uint>(frame,"token")&token_mask) == work_stat[1]) {
+                    $if((read_promise<uint>(frame,"coro_token")&token_mask) == work_stat[1]) {
                         auto id = work_offset.atomic(0).fetch_add(1u);
                         path_id[id] = index * block_size + thread_x();
                     };
@@ -366,14 +366,14 @@ public:
                 auto launch_condition = def(true);
                 launch_condition = (thread_x() < work_offset[0]);
                 $if(launch_condition) {
-                    $switch(read_promise<uint>(frames[pid],"token")&token_mask) {
+                    $switch(read_promise<uint>(frames[pid],"coro_token")&token_mask) {
                         $case(0u){
                             $if(gen_st + thread_x() < workload[1]) {
                                 work_counter.atomic(0u).fetch_sub(1u);
                                 auto work_id = gen_st + thread_x();
                                 initialize_coroframe(frames[pid], def<uint3>(gen_st + thread_x(),0,0));
                                 (*coroutine)(frames[pid],args...);//only work when kernel 0s are continue
-                                auto nxt=read_promise<uint>(frames[pid],"token")&token_mask;
+                                auto nxt=read_promise<uint>(frames[pid],"coro_token")&token_mask;
                                 work_counter.atomic(nxt).fetch_add(1u);
                                 if(_debug)
                                     this->_printer.info("gen_load_st {}, work_id {}, goto {}", gen_st,work_id, nxt);
@@ -384,9 +384,9 @@ public:
                             $case (i){
                                 work_counter.atomic(i).fetch_sub(1u);
                                 (*coroutine)[i](frames[pid],args...);
-                                work_counter.atomic(read_promise<uint>(frames[pid],"token")&token_mask).fetch_add(1u);
+                                work_counter.atomic(read_promise<uint>(frames[pid],"coro_token")&token_mask).fetch_add(1u);
                                 if(_debug)
-                                    this->_printer.info("resume kernel {} on block {}: id {} goto kernel {}", i, block_x(),read_promise<uint3>(frames[pid],"coro_id"),read_promise<uint>(frames[pid],"token")&token_mask);
+                                    this->_printer.info("resume kernel {} on block {}: id {} goto kernel {}", i, block_x(),read_promise<uint3>(frames[pid],"coro_id"),read_promise<uint>(frames[pid],"coro_token")&token_mask);
                             };
                         }
                     };

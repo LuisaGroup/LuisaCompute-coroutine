@@ -73,37 +73,37 @@ int main(int argc, char *argv[]) {
         auto coro_id_ = coro_id().x;
         auto a = def(0u);
         $for (i, 2u) {
-            a = 1;
+            a = 1u;
             $suspend("1");
 
-//            $if (i == 0u) {
-//                $break;
-//            };
+            $if (i == 0u) {
+                $break;
+            };
 
             $suspend("2");
 
             x_buffer.write(coro_id_, a);
         };
     };
-//    now:
-//    $for (i, 2u) {
-//        auto a = def(1u);
-//        $suspend("1");
-//
-//        auto flag = def(false);
-//
-//        $if (i == 0u) {
-//            flag = def(false);
-//        };
-//        $if (flag) {
-//            $suspend("2");
-//
-//            x_buffer.write(coro_id_, a);
-//        };
-//
-//        auto a = def(1u);
-//        $suspend("1");
-//    };
+    //    now:
+    //    $for (i, 2u) {
+    //        auto a = def(1u);
+    //        $suspend("1");
+    //
+    //        auto flag = def(false);
+    //
+    //        $if (i == 0u) {
+    //            flag = def(false);
+    //        };
+    //        $if (flag) {
+    //            $suspend("2");
+    //
+    //            x_buffer.write(coro_id_, a);
+    //        };
+    //
+    //        auto a = def(1u);
+    //        $suspend("1");
+    //    };
     LUISA_INFO_WITH_LOCATION("Coro count = {}", coro.suspend_count());
     auto type = Type::of<CoroFrame>();
     auto frame_buffer = device.create_buffer<CoroFrame>(n);

@@ -175,12 +175,12 @@ impl SplitManager {
         let mut index_counter: usize = frame_fields.len();
 
         // calculate frame state
-        let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
+        let token_vec = self.frame_analyser.continuations.keys().cloned().collect::<Vec<_>>();
         let mut free_fields: HashMap<CArc<Type>, Vec<usize>> = HashMap::new();
         for token in token_vec.iter() {
-            let mut args = self.duplicate_args(*token, pools, &callable.args);
-            let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
-            let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
+            let args = self.duplicate_args(*token, pools, &callable.args);
+            let captures = self.duplicate_captures(*token, pools, &callable.captures);
+            let frame_vars = self.frame_analyser.frame_vars(*token);
             self.coro_local_builder.insert(*token, IrBuilder::new(pools.clone()));
 
             let callable_info = self.coro_callable_info.entry(*token).or_default();
@@ -189,14 +189,22 @@ impl SplitManager {
 
             // create coro frame for Load
             // TODO: relocation temp vars
-            let input_var: Vec<NodeRef> = input_var.iter().map(ToOwned::to_owned).collect();
-            let fields: Vec<_> = input_var.iter().map(|node_ref| {
+            let frame_vars: Vec<NodeRef> = frame_vars.iter().map(ToOwned::to_owned).collect();
+            let fields: Vec<_> = frame_vars.iter().map(|node_ref| {
                 let node = node_ref.get();
                 node.type_.clone()
             }).collect();
 
-            // TODO: join all fields together or reuse fields of the same type?
-            // reuse fields of the same type
+            // TODO: frame slot strategies?
+
+            // // 1. join all fields together
+            // for i in 0..fields.len() {
+            //     callable_info.old2frame_index.insert(frame_vars[i], index_counter + i);
+            // }
+            // index_counter += fields.len();
+            // frame_fields.extend(fields);
+
+            // 2. reuse fields of the same type
             let mut used: HashSet<usize> = HashSet::from([0, 1]);
             let mut new_fields = Vec::new();
             for i in 0..fields.len() {
@@ -213,16 +221,9 @@ impl SplitManager {
                     index
                 };
                 used.insert(index);
-                callable_info.old2frame_index.insert(input_var[i], index);
+                callable_info.old2frame_index.insert(frame_vars[i], index);
             }
             frame_fields.extend(new_fields);
-
-            // // join all fields together
-            // for i in 0..fields.len() {
-            //     callable_info.old2frame_index.insert(input_var[i], index_counter + i);
-            // }
-            // index_counter += fields.len();
-            // frame_fields.extend(fields);
         }
 
         let alignment = frame_fields.iter().map(|type_| type_.alignment()).max().unwrap();
@@ -237,15 +238,8 @@ impl SplitManager {
         for token in token_vec.iter() {
             let callable_info = self.coro_callable_info.get_mut(token).unwrap();
 
-            // // args[0] is frame by default
-            // let frame_node = Node::new(
-            //     CArc::new(Instruction::Argument { by_value: false }),
-            //     self.frame_type.clone(),
-            // );
-            // callable_info.frame_node = new_node(pools, frame_node);
-            // callable_info.args.insert(0, callable_info.frame_node);
-
-            // change the type of args here
+            // args[0] is frame by default
+            // change the type of frame here
             callable_info.args[0].get_mut().type_ = self.frame_type.clone();
             callable_info.frame_node = callable_info.args[0].clone();
         }
@@ -300,10 +294,10 @@ impl SplitManager {
                 &[index_node],
                 self.frame_fields[*index].clone());
             self.record_node_mapping(token, *old_node, gep);
-            // // TODO: debug
-            // if token == 1 {
-            //     println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
-            // }
+            // TODO: debug
+            if token == 1 {
+                println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
+            }
         }
         builder.comment(CBoxedSlice::from("CoroResume End".as_bytes()));   // TODO: for DEBUG
         scope_builder
@@ -319,15 +313,19 @@ impl SplitManager {
             // store frame state
             for (old_node, index) in old2frame_index.iter() {
                 let index_node = builder.const_(Const::Uint32(*index as u32));
-                // let old2new_map = self.old2new.nodes.get(old_node).unwrap();
+                // TODO: debug
+                if self.old2new.nodes.get(old_node) == None {
+                    println!("token: {}, token_next: {:?}", token, token_next);
+                    println!("old_node: {}", self.display_ir.var_str(old_node));
+                    panic!()
+                }
                 let old2new_map = self.old2new.nodes.get(old_node).unwrap();
-                // // TODO: debug
-                // if let Some(value) = old2new_map.get(&token) {
-                // } else {
-                //     println!("token: {}, token_next: {:?}", token, token_next);
-                //     println!("old_node: {}", self.display_ir.var_str(old_node));
-                //     panic!()
-                // }
+                // TODO: debug
+                if old2new_map.get(&token) == None {
+                    println!("token: {}, token_next: {:?}", token, token_next);
+                    println!("old_node: {}", self.display_ir.var_str(old_node));
+                    panic!()
+                }
                 let value = old2new_map.get(&token).unwrap().clone();
                 let value = if value.is_lvalue() {
                     builder.load(value)
@@ -852,6 +850,7 @@ impl SplitManager {
         if self.old2new.nodes.get(&node).unwrap().contains_key(&frame_token) {
             self.old2new.nodes.get(&node).unwrap().get(&frame_token).unwrap().clone()
         } else {
+            unimplemented!("local_zero_init");
             // FIXME: this is a temporary solution, local_zero_init
             let type_ = node.type_().clone();
             let local = self.coro_local_builder.get_mut(&frame_token).unwrap().local_zero_init(type_);
@@ -1156,7 +1155,7 @@ impl CoroutineSplitImpl {
 
         let mut coro_frame_analyser = CoroFrameAnalyser::new();
         coro_frame_analyser.analyse_callable(&callable);
-        println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
+        println!("{}", coro_frame_analyser.display_active_var(&display_ir));
         println!("{}", coro_frame_analyser.display_continuations());
 
         let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);

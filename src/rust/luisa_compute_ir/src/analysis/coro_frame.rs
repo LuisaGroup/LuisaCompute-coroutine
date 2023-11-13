@@ -479,7 +479,7 @@ impl CoroFrameAnalyser {
                 .definitely
         );
         frame_builder.finished |= fb_body.finished;
-        if !frame_builder.finished {
+        if !frame_builder.finished {    // FIXME: consistent with coroutine::visit_loop
             self.active_vars
                 .get_mut(&frame_builder.token)
                 .unwrap()

@@ -288,7 +288,7 @@ public:
     }
 
     template<typename... Pre>
-    [[nodiscard]] auto partial_invoke(detail::prototype_to_shader_invocation_t<Pre>... args) const noexcept {
+    [[nodiscard]] auto partial_invoke(Pre... args) const noexcept {
         _check_is_valid();
         using invoke_type = detail::ShaderInvoke<dimension>;
         auto arg_count = (0u + ... + detail::shader_argument_encode_count<Args>::value);

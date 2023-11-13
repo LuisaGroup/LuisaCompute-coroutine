@@ -3,7 +3,7 @@ use super::Transform;
 use std::collections::{HashMap, HashSet};
 
 use crate::{display::DisplayIR, CArc, CBoxedSlice, Pooled};
-use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
+use crate::analysis::coro_frame_v2::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
 use crate::context::register_type;
 use crate::ir::{SwitchCase, Instruction, BasicBlock, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType, ModuleFlags, ModuleKind};
@@ -83,6 +83,8 @@ pub(crate) struct SplitManager {
     coro_callable_info: HashMap<u32, CallableModuleInfo>,
     frame_type: CArc<Type>,
     frame_fields: Vec<CArc<Type>>,
+
+    display_ir: DisplayIR,  // for debug
 }
 
 impl SplitManager {
@@ -96,7 +98,10 @@ impl SplitManager {
             coro_callable_info: HashMap::new(),
             frame_type: CArc::new(Type::Void),
             frame_fields: vec![],
+            display_ir: DisplayIR::new(),
         };
+
+        let output = sm.display_ir.display_ir_callable(callable);
 
         // prepare
         let pools = &callable.pools;
@@ -157,37 +162,6 @@ impl SplitManager {
         }
     }
 
-    // fn pre_process_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
-    //     bb.iter().for_each(|node_ref_present| {
-    //         let node = node_ref_present.get();
-    //         match node.instruction.as_ref() {
-    //             Instruction::CoroSplitMark { token } => {
-    //                 // TODO: args & captures
-    //                 let args = self.duplicate_args(*token, &callable_original.pools, &callable_original.args);
-    //                 let captures = self.duplicate_captures(*token, &callable_original.pools, &callable_original.captures);
-    //             }
-    //             // 3 Instructions after CCF
-    //             Instruction::Loop { body, cond } => {
-    //                 self.preprocess_bb(body, callable_original);
-    //             }
-    //             Instruction::If { cond, true_branch, false_branch } => {
-    //                 self.preprocess_bb(true_branch, callable_original);
-    //                 self.preprocess_bb(false_branch, callable_original);
-    //             }
-    //             Instruction::Switch {
-    //                 value: _,
-    //                 default,
-    //                 cases,
-    //             } => {
-    //                 self.preprocess_bb(default, callable_original);
-    //                 for SwitchCase { value: _, block } in cases.as_ref().iter() {
-    //                     self.preprocess_bb(block, callable_original);
-    //                 }
-    //             }
-    //             _ => {}
-    //         }
-    //     });
-    // }
     fn pre_process(&mut self, callable: &CallableModule) -> ScopeBuilder {
         let pools = &callable.pools;
         let entry_token = self.frame_analyser.entry_token;
@@ -208,11 +182,6 @@ impl SplitManager {
             let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
             let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
             self.coro_local_builder.insert(*token, IrBuilder::new(pools.clone()));
-
-            input_var = input_var.difference(&callable.args.as_ref().iter()
-                .map(|arg| *arg).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
-            input_var = input_var.difference(&callable.captures.as_ref().iter()
-                .map(|capture| capture.node).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
 
             let callable_info = self.coro_callable_info.entry(*token).or_default();
             callable_info.args.extend(args.to_vec());
@@ -331,6 +300,10 @@ impl SplitManager {
                 &[index_node],
                 self.frame_fields[*index].clone());
             self.record_node_mapping(token, *old_node, gep);
+            // // TODO: debug
+            // if token == 1 {
+            //     println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
+            // }
         }
         builder.comment(CBoxedSlice::from("CoroResume End".as_bytes()));   // TODO: for DEBUG
         scope_builder
@@ -346,7 +319,15 @@ impl SplitManager {
             // store frame state
             for (old_node, index) in old2frame_index.iter() {
                 let index_node = builder.const_(Const::Uint32(*index as u32));
+                // let old2new_map = self.old2new.nodes.get(old_node).unwrap();
                 let old2new_map = self.old2new.nodes.get(old_node).unwrap();
+                // // TODO: debug
+                // if let Some(value) = old2new_map.get(&token) {
+                // } else {
+                //     println!("token: {}, token_next: {:?}", token, token_next);
+                //     println!("old_node: {}", self.display_ir.var_str(old_node));
+                //     panic!()
+                // }
                 let value = old2new_map.get(&token).unwrap().clone();
                 let value = if value.is_lvalue() {
                     builder.load(value)

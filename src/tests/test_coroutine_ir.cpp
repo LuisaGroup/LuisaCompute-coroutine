@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
     //        x_buffer.write(coro_id_, coro_id_);
     //        auto user = def<User>(20u, 1000.0f);
     //        auto x = x_buffer.read(coro_id_) + user.age;
-    //        $for (i, 10u) {
+    //        $for (i, 3u) {
     //            $switch (coro_id_ % 2u) {
     //                $case (1u) {
     //                    $if (coro_id_ < 5u) {
@@ -47,14 +47,14 @@ int main(int argc, char *argv[]) {
     //                            x_buffer.write(coro_id_, 20000u + 100u * coro_id_ + coro_token());
     //                            $suspend("1");
     //                        };
-    ////                        x = x_buffer.read(coro_id_);
+    //                        //                        x = x_buffer.read(coro_id_);
     //                        $if (i == 1u) {
     //                            x_buffer.write(coro_id_, 30000u + 100u * coro_id_ + coro_token());
     //                            $suspend("2");
     //                        };
     //                        x_buffer.write(coro_id_, 40000u + 100u * coro_id_ + coro_token());
     //                        $suspend("3u");
-    ////                        x_buffer.write(coro_id_, x + n);
+    //                        //                        x_buffer.write(coro_id_, x + n);
     //                    }
     //                    $else {
     //                        x_buffer.write(coro_id_, x + 2000u);
@@ -71,14 +71,39 @@ int main(int argc, char *argv[]) {
     //    };
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer) noexcept {
         auto coro_id_ = coro_id().x;
+        auto a = def(0u);
         $for (i, 2u) {
-            x_buffer.write(coro_id_, 10000u + coro_token());
+            a = 1;
             $suspend("1");
-            //            x_buffer.write(coro_id_, 20000u + coro_token());
-            //            $suspend("2");
+
+//            $if (i == 0u) {
+//                $break;
+//            };
+
+            $suspend("2");
+
+            x_buffer.write(coro_id_, a);
         };
     };
-
+//    now:
+//    $for (i, 2u) {
+//        auto a = def(1u);
+//        $suspend("1");
+//
+//        auto flag = def(false);
+//
+//        $if (i == 0u) {
+//            flag = def(false);
+//        };
+//        $if (flag) {
+//            $suspend("2");
+//
+//            x_buffer.write(coro_id_, a);
+//        };
+//
+//        auto a = def(1u);
+//        $suspend("1");
+//    };
     LUISA_INFO_WITH_LOCATION("Coro count = {}", coro.suspend_count());
     auto type = Type::of<CoroFrame>();
     auto frame_buffer = device.create_buffer<CoroFrame>(n);

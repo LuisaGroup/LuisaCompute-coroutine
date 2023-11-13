@@ -244,7 +244,7 @@ impl CoroFrameAnalyser {
         let visit_state = VisitState::new_whole(&callable.module.entry);
         let _ = self.visit_bb(FrameBuilder::new(entry_token), visit_state);
 
-        self.calculate_frame();
+        self.calculate_frame(callable);
     }
 
     pub(crate) fn display_active_vars(&self, display_ir: &DisplayIR) -> String {
@@ -273,7 +273,7 @@ impl CoroFrameAnalyser {
         output
     }
 
-    fn calculate_frame(&mut self) {
+    fn calculate_frame(&mut self, callable: &CallableModule) {
         let mut changed = true;
         while changed {
             changed = false;

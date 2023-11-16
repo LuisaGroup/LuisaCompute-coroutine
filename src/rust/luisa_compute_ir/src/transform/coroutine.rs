@@ -294,10 +294,10 @@ impl SplitManager {
                 &[index_node],
                 self.frame_fields[*index].clone());
             self.record_node_mapping(token, *old_node, gep);
-            // TODO: debug
-            if token == 1 {
-                println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
-            }
+            // // TODO: debug
+            // if token == 1 {
+            //     println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
+            // }
         }
         builder.comment(CBoxedSlice::from("CoroResume End".as_bytes()));   // TODO: for DEBUG
         scope_builder

@@ -73,16 +73,18 @@ int main(int argc, char *argv[]) {
         auto coro_id_ = coro_id().x;
         auto a = def(0u);
         $for (i, 2u) {
-            a = 1u;
             $suspend("1");
 
-            $if (i == 0u) {
-                $break;
-            };
-
-            $suspend("2");
-
-            x_buffer.write(coro_id_, a);
+            a = 1u;
+            // $suspend("2");
+            //
+            // $if (i == 0u) {
+            //     $break;
+            // };
+            //
+            // $suspend("3");
+            //
+            // x_buffer.write(coro_id_, a);
         };
     };
     //    now:

@@ -3,7 +3,7 @@ use super::Transform;
 use std::collections::{HashMap, HashSet};
 
 use crate::{display::DisplayIR, CArc, CBoxedSlice, Pooled};
-use crate::analysis::coro_frame_v2::{CoroFrameAnalyser, VisitState};
+use crate::analysis::coro_frame_v3::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
 use crate::context::register_type;
 use crate::ir::{SwitchCase, Instruction, BasicBlock, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType, ModuleFlags, ModuleKind};
@@ -101,7 +101,7 @@ impl SplitManager {
             display_ir: DisplayIR::new(),
         };
 
-        let output = sm.display_ir.display_ir_callable(callable);
+        let _ = sm.display_ir.display_ir_callable(callable);    // for DEBUG
 
         // prepare
         let pools = &callable.pools;
@@ -570,6 +570,7 @@ impl SplitManager {
             // split in true/false_branch
             visit_result.split_possibly = true;
             let mut sb_after_vec = vec![];
+            let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
 
             // process true/false branch
             let mut all_branches_finished = true;
@@ -589,7 +590,6 @@ impl SplitManager {
                 all_branches_finished = false;
                 self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, false_branch)
             };
-            let dup_cond = self.find_duplicated_node(&mut scope_builder, *cond);
             scope_builder.builder.if_(dup_cond, dup_true_branch, dup_false_branch);
             scope_builder.finished |= all_branches_finished;
 
@@ -637,6 +637,7 @@ impl SplitManager {
             // split in cases/default
             visit_result.split_possibly = true;
             let mut sb_after_vec = vec![];
+            let dup_value = self.find_duplicated_node(&mut scope_builder, *value);
 
             // process cases
             let mut all_branches_finished = true;
@@ -662,7 +663,6 @@ impl SplitManager {
             } else {
                 self.duplicate_block(scope_builder.token, &scope_builder.builder.pools, default)
             };
-            let dup_value = self.find_duplicated_node(&mut scope_builder, *value);
             scope_builder.builder.switch(dup_value, dup_cases.as_slice(), dup_default);
             scope_builder.finished |= all_branches_finished;
 
@@ -821,6 +821,7 @@ impl SplitManager {
                         let dup_cond_if = self.find_duplicated_node(&mut sb_after, *cond);
                         let dup_body_loop = self.duplicate_block(sb_after.token, &pools, body);
                         let dup_cond_loop = self.find_duplicated_node(&mut sb_after, *cond);
+
                         let mut loop_builder = ScopeBuilder::new(sb_after.token, pools.clone());
                         loop_builder.builder.loop_(dup_body_loop, dup_cond_loop);
                         let loop_ = loop_builder.builder.finish();
@@ -1155,7 +1156,6 @@ impl CoroutineSplitImpl {
 
         let mut coro_frame_analyser = CoroFrameAnalyser::new();
         coro_frame_analyser.analyse_callable(&callable);
-        println!("{}", coro_frame_analyser.display_active_var(&display_ir));
         println!("{}", coro_frame_analyser.display_continuations());
 
         let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);

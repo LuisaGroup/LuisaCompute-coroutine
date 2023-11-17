@@ -8,18 +8,17 @@ using namespace luisa;
 using namespace luisa::compute;
 
 
-const uint BIT=6;
+const uint BIT=7;
 const uint DIGIT=1<<BIT;
 const uint HIST_BLOCK_SIZE=128;
 const uint SM_COUNT=256;
-const uint ONESWEEP_BLOCK_SIZE=64;
-const uint ONESWEEP_ITEM_COUNT=1;
+const uint ONESWEEP_BLOCK_SIZE=256;
+const uint ONESWEEP_ITEM_COUNT=32;
 const uint WARP_LOG=5;
 const uint WARP_SIZE=1<<WARP_LOG;
 const uint WARP_MASK=WARP_SIZE-1;
 const uint ALL_MASK=0xffff'ffff;
 static_assert(ONESWEEP_BLOCK_SIZE%WARP_SIZE==0);
-static_assert(DIGIT%ONESWEEP_BLOCK_SIZE==0);//not nessesary if we have threadfence
 Buffer<uint> hist_buffer;
 Buffer<uint> bin_buffer;
 Buffer<uint> launch_count;
@@ -42,10 +41,10 @@ int main(int argc, char *argv[]) {
     }
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream(StreamTag::COMPUTE);
-    constexpr auto n = 16384u;
+    constexpr auto n = 1024*1024*16u;
     bool debug=1u;
 
-    srand(32);
+    srand(288282);
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = luisa::vector<uint>(n, 0u);
     auto x_rank = luisa::vector<uint>(n,0u);
@@ -126,6 +125,8 @@ int main(int argc, char *argv[]) {
         };
 
     };
+    ExternalCallable<void()> thread_fence{"([] { __threadfence(); })"};
+    uint ONESWEEP_TOT_BLOCK=ceil_div(n,ONESWEEP_BLOCK_SIZE*ONESWEEP_ITEM_COUNT);
     Kernel1D onesweep = [&](BufferUInt key_buffer, BufferUInt out_buffer, BufferUInt launch_counter, BufferUInt hist_buffer,
                             BufferUInt rank, BufferUInt bin,UInt low_bit,UInt n){
         /// break_up:
@@ -139,7 +140,7 @@ int main(int argc, char *argv[]) {
         Shared<uint> block_bin{DIGIT};
         warp_prefix[thread_x()]=0;
         $for(i,0u,ceil_div(ONESWEEP_BLOCK_SIZE/WARP_SIZE*DIGIT,ONESWEEP_BLOCK_SIZE)){
-            $if(i*ONESWEEP_BLOCK_SIZE+thread_x()<DIGIT){
+            $if(i*ONESWEEP_BLOCK_SIZE+thread_x()<ONESWEEP_BLOCK_SIZE/WARP_SIZE*DIGIT){
                 warp_prefix[i*ONESWEEP_BLOCK_SIZE+thread_x()]=0u;
             };
         };
@@ -199,16 +200,10 @@ int main(int argc, char *argv[]) {
                 auto global_pre=def<uint>(0u);
                 $while(ptr>=0){
                     auto read_v=def<uint>(0u);
-                    auto timeout=0u;
-                    $while((read_v==0u)&(timeout<1000u)){
-                            timeout += 1;
+                    $while((read_v==0u)){
                         read_v=bin.read(ptr*DIGIT+cur_dig);
+                        thread_fence();
                     };
-                    $if(timeout>=1000u) {
-                        device_log("timeout at bid:{},cur_dig:{},ptr:{},timeout:{}", bid, cur_dig, ptr, timeout);
-                    };
-
-                    sync_block();//TODO:change to thread_fence();
                     global_pre+=(read_v&BIN_VAL_MASK);
                     $if((read_v&BIN_GLOBAL_MASK)!=0){
                         $break;
@@ -217,16 +212,9 @@ int main(int argc, char *argv[]) {
                 };
                 bin.write(bid*DIGIT+cur_dig,(global_pre+digit_pre)|BIN_GLOBAL_MASK);
                 block_bin[cur_dig]=global_pre;
-                //device_log("block:{},digit:{}, bin:{}",bid,cur_dig,global_pre);
             };
         };
-        $if((bid>200)){
-            device_log("block:{},bid:{}, bin:{} is {},",block_x(), bid,thread_x(),block_bin[thread_x()]);
-        };
         sync_block();
-        $if((bid>200)){
-            device_log("block:{},bid:{}, bin:{} is {},",block_x(), bid,thread_x(),block_bin[thread_x()]);
-        };
         //get final rank
         $for(i,0u,ONESWEEP_ITEM_COUNT){
             auto read_pos=bid*ONESWEEP_ITEM_COUNT*ONESWEEP_BLOCK_SIZE+ONESWEEP_ITEM_COUNT*WARP_SIZE*warp_id+i*WARP_SIZE+lane_id;
@@ -240,14 +228,9 @@ int main(int argc, char *argv[]) {
                 if(debug){
                     $if(warp_rank>=n){
                         device_log("bid:{}, warp_id:{}, lane_id:{}:rank out of bounds!",bid,warp_id,lane_id);
-                    };
-                    auto used=guard->read(warp_rank);
-                    $if(used!=0u){
-                      device_log("error at bid:{}, warp_id:{}, lane_id:{}, count: {}, key:{},warp_prefix:{},block_prefix:{},global_offset:{}",bid,warp_id,lane_id,i,key,
-                                   rank.read(read_pos),warp_prefix[warp_id*DIGIT+key],block_bin[key]);
+                        $continue;
                     };
                     out_buffer.write(warp_rank, key);
-                    guard->write(warp_rank,1u);
                 }
                 else {
                     out_buffer.write(warp_rank, key);
@@ -279,7 +262,6 @@ int main(int argc, char *argv[]) {
     }
     stream<< accum_shader(hist_buffer).dispatch(HIST_GROUP*32);
     stream<< clear_shader(bin_buffer).dispatch(ceil_div(n,ONESWEEP_BLOCK_SIZE*ONESWEEP_ITEM_COUNT)*DIGIT);
-    stream<< synchronize();
     for(int i=0;i<HIST_GROUP;++i){
         stream<<onesweep_shader(x_buffer,key_out, launch_count,hist_buffer.view(i*DIGIT,DIGIT),rank,bin_buffer,bit_split[i],n).dispatch(ceil_div(n,ONESWEEP_BLOCK_SIZE*ONESWEEP_ITEM_COUNT)*ONESWEEP_BLOCK_SIZE);
     }

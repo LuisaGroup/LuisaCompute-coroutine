@@ -43,6 +43,8 @@ int main(int argc, char *argv[]) {
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream(StreamTag::COMPUTE);
     constexpr auto n = 16384u;
+    bool debug=1u;
+
     srand(32);
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = luisa::vector<uint>(n, 0u);
@@ -73,7 +75,6 @@ int main(int argc, char *argv[]) {
     rank=device.create_buffer<uint>(n);
     key_out=device.create_buffer<uint>(n);
     guard=device.create_buffer<uint>(n);
-    bool debug=1u;
     Callable get_key=[&](BufferUInt key, UInt i){
         auto ret=def<uint>(0);
         $if(i<n){

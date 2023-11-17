@@ -1,4 +1,4 @@
-// Active var: Fail
+// Detect vars use/def that appears twice: Fail
 
 use crate::analysis::frame_token_manager::FrameTokenManager;
 use crate::context::is_type_equal;
@@ -7,7 +7,7 @@ use crate::ir::{
     BasicBlock, CallableModule, Instruction, NodeRef, SwitchCase, Type,
 };
 use crate::{CBoxedSlice, Pooled};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug)]
 pub(crate) struct Continuation {
@@ -17,6 +17,7 @@ pub(crate) struct Continuation {
 }
 
 impl Eq for Continuation {}
+
 impl Ord for Continuation {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.token.cmp(&other.token)
@@ -28,6 +29,7 @@ impl PartialEq<Self> for Continuation {
         self.token == other.token
     }
 }
+
 impl PartialOrd<Self> for Continuation {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.token.cmp(&other.token))
@@ -126,138 +128,90 @@ pub(crate) struct SplitPossibility {
     pub(crate) definitely: bool,
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct ActiveVar {
-    pub(crate) token: u32,
-
-    pub(crate) defined: HashSet<NodeRef>,
-    pub(crate) used: HashSet<NodeRef>,
-
-    pub(crate) def_b: HashSet<NodeRef>,
-    pub(crate) use_b: HashSet<NodeRef>,
-
-    pub(crate) input: HashSet<NodeRef>,
-    pub(crate) output: HashSet<NodeRef>,
-}
-impl Ord for ActiveVar {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.token.cmp(&other.token)
-    }
-}
-impl PartialOrd<Self> for ActiveVar {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.token.cmp(&other.token))
-    }
+#[derive(Clone)]
+struct ActiveVar {
+    var_existence: HashMap<NodeRef, HashSet<u32>>,
+    frame_vars: HashMap<u32, HashSet<NodeRef>>,
 }
 
 impl ActiveVar {
-    fn new(token: u32) -> Self {
+    fn new() -> Self {
         Self {
-            token,
-            defined: HashSet::new(),
-            used: HashSet::new(),
-            def_b: HashSet::new(),
-            use_b: HashSet::new(),
-            input: HashSet::new(),
-            output: HashSet::new(),
+            var_existence: HashMap::new(),
+            frame_vars: HashMap::new(),
         }
     }
 
-    fn record_use(&mut self, node: NodeRef) {
-        self.used.insert(node);
-        if !self.defined.contains(&node) {
-            self.use_b.insert(node);
-        }
+    fn record_use(&mut self, token: u32, node: NodeRef) {
+        self.var_existence.entry(node).or_default().insert(token);
     }
-    fn record_def(&mut self, node: NodeRef) {
-        self.defined.insert(node);
-        if !self.used.contains(&node) {
-            self.def_b.insert(node);
-        }
+    fn record_def(&mut self, token: u32, node: NodeRef) {
+        self.var_existence.entry(node).or_default().insert(token);
     }
 
     pub(crate) fn display(&self, display_ir: &DisplayIR) -> String {
-        let mut output = format!("{:-^40}\n", format!(" ActiveVar of {} ", self.token));
-        output += &format!(
-            "defined: {}\n",
-            display_ir.display_existent_nodes(&self.defined)
-        );
-        output += &format!(
-            "used: {}\n",
-            display_ir.display_existent_nodes(&self.used));
-        output += &format!(
-            "def_b: {}\n",
-            display_ir.display_existent_nodes(&self.def_b)
-        );
-        output += &format!(
-            "use_b: {}\n",
-            display_ir.display_existent_nodes(&self.use_b)
-        );
-        output += &format!(
-            "input: {}\n",
-            display_ir.display_existent_nodes(&self.input)
-        );
-        output += &format!(
-            "output: {}\n",
-            display_ir.display_existent_nodes(&self.output)
-        );
+        let mut output = format!("{:-^40}\n", format!(" ActiveVar "));
+        let display_fn = |(token, vars): (&u32, &HashSet<NodeRef>)| {
+            let vars = display_ir.display_existent_nodes(vars);
+            (*token, vars)
+        };
+        let frame_vars = BTreeMap::from_iter(self.frame_vars.iter().map(display_fn));
+        for (token, vars) in frame_vars.iter() {
+            output += &format!("Coro {}\n", token);
+            output += &format!("    {}\n", vars);
+        }
         output += &"-".repeat(40);
         output += "\n";
         output
+    }
+
+    fn calculate_frame(&mut self, tokens: &Vec<u32>) {
+        let mut tokens: HashSet<u32> = HashSet::from_iter(tokens.iter().cloned());
+        tokens.remove(&0);
+        self.frame_vars.entry(0).or_default();
+        for (var, var_existence) in self.var_existence.iter() {
+            if var_existence.len() > 1 {
+                for token in tokens.iter() {
+                    self.frame_vars.entry(*token).or_default().insert(*var);
+                }
+            }
+        }
     }
 }
 
 pub(crate) struct CoroFrameAnalyser {
     pub(crate) continuations: HashMap<u32, Continuation>,
-    pub(crate) active_vars: HashMap<u32, ActiveVar>,
     pub(crate) split_possibility: HashMap<*const BasicBlock, SplitPossibility>,
-    visited_coro_split_mark: HashSet<NodeRef>,
     pub(crate) entry_token: u32,
+    visited_coro_split_mark: HashSet<NodeRef>,
+    active_var: ActiveVar,
 }
 
 impl CoroFrameAnalyser {
     pub(crate) fn new() -> Self {
         Self {
             continuations: HashMap::new(),
-            active_vars: HashMap::new(),
             split_possibility: HashMap::new(),
-            visited_coro_split_mark: HashSet::new(),
             entry_token: u32::MAX,
+            visited_coro_split_mark: HashSet::new(),
+            active_var: ActiveVar::new(),
         }
     }
 
     pub(crate) fn analyse_callable(&mut self, callable: &CallableModule) {
-        self.preprocess_bb(&callable.module.entry);
+        self.process_split_possibility(&callable.module.entry);
 
         let entry_token = FrameTokenManager::get_new_token();
         self.entry_token = entry_token;
-        let active_var = self
-            .active_vars
-            .entry(entry_token)
-            .or_insert(ActiveVar::new(entry_token));
-
-        for arg in callable.args.as_ref() {
-            active_var.record_def(*arg);
-        }
-        for capture in callable.captures.as_ref() {
-            active_var.record_def(capture.node);
-        }
 
         let visit_state = VisitState::new_whole(&callable.module.entry);
         let _ = self.visit_bb(FrameBuilder::new(entry_token), visit_state);
 
-        self.calculate_frame();
+        self.calculate_frame(callable);
     }
 
-    pub(crate) fn display_active_vars(&self, display_ir: &DisplayIR) -> String {
-        let mut output = String::new();
-        let active_vars = BTreeSet::from_iter(self.active_vars.values());
-        let active_var_str: Vec<_> = active_vars
-            .iter()
-            .map(|active_var| active_var.display(display_ir))
-            .collect();
-        output += &active_var_str.join("\n");
-        output
+    pub(crate) fn display_active_var(&self, display_ir: &DisplayIR) -> String {
+        self.active_var.display(display_ir)
     }
 
     pub(crate) fn display_continuations(&self) -> String {
@@ -275,51 +229,25 @@ impl CoroFrameAnalyser {
         output
     }
 
-    fn calculate_frame(&mut self) {
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for continuation in self.continuations.values() {
-                let mut active_var = self.active_vars.get(&continuation.token).unwrap().clone();
-                active_var.output.clear();
-                let mut to_self = false;
-                // OUT[B] = U IN[S] for all S in next[B]
-                for token_next in continuation.next.iter() {
-                    if continuation.token == *token_next {
-                        to_self = true;
-                    } else {
-                        let active_var_next = self.active_vars.get_mut(&token_next).unwrap();
-                        active_var.output.extend(active_var_next.input.iter());
-                    }
-                }
-                if to_self {
-                    active_var.output.extend(active_var.input.iter());
-                }
-                // IN[B] = use[B] U (OUT[B] - def[B])
-                active_var.input = active_var.use_b.clone();
-                let mut out_minus_def = active_var.output.clone();
-                out_minus_def.retain(|node_ref| !active_var.def_b.contains(node_ref));
-                active_var.input.extend(out_minus_def);
+    pub(crate) fn frame_vars(&mut self, token: u32) -> &HashSet<NodeRef> {
+        self.active_var.frame_vars.get(&token).unwrap()
+    }
 
-                // check if changed
-                if active_var != *self.active_vars.get(&continuation.token).unwrap() {
-                    changed = true;
-                    self.active_vars.insert(continuation.token, active_var);
-                }
-            }
-        }
+    fn calculate_frame(&mut self, callable: &CallableModule) {
         let args = &callable.args.as_ref().iter()
             .map(|arg| *arg).collect::<HashSet<_>>();
         let captures = &callable.captures.as_ref().iter()
             .map(|capture| capture.node).collect::<HashSet<_>>();
-        for (token, active_var) in self.active_vars.iter_mut() {
-            let mut input_var = active_var.input.clone();
-            input_var = input_var.difference(args).cloned().collect::<HashSet<_>>();
-            input_var = input_var.difference(captures).cloned().collect::<HashSet<_>>();
-            active_var.input = input_var;
+        let tokens = Vec::from_iter(self.continuations.keys().cloned());
+        self.active_var.calculate_frame(&tokens);
+        for (token, vars) in self.active_var.frame_vars.iter_mut() {
+            let mut frame_vars = vars.clone();
+            frame_vars = frame_vars.difference(args).cloned().collect::<HashSet<_>>();
+            frame_vars = frame_vars.difference(captures).cloned().collect::<HashSet<_>>();
+            vars.clone_from(&frame_vars);
         }
     }
-    fn preprocess_bb(&mut self, bb: &Pooled<BasicBlock>) {
+    fn process_split_possibility(&mut self, bb: &Pooled<BasicBlock>) {
         let mut split_poss = self
             .split_possibility
             .entry(bb.as_ptr())
@@ -351,7 +279,7 @@ impl CoroFrameAnalyser {
                 }
                 // 3 Instructions after CCF
                 Instruction::Loop { body, cond } => {
-                    self.preprocess_bb(body);
+                    self.process_split_possibility(body);
                     let split_poss_body = self.split_possibility.get(&body.as_ptr()).unwrap();
                     split_poss.possibly |= split_poss_body.possibly;
                     split_poss.definitely |= split_poss_body.definitely;
@@ -361,8 +289,8 @@ impl CoroFrameAnalyser {
                     true_branch,
                     false_branch,
                 } => {
-                    self.preprocess_bb(true_branch);
-                    self.preprocess_bb(false_branch);
+                    self.process_split_possibility(true_branch);
+                    self.process_split_possibility(false_branch);
                     let split_poss_true =
                         self.split_possibility.get(&true_branch.as_ptr()).unwrap();
                     let split_poss_false =
@@ -381,12 +309,12 @@ impl CoroFrameAnalyser {
                         definitely: true,
                     };
                     for SwitchCase { value: _, block } in cases.as_ref().iter() {
-                        self.preprocess_bb(block);
+                        self.process_split_possibility(block);
                         let split_poss_case = self.split_possibility.get(&block.as_ptr()).unwrap();
                         split_poss_cases.possibly |= split_poss_case.possibly;
                         split_poss_cases.definitely &= split_poss_case.definitely;
                     }
-                    self.preprocess_bb(default);
+                    self.process_split_possibility(default);
                     let split_poss_default = self
                         .split_possibility
                         .get(&default.as_ptr())
@@ -481,12 +409,7 @@ impl CoroFrameAnalyser {
                 .definitely
         );
         frame_builder.finished |= fb_body.finished;
-        if !frame_builder.finished {    // FIXME: consistent with coroutine::visit_loop
-            self.active_vars
-                .get_mut(&frame_builder.token)
-                .unwrap()
-                .record_use(*cond);
-        }
+        self.active_var.record_use(frame_builder.token, *cond);
 
         // process next bb
         fb_after_vec.insert(0, frame_builder);
@@ -498,6 +421,7 @@ impl CoroFrameAnalyser {
                 visit_result.result.push(fb_after);
             } else {
                 let mut temp_vec = vec![];
+                self.active_var.record_use(fb_after.token, *cond);
                 fb_after = self.visit_branch_split(fb_after.token, body, &mut temp_vec);
                 assert_eq!(temp_vec.len(), 0);
                 if fb_after.finished {
@@ -520,8 +444,7 @@ impl CoroFrameAnalyser {
         cond: &NodeRef,
     ) -> VisitResult {
         // cond
-        let active_var = self.active_vars.get_mut(&frame_builder.token).unwrap();
-        active_var.record_use(*cond);
+        self.active_var.record_use(frame_builder.token, *cond);
 
         let mut visit_result = VisitResult::new();
 
@@ -572,8 +495,7 @@ impl CoroFrameAnalyser {
         default: &Pooled<BasicBlock>,
     ) -> VisitResult {
         // value
-        let active_var = self.active_vars.get_mut(&frame_builder.token).unwrap();
-        active_var.record_use(*value);
+        self.active_var.record_use(frame_builder.token, *value);
 
         let mut visit_result = VisitResult::new();
         let mut fb_after_vec = vec![];
@@ -625,12 +547,8 @@ impl CoroFrameAnalyser {
             let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
+            let token = frame_builder.token;
             // println!("Token {}, Visit noderef {:?} : {:?}", frame_builder.token, visit_state.present.0, instruction);
-
-            let active_var = self
-                .active_vars
-                .entry(frame_builder.token)
-                .or_insert(ActiveVar::new(frame_builder.token));
 
             match instruction {
                 Instruction::Buffer
@@ -699,37 +617,37 @@ impl CoroFrameAnalyser {
                 }
 
                 Instruction::Local { init } => {
-                    active_var.record_use(*init);
-                    active_var.record_def(visit_state.present);
+                    self.active_var.record_use(token, *init);
+                    self.active_var.record_def(token, visit_state.present);
                 }
                 Instruction::UserData(_) => todo!(),
                 Instruction::Const(_) => {
-                    active_var.record_def(visit_state.present);
+                    self.active_var.record_def(token, visit_state.present);
                 }
 
                 // FIXME: 3 instructions: var undefined
                 Instruction::Update { var, value } => {
-                    active_var.record_use(*value);
-                    active_var.record_def(*var);
+                    self.active_var.record_use(token, *value);
+                    self.active_var.record_def(token, *var);
                 }
                 Instruction::Call(func, args) => {
                     for arg in args.as_ref() {
-                        active_var.record_use(*arg);
+                        self.active_var.record_use(token, *arg);
                     }
                     if !is_type_equal(type_, &Type::void()) {
-                        active_var.record_def(visit_state.present);
+                        self.active_var.record_def(token, visit_state.present);
                     }
                 }
                 Instruction::Phi(phi) => {
                     for phi_incoming in phi.as_ref() {
-                        active_var.record_use(phi_incoming.value);
+                        self.active_var.record_use(token, phi_incoming.value);
                     }
-                    active_var.record_def(visit_state.present);
+                    self.active_var.record_def(token, visit_state.present);
                 }
 
                 Instruction::Return(value) => {
                     if !is_type_equal(type_, &Type::void()) {
-                        active_var.record_use(*value);
+                        self.active_var.record_use(token, *value);
                     }
                 }
                 Instruction::GenericLoop { .. } => todo!(),
@@ -741,13 +659,9 @@ impl CoroFrameAnalyser {
                 Instruction::AdDetach(_) => {}
                 Instruction::Comment(_) => {}
                 Instruction::Print { .. } => {}
-                Instruction::CoroRegister { token, value, var } => {
+                Instruction::CoroRegister { token: token_next, value, var } => {
                     // var <-> frame[token][index] <-> value
-                    let active_var_next = self
-                        .active_vars
-                        .entry(*token)
-                        .or_insert(ActiveVar::new(*token));
-                    active_var_next.record_use(*value);
+                    self.active_var.record_use(*token_next, *value);
                 }
                 Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => unreachable!(
                     "{:?} should not be defined as statement directly",

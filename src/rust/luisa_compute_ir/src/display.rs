@@ -37,6 +37,14 @@ impl DisplayIR {
         self.cnt = 0;
     }
 
+    pub fn var_str(&mut self, node: &NodeRef) -> String {
+        format!("${}", self.get(node))
+    }
+
+    pub fn var_str_or_insert(&mut self, node: &NodeRef) -> String {
+        format!("${}", self.get_or_insert(node))
+    }
+
     pub fn display_ir(&mut self, module: &Module) -> String {
         self.clear();
         self.display_ir_bb(&module.entry, 0, false)
@@ -47,19 +55,19 @@ impl DisplayIR {
         self.defs.extend(kernel.args.iter().clone());
         self.defs.extend(kernel.shared.iter().clone());
         self.defs.extend(kernel.captures.iter().map(|arg| arg.node));
-        self.output += &format!("\n{:-^40}\n", "Args");
+        self.output += &format!("\n{:-^40}\n", " Args ");
         for arg in kernel.args.as_ref() {
             self.display(*arg, 0, false);
         }
-        self.output += &format!("\n{:-^40}\n", "Shared");
+        self.output += &format!("\n{:-^40}\n", " Shared ");
         for arg in kernel.shared.as_ref() {
             self.display(*arg, 0, false);
         }
-        self.output += &format!("\n{:-^40}\n", "Captures");
+        self.output += &format!("\n{:-^40}\n", " Captures ");
         for arg in kernel.captures.as_ref() {
             self.display(arg.node, 0, false);
         }
-        self.output += &format!("\n{:-^40}\n", "Module");
+        self.output += &format!("\n{:-^40}\n", " Module ");
         self.display_ir_bb(&kernel.module.entry, 0, false)
     }
 
@@ -68,15 +76,15 @@ impl DisplayIR {
         self.defs.extend(callable.args.iter().clone());
         self.defs
             .extend(callable.captures.iter().map(|arg| arg.node));
-        self.output += &format!("\n{:-^40}\n", "Args");
+        self.output += &format!("\n{:-^40}\n", " Args ");
         for arg in callable.args.as_ref() {
             self.display(*arg, 0, false);
         }
-        self.output += &format!("\n{:-^40}\n", "Captures");
+        self.output += &format!("\n{:-^40}\n", " Captures ");
         for arg in callable.captures.as_ref() {
             self.display(arg.node, 0, false);
         }
-        self.output += &format!("\n{:-^40}\n", "Module");
+        self.output += &format!("\n{:-^40}\n", " Module ");
         self.display_ir_bb(&callable.module.entry, 0, false)
     }
 

@@ -3,7 +3,7 @@ use super::Transform;
 use std::collections::{HashMap, HashSet};
 
 use crate::{display::DisplayIR, CArc, CBoxedSlice, Pooled};
-use crate::analysis::coro_frame::{CoroFrameAnalyser, VisitState};
+use crate::analysis::coro_frame_v2::{CoroFrameAnalyser, VisitState};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
 use crate::context::register_type;
 use crate::ir::{SwitchCase, Instruction, BasicBlock, IrBuilder, ModulePools, NodeRef, Node, new_node, Type, Capture, INVALID_REF, CallableModule, Func, PhiIncoming, Module, CallableModuleRef, StructType, Const, Primitive, VectorType, VectorElementType, ModuleFlags, ModuleKind};
@@ -83,6 +83,8 @@ pub(crate) struct SplitManager {
     coro_callable_info: HashMap<u32, CallableModuleInfo>,
     frame_type: CArc<Type>,
     frame_fields: Vec<CArc<Type>>,
+
+    display_ir: DisplayIR,  // for debug
 }
 
 impl SplitManager {
@@ -96,7 +98,10 @@ impl SplitManager {
             coro_callable_info: HashMap::new(),
             frame_type: CArc::new(Type::Void),
             frame_fields: vec![],
+            display_ir: DisplayIR::new(),
         };
+
+        let output = sm.display_ir.display_ir_callable(callable);
 
         // prepare
         let pools = &callable.pools;
@@ -157,37 +162,6 @@ impl SplitManager {
         }
     }
 
-    // fn pre_process_bb(&mut self, bb: &Pooled<BasicBlock>, callable_original: &CallableModule) {
-    //     bb.iter().for_each(|node_ref_present| {
-    //         let node = node_ref_present.get();
-    //         match node.instruction.as_ref() {
-    //             Instruction::CoroSplitMark { token } => {
-    //                 // TODO: args & captures
-    //                 let args = self.duplicate_args(*token, &callable_original.pools, &callable_original.args);
-    //                 let captures = self.duplicate_captures(*token, &callable_original.pools, &callable_original.captures);
-    //             }
-    //             // 3 Instructions after CCF
-    //             Instruction::Loop { body, cond } => {
-    //                 self.preprocess_bb(body, callable_original);
-    //             }
-    //             Instruction::If { cond, true_branch, false_branch } => {
-    //                 self.preprocess_bb(true_branch, callable_original);
-    //                 self.preprocess_bb(false_branch, callable_original);
-    //             }
-    //             Instruction::Switch {
-    //                 value: _,
-    //                 default,
-    //                 cases,
-    //             } => {
-    //                 self.preprocess_bb(default, callable_original);
-    //                 for SwitchCase { value: _, block } in cases.as_ref().iter() {
-    //                     self.preprocess_bb(block, callable_original);
-    //                 }
-    //             }
-    //             _ => {}
-    //         }
-    //     });
-    // }
     fn pre_process(&mut self, callable: &CallableModule) -> ScopeBuilder {
         let pools = &callable.pools;
         let entry_token = self.frame_analyser.entry_token;
@@ -201,18 +175,13 @@ impl SplitManager {
         let mut index_counter: usize = frame_fields.len();
 
         // calculate frame state
-        let token_vec = self.frame_analyser.active_vars.keys().cloned().collect::<Vec<_>>();
+        let token_vec = self.frame_analyser.continuations.keys().cloned().collect::<Vec<_>>();
         let mut free_fields: HashMap<CArc<Type>, Vec<usize>> = HashMap::new();
         for token in token_vec.iter() {
-            let mut args = self.duplicate_args(*token, pools, &callable.args);
-            let mut captures = self.duplicate_captures(*token, pools, &callable.captures);
-            let mut input_var = self.frame_analyser.active_vars.get(token).unwrap().input.clone();
+            let args = self.duplicate_args(*token, pools, &callable.args);
+            let captures = self.duplicate_captures(*token, pools, &callable.captures);
+            let frame_vars = self.frame_analyser.frame_vars(*token);
             self.coro_local_builder.insert(*token, IrBuilder::new(pools.clone()));
-
-            input_var = input_var.difference(&callable.args.as_ref().iter()
-                .map(|arg| *arg).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
-            input_var = input_var.difference(&callable.captures.as_ref().iter()
-                .map(|capture| capture.node).collect::<HashSet<_>>()).cloned().collect::<HashSet<_>>();
 
             let callable_info = self.coro_callable_info.entry(*token).or_default();
             callable_info.args.extend(args.to_vec());
@@ -220,14 +189,22 @@ impl SplitManager {
 
             // create coro frame for Load
             // TODO: relocation temp vars
-            let input_var: Vec<NodeRef> = input_var.iter().map(ToOwned::to_owned).collect();
-            let fields: Vec<_> = input_var.iter().map(|node_ref| {
+            let frame_vars: Vec<NodeRef> = frame_vars.iter().map(ToOwned::to_owned).collect();
+            let fields: Vec<_> = frame_vars.iter().map(|node_ref| {
                 let node = node_ref.get();
                 node.type_.clone()
             }).collect();
 
-            // TODO: join all fields together or reuse fields of the same type?
-            // reuse fields of the same type
+            // TODO: frame slot strategies?
+
+            // // 1. join all fields together
+            // for i in 0..fields.len() {
+            //     callable_info.old2frame_index.insert(frame_vars[i], index_counter + i);
+            // }
+            // index_counter += fields.len();
+            // frame_fields.extend(fields);
+
+            // 2. reuse fields of the same type
             let mut used: HashSet<usize> = HashSet::from([0, 1]);
             let mut new_fields = Vec::new();
             for i in 0..fields.len() {
@@ -244,16 +221,9 @@ impl SplitManager {
                     index
                 };
                 used.insert(index);
-                callable_info.old2frame_index.insert(input_var[i], index);
+                callable_info.old2frame_index.insert(frame_vars[i], index);
             }
             frame_fields.extend(new_fields);
-
-            // // join all fields together
-            // for i in 0..fields.len() {
-            //     callable_info.old2frame_index.insert(input_var[i], index_counter + i);
-            // }
-            // index_counter += fields.len();
-            // frame_fields.extend(fields);
         }
 
         let alignment = frame_fields.iter().map(|type_| type_.alignment()).max().unwrap();
@@ -268,15 +238,8 @@ impl SplitManager {
         for token in token_vec.iter() {
             let callable_info = self.coro_callable_info.get_mut(token).unwrap();
 
-            // // args[0] is frame by default
-            // let frame_node = Node::new(
-            //     CArc::new(Instruction::Argument { by_value: false }),
-            //     self.frame_type.clone(),
-            // );
-            // callable_info.frame_node = new_node(pools, frame_node);
-            // callable_info.args.insert(0, callable_info.frame_node);
-
-            // change the type of args here
+            // args[0] is frame by default
+            // change the type of frame here
             callable_info.args[0].get_mut().type_ = self.frame_type.clone();
             callable_info.frame_node = callable_info.args[0].clone();
         }
@@ -331,6 +294,10 @@ impl SplitManager {
                 &[index_node],
                 self.frame_fields[*index].clone());
             self.record_node_mapping(token, *old_node, gep);
+            // // TODO: debug
+            // if token == 1 {
+            //     println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
+            // }
         }
         builder.comment(CBoxedSlice::from("CoroResume End".as_bytes()));   // TODO: for DEBUG
         scope_builder
@@ -346,7 +313,19 @@ impl SplitManager {
             // store frame state
             for (old_node, index) in old2frame_index.iter() {
                 let index_node = builder.const_(Const::Uint32(*index as u32));
+                // TODO: debug
+                if self.old2new.nodes.get(old_node) == None {
+                    println!("token: {}, token_next: {:?}", token, token_next);
+                    println!("old_node: {}", self.display_ir.var_str(old_node));
+                    panic!()
+                }
                 let old2new_map = self.old2new.nodes.get(old_node).unwrap();
+                // TODO: debug
+                if old2new_map.get(&token) == None {
+                    println!("token: {}, token_next: {:?}", token, token_next);
+                    println!("old_node: {}", self.display_ir.var_str(old_node));
+                    panic!()
+                }
                 let value = old2new_map.get(&token).unwrap().clone();
                 let value = if value.is_lvalue() {
                     builder.load(value)
@@ -871,6 +850,7 @@ impl SplitManager {
         if self.old2new.nodes.get(&node).unwrap().contains_key(&frame_token) {
             self.old2new.nodes.get(&node).unwrap().get(&frame_token).unwrap().clone()
         } else {
+            unimplemented!("local_zero_init");
             // FIXME: this is a temporary solution, local_zero_init
             let type_ = node.type_().clone();
             let local = self.coro_local_builder.get_mut(&frame_token).unwrap().local_zero_init(type_);
@@ -1175,7 +1155,7 @@ impl CoroutineSplitImpl {
 
         let mut coro_frame_analyser = CoroFrameAnalyser::new();
         coro_frame_analyser.analyse_callable(&callable);
-        println!("{}", coro_frame_analyser.display_active_vars(&display_ir));
+        println!("{}", coro_frame_analyser.display_active_var(&display_ir));
         println!("{}", coro_frame_analyser.display_continuations());
 
         let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);

@@ -1,4 +1,4 @@
-// Detect vars use/def that appears twice: Fail
+// Vars scope
 
 use crate::analysis::frame_token_manager::{FrameTokenManager, INVALID_FRAME_TOKEN_MASK};
 use crate::context::is_type_equal;
@@ -170,6 +170,7 @@ fn display_node_map2set(target: &HashMap<NodeRef, HashSet<i32>>) -> String {
     let output = format!("{{{}}}", output);
     output
 }
+
 fn display_node_map(target: &HashMap<NodeRef, i32>) -> String {
     let output: Vec<_> = target.iter().map(|(node_ref, number)| unsafe {
         let node = DISPLAY_IR_DEBUG.get().var_str(node_ref);
@@ -182,6 +183,7 @@ fn display_node_map(target: &HashMap<NodeRef, i32>) -> String {
     let output = format!("{{{}}}", output);
     output
 }
+
 fn display_node_set(target: &HashSet<NodeRef>) -> String {
     unsafe { DISPLAY_IR_DEBUG.get().vars_str(target) }
 }
@@ -347,15 +349,43 @@ impl CoroFrameAnalyser {
 
     pub(crate) fn display_continuations(&self) -> String {
         let mut output = String::from("Continuations: {\n");
-        let mut continuations = Vec::from_iter(self.continuations.values());
         // format for display
-        continuations.sort();
-        let continuation_str: Vec<_> = continuations.iter().map(|continuation| {
+        let continuations = BTreeSet::from_iter(self.continuations.values());
+        let continuations: Vec<_> = continuations.iter().map(|continuation| {
             let prev = BTreeSet::from_iter(continuation.prev.iter());
             let next = BTreeSet::from_iter(continuation.next.iter());
-            format!("    {:?} => {} => {:?}", prev, continuation.token, next)
+            format!("\t{:?} => {} => {:?}", prev, continuation.token, next)
         }).collect();
-        output += &continuation_str.join("\n");
+        output += &continuations.join("\n");
+        output += "\n}";
+        output
+    }
+    pub(crate) fn display_coro_frame(&self) -> String {
+        // format for display
+        let coro_input: HashMap<u32, String> = self.coro_frame.input.iter().map(
+            |(token, nodes)| {
+                let nodes = display_node_set(nodes);
+                (*token, nodes)
+            }).collect();
+        let coro_output: HashMap<(u32, u32), String> = self.coro_frame.output.iter().map(
+            |((token, token_next), nodes)| {
+                let nodes = display_node_set(nodes);
+                ((*token, *token_next), nodes)
+            }).collect();
+        let mut output = String::from("CoroFrame: {\n");
+        let continuations = BTreeSet::from_iter(self.continuations.values());
+        let coro_frame_str: Vec<_> = continuations.iter().map(|continuation| {
+            let input_vars = coro_input.get(&continuation.token).unwrap();
+            let next = BTreeSet::from_iter(continuation.next.iter());
+            let next: Vec<_> = next.iter().map(|token_next| {
+                let output_vars = coro_output.get(&(continuation.token, **token_next)).unwrap();
+                format!("\t\t\tTo {} = {}", token_next, output_vars)
+            }).collect();
+            let next = next.join("\n");
+            format!("\tToken {} => {{\n\t\tInput = {}\n\t\tOutput = {{\n{}\n\t\t}}\n\t}}",
+                    continuation.token, input_vars, next)
+        }).collect();
+        output += &coro_frame_str.join("\n");
         output += "\n}";
         output
     }
@@ -365,14 +395,15 @@ impl CoroFrameAnalyser {
             .map(|arg| *arg).collect::<HashSet<_>>();
         let captures = &callable.captures.as_ref().iter()
             .map(|capture| capture.node).collect::<HashSet<_>>();
-        let tokens = Vec::from_iter(self.continuations.keys().cloned());
 
         for fb in fb_vec {
-            let index = self.active_vars.len();
-            assert_eq!(fb.token, fb.active_var.token);
-            self.active_var_by_token.entry(fb.active_var.token).or_default().insert(index);
-            self.active_var_by_token_next.entry(fb.active_var.token_next).or_default().insert(index);
-            self.active_vars.push(fb.active_var);
+            if !fb.finished {
+                let index = self.active_vars.len();
+                assert_eq!(fb.token, fb.active_var.token);
+                self.active_var_by_token.entry(fb.active_var.token).or_default().insert(index);
+                self.active_var_by_token_next.entry(fb.active_var.token_next).or_default().insert(index);
+                self.active_vars.push(fb.active_var);
+            }
         }
 
 
@@ -395,20 +426,18 @@ impl CoroFrameAnalyser {
                 }
 
                 // IN[B] = use[B] U (OUT[B] - def[B])
-                let input = self.coro_frame.input.entry(*token).or_default();
+                let mut input = self.coro_frame.input.entry(*token).or_default().clone();
                 for index in self.active_var_by_token.get(token).unwrap() {
                     let active_var = self.active_vars.get(*index).unwrap();
                     let token_next = active_var.token_next;
-                    if !active_var.use_b.is_empty() {
-                        changed = true;
-                        input.extend(active_var.use_b.iter());
-                    }
+                    input.extend(active_var.use_b.iter());
                     let mut out_minus_def = self.coro_frame.output.get(&(*token, token_next)).unwrap().clone();
                     out_minus_def.retain(|node_ref| !active_var.def_b.contains(node_ref));
-                    if !out_minus_def.is_empty() {
-                        changed = true;
-                        input.extend(out_minus_def);
-                    }
+                    input.extend(out_minus_def);
+                }
+                if input != *self.coro_frame.input.get(token).unwrap() {
+                    changed = true;
+                    self.coro_frame.input.insert(*token, input);
                 }
             }
         }
@@ -544,6 +573,11 @@ impl CoroFrameAnalyser {
 
         // active var
         fb_before.active_var.token_next = token_next;
+        let index = self.active_vars.len();
+        assert_eq!(fb_before.token, fb_before.active_var.token);
+        self.active_var_by_token.entry(fb_before.active_var.token).or_default().insert(index);
+        self.active_var_by_token_next.entry(fb_before.active_var.token_next).or_default().insert(index);
+        self.active_vars.push(fb_before.active_var.clone());
 
         if visited {
             // coro suspend
@@ -562,7 +596,7 @@ impl CoroFrameAnalyser {
         sb_after_vec: &mut Vec<FrameBuilder>,
     ) -> FrameBuilder {
         let frame_builder = FrameBuilder::new(frame_builder.token, Some(frame_builder.active_var.clone()));
-        println!("visit_branch_split {:?}", frame_builder);
+        // println!("visit_branch_split {:?}", frame_builder);
         let mut sb_vec = self.visit_bb(frame_builder, VisitState::new_whole(branch));
         let sb_before_split = sb_vec.remove(0);
         sb_after_vec.extend(sb_vec);
@@ -719,7 +753,7 @@ impl CoroFrameAnalyser {
         visit_result
     }
     fn visit_bb(&mut self, mut frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
-        println!("visit_bb {:?}", frame_builder);
+        // println!("visit_bb {:?}", frame_builder);
         let active_var = &mut frame_builder.active_var;
         active_var.enter_scope();
 

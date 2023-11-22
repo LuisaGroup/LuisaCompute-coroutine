@@ -122,7 +122,10 @@ struct FrameBuilder {
 impl FrameBuilder {
     fn new(token: u32, active_var: Option<ActiveVar>) -> Self {
         let active_var = if let Some(active_var) = active_var {
-            active_var
+            let mut active_var_new = active_var;
+            active_var_new.token = token;
+            active_var_new.token_next = INVALID_FRAME_TOKEN_MASK;
+            active_var_new
         } else {
             ActiveVar::new(token)
         };
@@ -215,6 +218,7 @@ struct ActiveVar {
     token_next: u32,
 
     var_scopes: Vec<VarScope>,
+    var_scope_exited: Vec<VarScope>,
 
     defined_count: HashMap<NodeRef, i32>,
     defined: HashMap<NodeRef, HashSet<i32>>,
@@ -250,6 +254,7 @@ impl ActiveVar {
             token_next: INVALID_FRAME_TOKEN_MASK,
 
             var_scopes: vec![],
+            var_scope_exited: vec![],
 
             defined_count: HashMap::new(),
             defined: HashMap::new(),
@@ -260,6 +265,7 @@ impl ActiveVar {
     }
 
     fn record_use(&mut self, node: NodeRef) {
+        let token = self.token; // for DEBUG
         let defined_index = *self.defined_count.get(&node).unwrap_or(&-1);
 
         self.used.entry(node).or_default().insert(defined_index);
@@ -268,6 +274,7 @@ impl ActiveVar {
         }
     }
     fn record_def(&mut self, node: NodeRef) {
+        let token = self.token; // for DEBUG
         let defined_index = self.defined_count.entry(node).or_insert(-1);
         *defined_index += 1;
         let def_index = *defined_index;
@@ -280,9 +287,22 @@ impl ActiveVar {
     }
 
     fn enter_scope(&mut self) {
+        let token = self.token;
         self.var_scopes.push(VarScope::new());
     }
+    fn resume_last_scope(&mut self) {
+        let token = self.token;
+        let var_scope = self.var_scope_exited.pop().unwrap();
+        for (node, defined_in_scope) in var_scope.defined.iter() {
+            let defined = self.defined.entry(*node).or_default();
+            for defined_index in defined_in_scope.iter() {
+                defined.insert(*defined_index);
+            }
+        }
+        self.var_scopes.push(var_scope);
+    }
     fn exit_scope(&mut self) {
+        let token = self.token;
         let var_scope = self.var_scopes.pop().unwrap();
         for (node, defined_in_scope) in var_scope.defined.iter() {
             let defined = self.defined.entry(*node).or_default();
@@ -291,6 +311,11 @@ impl ActiveVar {
                 defined.remove(defined_index);
             }
         }
+        self.var_scope_exited.push(var_scope);
+    }
+    fn exit_without_resume(&mut self) {
+        self.exit_scope();
+        self.var_scope_exited.pop();
     }
 }
 
@@ -579,13 +604,17 @@ impl CoroFrameAnalyser {
         self.active_var_by_token_next.entry(fb_before.active_var.token_next).or_default().insert(index);
         self.active_vars.push(fb_before.active_var.clone());
 
+        fb_before.active_var.exit_scope();
+
         if visited {
             // coro suspend
             vec![fb_before]
         } else {
             // coro split mark
             // create a new frame builder for the next scope
-            let fb_next = FrameBuilder::new(token_next, None);
+            let mut fb_next = FrameBuilder::new(token_next, None);
+            fb_next.active_var.var_scopes.resize_with(fb_before.active_var.var_scopes.len(), || VarScope::new());
+            fb_next.active_var.var_scope_exited.resize_with(fb_before.active_var.var_scope_exited.len(), || VarScope::new());
             vec![fb_before, fb_next]
         }
     }
@@ -612,7 +641,7 @@ impl CoroFrameAnalyser {
         let mut visit_result = VisitResult::new();
         let mut fb_after_vec = vec![];
 
-        let fb_body = self.visit_branch_split(&frame_builder, body, &mut fb_after_vec);
+        let mut fb_body = self.visit_branch_split(&frame_builder, body, &mut fb_after_vec);
         assert_eq!(
             fb_body.finished,
             self.split_possibility
@@ -620,17 +649,18 @@ impl CoroFrameAnalyser {
                 .unwrap()
                 .definitely
         );
-        frame_builder.finished |= fb_body.finished;
-        frame_builder.active_var.record_use(*cond);
+        fb_body.active_var.resume_last_scope();
+        fb_body.active_var.record_use(*cond); // FIXME: cond is in body block
+        fb_body.active_var.exit_without_resume();
 
         let mut visit_state_after = visit_state.clone();
         visit_state_after.present = visit_state.present.get().next;
 
         // process next bb
-        if frame_builder.finished {
-            visit_result.result.push(frame_builder);
+        if fb_body.finished {
+            visit_result.result.push(fb_body);
         } else {
-            visit_result.result.extend(self.visit_bb(frame_builder, visit_state_after.clone()));
+            visit_result.result.extend(self.visit_bb(fb_body, visit_state_after.clone()));
         }
 
         for mut fb_after in fb_after_vec {
@@ -639,10 +669,16 @@ impl CoroFrameAnalyser {
             } else {
                 let mut temp_vec = vec![];
 
-                fb_after.active_var.record_use(*cond);
+                fb_after.active_var.resume_last_scope();
+                fb_after.active_var.record_use(*cond); // FIXME: cond is in body block
+                fb_after.active_var.exit_without_resume();
+
                 fb_after = self.visit_branch_split(&fb_after, body, &mut temp_vec);
                 assert_eq!(temp_vec.len(), 0);
+
+                fb_after.active_var.resume_last_scope();
                 fb_after.active_var.record_use(*cond);
+                fb_after.active_var.exit_without_resume();
 
                 visit_result.result.extend(self.visit_bb(fb_after, visit_state_after.clone()));
             }
@@ -755,14 +791,16 @@ impl CoroFrameAnalyser {
     fn visit_bb(&mut self, mut frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
         // println!("visit_bb {:?}", frame_builder);
         let active_var = &mut frame_builder.active_var;
-        active_var.enter_scope();
+        if visit_state.present == visit_state.start {
+            active_var.enter_scope();
+        }
 
         while visit_state.present != visit_state.end {
             let node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
             let token = frame_builder.token;
-            // println!("Token {}, Visit noderef {:?} : {:?}", frame_builder.token, visit_state.present.0, instruction);
+            println!("Token {}, Visit noderef {:?} : {:?}", token, visit_state.present.0, instruction);
 
             match instruction {
                 Instruction::Buffer

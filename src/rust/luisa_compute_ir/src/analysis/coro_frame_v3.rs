@@ -354,8 +354,11 @@ impl CoroFrameAnalyser {
         }
     }
 
-    pub(crate) fn frame_vars(&mut self, token: u32) -> &HashSet<NodeRef> {
+    pub(crate) fn input_vars(&mut self, token: u32) -> &HashSet<NodeRef> {
         return self.coro_frame.input.get(&token).unwrap();
+    }
+    pub(crate) fn output_vars(&mut self, token: u32, token_next: u32) -> &HashSet<NodeRef> {
+        return self.coro_frame.output.get(&(token, token_next)).unwrap();
     }
 
     pub(crate) fn analyse_callable(&mut self, callable: &CallableModule) {
@@ -431,7 +434,6 @@ impl CoroFrameAnalyser {
             }
         }
 
-
         let mut changed = true;
         while changed {
             changed = false;
@@ -472,6 +474,12 @@ impl CoroFrameAnalyser {
             input_var = input_var.difference(args).cloned().collect::<HashSet<_>>();
             input_var = input_var.difference(captures).cloned().collect::<HashSet<_>>();
             input.clone_from(&input_var);
+        }
+        for ((token, token_next), output) in self.coro_frame.output.iter_mut() {
+            let mut output_var = output.clone();
+            output_var = output_var.difference(args).cloned().collect::<HashSet<_>>();
+            output_var = output_var.difference(captures).cloned().collect::<HashSet<_>>();
+            output.clone_from(&output_var);
         }
     }
     fn process_split_possibility(&mut self, bb: &Pooled<BasicBlock>) {
@@ -800,7 +808,7 @@ impl CoroFrameAnalyser {
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
             let token = frame_builder.token;
-            println!("Token {}, Visit noderef {:?} : {:?}", token, visit_state.present.0, instruction);
+            // println!("Token {}, Visit noderef {:?} : {:?}", token, visit_state.present.0, instruction);
 
             match instruction {
                 Instruction::Buffer

@@ -612,6 +612,7 @@ const CallExpr *FunctionBuilder::call(const Type *type, Function custom, luisa::
     }
     auto f = custom.builder();
     CallExpr::ArgumentList call_args(f->_arguments.size(), nullptr);
+    LUISA_INFO_WITH_LOCATION("Args count: {} ?= {}", args.size(), call_args.size());
     auto in_iter = args.begin();
     for (auto i = 0u; i < f->_arguments.size(); i++) {
         if (auto arg = f->_arguments[i]; arg.is_builtin()) {

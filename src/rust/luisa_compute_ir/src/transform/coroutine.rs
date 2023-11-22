@@ -180,7 +180,7 @@ impl SplitManager {
         for token in token_vec.iter() {
             let args = self.duplicate_args(*token, pools, &callable.args);
             let captures = self.duplicate_captures(*token, pools, &callable.captures);
-            let frame_vars = self.frame_analyser.frame_vars(*token);
+            let frame_vars = self.frame_analyser.input_vars(*token);
             self.coro_local_builder.insert(*token, IrBuilder::new(pools.clone()));
 
             let callable_info = self.coro_callable_info.entry(*token).or_default();
@@ -307,11 +307,16 @@ impl SplitManager {
         let builder = &mut scope_builder.builder;
         builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes()));   // TODO: for DEBUG
 
+        let output_vars = self.frame_analyser.output_vars(token, token_next);
+
         let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
-        if token_next & INVALID_FRAME_TOKEN_MASK == 0 {
+        let valid_token = token_next & INVALID_FRAME_TOKEN_MASK == 0;
+        if valid_token {
             let old2frame_index = &self.coro_callable_info.get(&token_next).unwrap().old2frame_index;
             // store frame state
-            for (old_node, index) in old2frame_index.iter() {
+            for old_node in output_vars.iter() {
+                let index = old2frame_index.get(old_node).unwrap();
+
                 let index_node = builder.const_(Const::Uint32(*index as u32));
                 // TODO: debug
                 if self.old2new.nodes.get(old_node) == None {
@@ -359,7 +364,7 @@ impl SplitManager {
             let mut node = visit_state.present.get();
             let type_ = &node.type_;
             let instruction = node.instruction.as_ref();
-            // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
+            println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, visit_state.present.0, instruction);
 
             match instruction {
                 // coroutine related instructions
@@ -961,8 +966,9 @@ impl SplitManager {
         dup_callable
     }
     fn duplicate_block(&mut self, frame_token: u32, pools: &CArc<ModulePools>, bb: &Pooled<BasicBlock>) -> Pooled<BasicBlock> {
-        assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
-                "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
+        // // FIXME: multiple duplication in loop transformation
+        // assert!(!self.old2new.blocks.entry(bb.as_ptr()).or_default().contains_key(&frame_token),
+        //         "Frame token {}, basic block {:?} has already been duplicated", frame_token, bb);
         let mut scope_builder = ScopeBuilder::new(frame_token, pools.clone());
         for node in bb.iter() {
             // println!("Token {}, Visit noderef {:?} : {:?}", scope_builder.token, node.0, node.get().instruction);

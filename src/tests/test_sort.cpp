@@ -41,8 +41,8 @@ int main(int argc, char *argv[]) {
     }
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream(StreamTag::COMPUTE);
-    constexpr auto n = 1024*1024*16u;
-    bool debug=1u;
+    constexpr auto n = 1024*1024*32u;
+    bool debug=0u;
 
     srand(288282);
     auto x_buffer = device.create_buffer<uint>(n);
@@ -50,20 +50,16 @@ int main(int argc, char *argv[]) {
     auto x_rank = luisa::vector<uint>(n,0u);
     auto x_bin = luisa::vector<uint>(DIGIT,0u);
     for(int i=0;i<n;++i) {
-        auto val = rand() % DIGIT;
+        auto val = rand();
         x_vec[i] = val;
         x_rank[i] = -1;
         //LUISA_INFO("x[{}]:{}",i,val);
-        x_bin[val]++;
-    }
-    for(int i=0;i<DIGIT;++i){
-        LUISA_INFO("x_bin[{}]:{}",i,x_bin[i]);
     }
     stream<<x_buffer.copy_from(x_vec.data());
     stream<<synchronize();
     eastl::sort(x_vec.begin(),x_vec.end());
     auto low_bit=0u;
-    auto high_bit=BIT-1;
+    auto high_bit=31;
     for(int i=low_bit;i<=high_bit;i+=BIT){
         bit_split.push_back(i);
     }
@@ -126,9 +122,10 @@ int main(int argc, char *argv[]) {
 
     };
     ExternalCallable<void()> thread_fence{"([] { __threadfence(); })"};
+    ExternalCallable<uint(uint)> match_any{"([](unsigned int x) { return __match_any_sync(0xffff'ffff,x); })"};
     uint ONESWEEP_TOT_BLOCK=ceil_div(n,ONESWEEP_BLOCK_SIZE*ONESWEEP_ITEM_COUNT);
     Kernel1D onesweep = [&](BufferUInt key_buffer, BufferUInt out_buffer, BufferUInt launch_counter, BufferUInt hist_buffer,
-                            BufferUInt rank, BufferUInt bin,UInt low_bit,UInt n){
+                            BufferUInt bin,UInt low_bit,UInt n){
         /// break_up:
         /// block(0,(warp(id=0,item=0)(0, 1, 2, ..., WARP_SIZE) warp(0,1) warp(0,2) ... | warp(1,0) ...| warp(2,0) ... | ...) block(1) block(2) ...
         set_block_size(ONESWEEP_BLOCK_SIZE);
@@ -138,6 +135,7 @@ int main(int argc, char *argv[]) {
         };
         Shared<uint> warp_prefix{ONESWEEP_BLOCK_SIZE/WARP_SIZE*DIGIT};
         Shared<uint> block_bin{DIGIT};
+        Shared<uint> local_rank{ONESWEEP_BLOCK_SIZE*ONESWEEP_ITEM_COUNT};
         warp_prefix[thread_x()]=0;
         $for(i,0u,ceil_div(ONESWEEP_BLOCK_SIZE/WARP_SIZE*DIGIT,ONESWEEP_BLOCK_SIZE)){
             $if(i*ONESWEEP_BLOCK_SIZE+thread_x()<ONESWEEP_BLOCK_SIZE/WARP_SIZE*DIGIT){
@@ -149,13 +147,16 @@ int main(int argc, char *argv[]) {
         ///get warp level prefix and rank(according to single digit)
         auto lane_id=thread_x()&WARP_MASK;
         auto warp_id=thread_x()>>WARP_LOG;
+        auto block_offset=bid*ONESWEEP_ITEM_COUNT*ONESWEEP_BLOCK_SIZE;
+        auto warp_offset=ONESWEEP_ITEM_COUNT*WARP_SIZE*warp_id;
         $for(i,0u,ONESWEEP_ITEM_COUNT){
-            auto read_pos=bid*ONESWEEP_ITEM_COUNT*ONESWEEP_BLOCK_SIZE+ONESWEEP_ITEM_COUNT*WARP_SIZE*warp_id+i*WARP_SIZE+lane_id;
+            auto read_pos=block_offset+warp_offset+i*WARP_SIZE+lane_id;
             auto key=get_key(key_buffer,read_pos);
             key=(key>>low_bit)&((1<<BIT)-1);
             auto prefix=def<uint>(0u);
             auto total=def<uint>(0u);
-            for(auto j=0u;j<WARP_SIZE;++j){///TODO: use match_any
+            ///general case function
+            /*for(auto j=0u;j<WARP_SIZE;++j){
                 auto x=warp_read_lane(key,j);
                 auto now_pre=warp_prefix_count_bits(key==x);
                 auto now_tot= warp_active_count_bits(key==x);
@@ -163,25 +164,16 @@ int main(int argc, char *argv[]) {
                     prefix=now_pre;
                     total=now_tot;
                 };
-            }
-            /*for(auto j=0u;j<WARP_LOG;++j){
-                auto pre_key=warp_read_lane(key,lane_id^(1<<j));
-                auto pre_pre=warp_read_lane(prefix,lane_id^(1<<j));
-                auto pre_tot=warp_read_lane(total,lane_id^(1<<j));
-                $if(pre_key==key) {
-                    $if(lane_id >= (1 << j)){
-                        prefix += pre_pre;
-                    };
-                    total+=pre_tot;
-                };
-
             }*/
+            auto matched=match_any(key);
+            prefix=popcount(matched&((1u<<lane_id)-1));
+            total=popcount(matched);
             auto warp_pre=warp_prefix[warp_id*DIGIT+key];
             $if(prefix==0u){
                 warp_prefix[warp_id*DIGIT+key]=warp_pre+total;
             };
             $if(read_pos<n) {
-                rank.write(read_pos, prefix + warp_pre);
+                local_rank[warp_offset+i*WARP_SIZE+lane_id]= prefix + warp_pre;
             };
         };
         sync_block();
@@ -217,11 +209,11 @@ int main(int argc, char *argv[]) {
         sync_block();
         //get final rank
         $for(i,0u,ONESWEEP_ITEM_COUNT){
-            auto read_pos=bid*ONESWEEP_ITEM_COUNT*ONESWEEP_BLOCK_SIZE+ONESWEEP_ITEM_COUNT*WARP_SIZE*warp_id+i*WARP_SIZE+lane_id;
+            auto read_pos=block_offset+warp_offset+i*WARP_SIZE+lane_id;
             $if(read_pos<n) {
-                auto warp_rank=rank.read(read_pos);
-                auto key=get_key(key_buffer,read_pos);
-                key=(key>>low_bit)&((1<<BIT)-1);
+                UInt warp_rank=local_rank[warp_offset+i*WARP_SIZE+lane_id];
+                auto val=get_key(key_buffer,read_pos);
+                auto key=(val>>low_bit)&((1<<BIT)-1);
                 warp_rank+=warp_prefix[warp_id*DIGIT+key];//offset between warp in a block
                 warp_rank+=block_bin[key];//offset between block in global
                 warp_rank+=hist_buffer.read(key);//offset between digits
@@ -230,10 +222,10 @@ int main(int argc, char *argv[]) {
                         device_log("bid:{}, warp_id:{}, lane_id:{}:rank out of bounds!",bid,warp_id,lane_id);
                         $continue;
                     };
-                    out_buffer.write(warp_rank, key);
+                    out_buffer.write(warp_rank, val);
                 }
                 else {
-                    out_buffer.write(warp_rank, key);
+                    out_buffer.write(warp_rank, val);
                 }
             };
         };
@@ -253,22 +245,28 @@ int main(int argc, char *argv[]) {
     Clock clock;
     stream<<synchronize();
     clock.tic();
-    stream<<clear_shader(launch_count).dispatch(1u);
-    if(thread_count>=n){
-        stream<<hist_shader(x_buffer,hist_buffer,1,n).dispatch(ceil_div(n,HIST_BLOCK_SIZE)*HIST_BLOCK_SIZE);
+    Buffer<uint> *x_in = &x_buffer;
+    Buffer<uint> *x_out = &key_out;
+    uint test_case=1000;
+    for(int i=1;i<=test_case;++i) {
+        stream << clear_shader(hist_buffer).dispatch(HIST_GROUP * DIGIT);
+        if (thread_count >= n) {
+            stream << hist_shader(x_buffer, hist_buffer, 1, n).dispatch(ceil_div(n, HIST_BLOCK_SIZE) * HIST_BLOCK_SIZE);
+        } else {
+            stream << hist_shader(x_buffer, hist_buffer, ceil_div(n, SM_COUNT * HIST_BLOCK_SIZE), n).dispatch(SM_COUNT * HIST_BLOCK_SIZE);
+        }
+        stream << accum_shader(hist_buffer).dispatch(HIST_GROUP * 32);
+        for (int i = 0; i < HIST_GROUP; ++i) {
+            stream << clear_shader(launch_count).dispatch(1u);
+            stream << clear_shader(bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
+            stream << onesweep_shader(*x_in, *x_out, launch_count, hist_buffer.view(i * DIGIT, DIGIT), bin_buffer, bit_split[i], n).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
+            std::swap(x_in, x_out);
+        }
+        stream << synchronize();
     }
-    else{
-        stream<<hist_shader(x_buffer,hist_buffer,ceil_div(n,SM_COUNT*HIST_BLOCK_SIZE),n).dispatch(SM_COUNT*HIST_BLOCK_SIZE);
-    }
-    stream<< accum_shader(hist_buffer).dispatch(HIST_GROUP*32);
-    stream<< clear_shader(bin_buffer).dispatch(ceil_div(n,ONESWEEP_BLOCK_SIZE*ONESWEEP_ITEM_COUNT)*DIGIT);
-    for(int i=0;i<HIST_GROUP;++i){
-        stream<<onesweep_shader(x_buffer,key_out, launch_count,hist_buffer.view(i*DIGIT,DIGIT),rank,bin_buffer,bit_split[i],n).dispatch(ceil_div(n,ONESWEEP_BLOCK_SIZE*ONESWEEP_ITEM_COUNT)*ONESWEEP_BLOCK_SIZE);
-    }
-    stream<<synchronize();
     auto gpu_time=clock.toc();
-    LUISA_INFO("sort total {} token with bit [{},{}] used {} ms", n, low_bit, high_bit,gpu_time);
-    stream<<key_out.copy_to(x_rank.data());
+    LUISA_INFO("sort total {} token for {} times with bit [{},{}] used {} ms. Performance: {} G token/s", n, test_case, low_bit, high_bit,gpu_time, (double)n*test_case/gpu_time*1000/1024/1024/1024);
+    stream<<x_in->copy_to(x_rank.data());
     stream<<synchronize();
     int pre=0;
     /*
@@ -277,7 +275,7 @@ int main(int argc, char *argv[]) {
     }
     printf("\n");
     for(int i=0;i<n;++i){
-        printf("%u ",x_vec[i]);
+printf("%u ",x_vec[i]);
     }
     printf("\n");
     */
@@ -286,4 +284,5 @@ int main(int argc, char *argv[]) {
         LUISA_ASSERT(pre<=x_rank[i],"sort failed at:{},pre:{},cur:{}",i,pre,x_rank[i]);
         pre=x_rank[i];
     }
+    LUISA_INFO("verified, same as eastl::sort!");
 }

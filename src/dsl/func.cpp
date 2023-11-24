@@ -21,6 +21,7 @@ void perform_autodiff_transform(M *m) noexcept {
 void perform_coroutine_transform(ir::CallableModule *m) noexcept {
     auto coroutine_pipeline = ir::luisa_compute_ir_transform_pipeline_new();
     ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "canonicalize_control_flow");
+    //    ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "reg2mem");
     ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "coroutine");
     auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform_callable(coroutine_pipeline, *m);
     ir::luisa_compute_ir_transform_pipeline_destroy(coroutine_pipeline);
@@ -82,6 +83,49 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
         LUISA_VERBOSE_WITH_LOCATION("Performing Coroutine transform "
                                     "on function with hash {:016x}.",
                                     function.hash());
+
+        auto make_wrapper = [&](const FunctionBuilder *sub) noexcept {
+            return FunctionBuilder::define_callable([&] {
+                luisa::vector<const Expression *> args;
+                args.reserve(function.arguments().size());
+                LUISA_ASSERT(function.arguments().size() == function.bound_arguments().size(),
+                             "Invalid capture list size (expected {}, got {}).",
+                             function.arguments().size(), function.bound_arguments().size());
+                auto fb = FunctionBuilder::current();
+                for (auto arg_i = 0u; arg_i < function.arguments().size(); arg_i++) {
+                    auto def_arg = function.arguments()[arg_i];
+                    auto internal_arg = luisa::visit(
+                        [&](auto b) noexcept -> const Expression * {
+                            using T = std::decay_t<decltype(b)>;
+                            if constexpr (std::is_same_v<T, Function::BufferBinding>) {
+                                return fb->buffer_binding(def_arg.type(), b.handle, b.offset, b.size);
+                            } else if constexpr (std::is_same_v<T, Function::TextureBinding>) {
+                                return fb->texture_binding(def_arg.type(), b.handle, b.level);
+                            } else if constexpr (std::is_same_v<T, Function::BindlessArrayBinding>) {
+                                return fb->bindless_array_binding(b.handle);
+                            } else if constexpr (std::is_same_v<T, Function::AccelBinding>) {
+                                return fb->accel_binding(b.handle);
+                            } else {
+                                static_assert(std::is_same_v<T, luisa::monostate>);
+                                switch (def_arg.tag()) {
+                                    case Variable::Tag::REFERENCE: return fb->reference(def_arg.type());
+                                    case Variable::Tag::BUFFER: return fb->buffer(def_arg.type());
+                                    case Variable::Tag::TEXTURE: return fb->texture(def_arg.type());
+                                    case Variable::Tag::BINDLESS_ARRAY: return fb->bindless_array();
+                                    case Variable::Tag::ACCEL: return fb->accel();
+                                    default: /* value argument */ return fb->argument(def_arg.type());
+                                }
+                            }
+                        },
+                        function.bound_arguments()[arg_i]);
+                    args.emplace_back(internal_arg);
+                }
+                LUISA_ASSERT(sub->return_type() == nullptr,
+                             "Coroutine subroutines should not have return type.");
+                fb->call(sub->function(), args);
+            });
+        };
+
         //idea: send in function-> module with .subroutine-> seperate transform to callable-> register to coroutine
         luisa::shared_ptr<const FunctionBuilder> converted;
         auto m = AST2IR::build_coroutine(function);
@@ -96,13 +140,14 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
         for (int i = 0; i < subroutines.len; ++i) {
             auto sub = IR2AST::build(subroutines.ptr[i]._0.get());
             const_cast<FunctionBuilder *>(sub.get())->coroframe_replace(corotype);
-            sub_builders.insert(std::make_pair(subroutine_ids.ptr[i], sub));
+            auto wrapper = make_wrapper(sub.get());
+            sub_builders.insert(std::make_pair(subroutine_ids.ptr[i], wrapper));
         }
         LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
                                     "kernel with hash {:016x}. "
                                     "Coroutine transform is done.",
                                     function.hash());
-        return converted;
+        return make_wrapper(converted.get());
 #endif
     }
     return function.shared_builder();

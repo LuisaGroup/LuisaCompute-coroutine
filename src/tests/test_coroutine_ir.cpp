@@ -73,17 +73,30 @@ int main(int argc, char *argv[]) {
         auto coro_id_ = coro_id().x;
         auto a = def(0u);
         $for (i, 2u) {
-            a = 1u;
             $suspend("1");
+            x_buffer.write(coro_id_, coro_id_);
 
-            $if (i == 0u) {
-                $break;
-            };
+            a = 234u;
+            // $suspend("2");
+            //
+            // $if (i == 0u) {
+            //     $break;
+            // };
+            //
+             $suspend("3");
 
-            $suspend("2");
-
-            x_buffer.write(coro_id_, a);
+             x_buffer.write(coro_id_, a);
         };
+
+        //        auto coro_id_ = coro_id().x;
+        //        UInt a;
+        //        $for (i, 2u) {
+        //            a = def(0u);
+        //            $suspend("1");
+        //
+        //            $suspend("2");
+        //            x_buffer.write(coro_id_, a);
+        //        };
     };
     //    now:
     //    $for (i, 2u) {
@@ -113,7 +126,8 @@ int main(int argc, char *argv[]) {
         x_buffer.write(id_x, id_x);
         auto frame = frame_buffer->read(id_x);
         initialize_coroframe(frame, id);
-        device_log("id = {}, coro_frame = {}", id, frame);
+        auto token = read_promise<uint>(frame, "coro_token");
+        device_log("id = {}, coro_token = {}, coro_frame = {}", id, token, frame);
         coro(frame, x_buffer);
         frame_buffer->write(id_x, frame);
     };
@@ -122,7 +136,7 @@ int main(int argc, char *argv[]) {
         auto id = dispatch_x();
         auto frame = frame_buffer->read(id);
         auto token = read_promise<uint>(frame, "coro_token");
-        device_log("id = {}, coro_token = {}", id, token);
+        device_log("id = {}, coro_token = {}, coro_frame = {}", id, token, frame);
         $switch (token) {
             for (int i = 1; i <= coro.suspend_count(); ++i) {
                 $case (i) {

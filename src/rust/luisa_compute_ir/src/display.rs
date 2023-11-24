@@ -7,7 +7,7 @@ use crate::{
     },
     Pooled,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 
 pub struct DisplayIR {
@@ -39,6 +39,11 @@ impl DisplayIR {
 
     pub fn var_str(&mut self, node: &NodeRef) -> String {
         format!("${}", self.get(node))
+    }
+    pub fn vars_str(&mut self, nodes: &HashSet<NodeRef>) -> String {
+        let nodes = BTreeSet::from_iter(nodes.iter().map(|node| self.get(node)));
+        let nodes: Vec<_> = nodes.iter().map(|node| format!("${}", node)).collect();
+        format!("{{{}}}", nodes.join(", "))
     }
 
     pub fn var_str_or_insert(&mut self, node: &NodeRef) -> String {
@@ -221,10 +226,9 @@ impl DisplayIR {
                 self.output += temp.as_str();
             }
             Instruction::Argument { by_value } => {
-                let temp = format!("${}", self.get_or_insert(&node));
                 let by_value_prefix = if *by_value { "" } else { "&" };
-                self.output += by_value_prefix;
-                self.output += temp.as_str();
+                let var = format!("${}", self.get_or_insert(&node));
+                self.output += &format!("{}: {}{} [Argument]", var, by_value_prefix, type_);
             }
             Instruction::UserData(_) => self.output += "Userdata",
             Instruction::Invalid => self.output += "INVALID",

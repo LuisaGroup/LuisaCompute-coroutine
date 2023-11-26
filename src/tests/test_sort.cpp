@@ -23,6 +23,8 @@ Buffer<uint> bin_buffer;
 Buffer<uint> launch_count;
 luisa::vector<uint> bit_split;
 Buffer<uint> rank;
+Buffer<uint> order_in;
+Buffer<uint> order_out;
 Buffer<uint> key_out;
 Buffer<uint> guard;
 const uint BIN_LOCAL_MASK = 0x4000'0000;
@@ -40,7 +42,7 @@ int main(int argc, char *argv[]) {
     }
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream(StreamTag::COMPUTE);
-    constexpr auto n = 1024 * 1024 * 32u;
+    constexpr auto n = 1024 * 1024;
     bool debug = 0u;
 
     srand(288282);
@@ -69,7 +71,10 @@ int main(int argc, char *argv[]) {
     rank = device.create_buffer<uint>(n);
     key_out = device.create_buffer<uint>(n);
     guard = device.create_buffer<uint>(n);
-    Callable get_key = [&](BufferUInt key, UInt i) {
+    order_in = device.create_buffer<uint>(n);
+    order_out = device.create_buffer<uint>(n);
+    uint test_case = 1000;
+    /*Callable get_key = [&](BufferUInt key, UInt i) {
         auto ret = def<uint>(0);
         $if (i < n) {
             ret = key.read(i);
@@ -153,16 +158,6 @@ int main(int argc, char *argv[]) {
             key = (key >> low_bit) & ((1 << BIT) - 1);
             auto prefix = def<uint>(0u);
             auto total = def<uint>(0u);
-            ///general case function
-            /*for(auto j=0u;j<WARP_SIZE;++j){
-                auto x=warp_read_lane(key,j);
-                auto now_pre=warp_prefix_count_bits(key==x);
-                auto now_tot= warp_active_count_bits(key==x);
-                $if(j==lane_id){
-                    prefix=now_pre;
-                    total=now_tot;
-                };
-            }*/
             auto matched = match_any(key);
             prefix = popcount(matched & ((1u << lane_id) - 1));
             total = popcount(matched);
@@ -244,7 +239,6 @@ int main(int argc, char *argv[]) {
     clock.tic();
     Buffer<uint> *x_in = &x_buffer;
     Buffer<uint> *x_out = &key_out;
-    uint test_case = 1000;
     for (int i = 1; i <= test_case; ++i) {
         stream << clear_shader(hist_buffer).dispatch(HIST_GROUP * DIGIT);
         if (thread_count >= n) {
@@ -263,7 +257,23 @@ int main(int argc, char *argv[]) {
     }
     auto gpu_time = clock.toc();
     LUISA_INFO("sort total {} token for {} times with bit [{},{}] used {} ms. Performance: {} G token/s", n, test_case, low_bit, high_bit, gpu_time, (double)n * test_case / gpu_time * 1000 / 1024 / 1024 / 1024);
-    stream << x_in->copy_to(x_rank.data());
+    stream << x_in->copy_to(x_rank.data());*/
+    Callable get_x = [&](UInt index) {
+        return x_buffer->read(index);
+    };
+    Callable id = [&](UInt index) {
+        return index;
+    };
+    auto sort_instance = radix_sort(device, n, &get_x, &id);
+    Clock clock;
+    stream << synchronize();
+    clock.tic();
+    for (int i = 0; i < test_case; ++i) {
+        sort_instance.sort(stream, order_in, rank, key_out, order_out, n);
+    }
+    auto gpu_time = clock.toc();
+    LUISA_INFO("sort total {} token for {} times with bit [{},{}] used {} ms. Performance: {} G token/s", n, test_case, low_bit, high_bit, gpu_time, (double)n * test_case / gpu_time * 1000 / 1024 / 1024 / 1024);
+    stream << key_out.copy_to(x_rank.data());
     stream << synchronize();
     int pre = 0;
     /*

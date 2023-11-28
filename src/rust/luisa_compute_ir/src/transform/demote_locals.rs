@@ -50,6 +50,11 @@ impl VariablePropagator {
     }
 
     fn propagate_node(node: &NodeRef, vars: &mut HashSet<NodeRef>, is_referenced: bool) {
+        macro_rules! check_not_local {
+            ($node: expr) => {
+                assert!(!$node.is_local(), "local variable not loaded");
+            };
+        }
         match node.get().instruction.as_ref() {
             Instruction::Buffer => {}
             Instruction::Bindless => {}
@@ -62,7 +67,7 @@ impl VariablePropagator {
                 if is_referenced {
                     vars.insert(node.clone());
                 } else {
-                    assert!(init.valid() && !init.is_local());
+                    check_not_local!(init);
                 }
             }
             Instruction::Argument { .. } => {}
@@ -71,7 +76,7 @@ impl VariablePropagator {
             Instruction::Const(_) => {}
             Instruction::Update { var, value } => {
                 Self::propagate_node(var, vars, true);
-                assert!(value.valid() && !value.is_local());
+                check_not_local!(value);
             }
             Instruction::Call(_, args) => {
                 for arg in args.iter() {
@@ -80,21 +85,21 @@ impl VariablePropagator {
             }
             Instruction::Phi(_) => panic!("phi node not supported"),
             Instruction::Return(value) => {
-                assert!(!value.valid() || !value.is_local());
+                check_not_local!(value);
             }
             Instruction::Loop { cond, .. } => {
-                assert!(cond.valid() && !cond.is_local());
+                check_not_local!(cond);
             }
             Instruction::GenericLoop { cond, .. } => {
-                assert!(cond.valid() && !cond.is_local());
+                check_not_local!(cond);
             }
             Instruction::Break => {}
             Instruction::Continue => {}
             Instruction::If { cond, .. } => {
-                assert!(cond.valid() && !cond.is_local());
+                check_not_local!(cond);
             }
             Instruction::Switch { value, .. } => {
-                assert!(value.valid() && !value.is_local());
+                check_not_local!(value);
             }
             Instruction::AdScope { .. } => {}
             Instruction::RayQuery { ray_query, .. } => {
@@ -111,7 +116,7 @@ impl VariablePropagator {
             Instruction::CoroSuspend { .. } => {}
             Instruction::CoroResume { .. } => {}
             Instruction::CoroRegister { value, .. } => {
-                assert!(value.valid() && !value.is_local());
+                check_not_local!(value);
             }
         }
     }

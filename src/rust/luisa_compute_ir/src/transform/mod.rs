@@ -12,10 +12,14 @@ pub mod reg2mem;
 use bitflags::Flags;
 
 pub mod coroutine;
+
 pub mod extract_loop_cond;
+
+pub mod demote_locals;
+
 pub mod inliner;
 
-use crate::ir::{self, ModuleFlags, CallableModule, Module, KernelModule};
+use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
 
 pub trait Transform {
     fn transform_module(&self, module: Module) -> Module {

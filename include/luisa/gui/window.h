@@ -26,9 +26,9 @@ private:
     uint2 _size;
 
 public:
-    Window(string name, uint width, uint height) noexcept;
-    Window(string name, uint2 size) noexcept
-        : Window{std::move(name), size.x, size.y} {}
+    Window(string name, uint width, uint height, bool resizable = false) noexcept;
+    Window(string name, uint2 size, bool resizable = false) noexcept
+        : Window{std::move(name), size.x, size.y, resizable} {}
     ~Window() noexcept;
     Window(const Window &) = delete;
     Window(Window &&) = default;
@@ -37,7 +37,7 @@ public:
 
     [[nodiscard]] uint64_t native_handle() const noexcept;
     [[nodiscard]] bool should_close() const noexcept;
-    void set_should_close(bool should_close) noexcept;
+    void set_should_close(bool should_close = true) noexcept;
     [[nodiscard]] auto size() const noexcept { return _size; }
     [[nodiscard]] auto name() const noexcept { return string_view{_name}; }
 

@@ -357,8 +357,6 @@ class CallableLibrary;
  * @brief Set of call operations.
  * 
  */
-class CallableLibrary;
-
 class LC_AST_API CallOpSet {
 
     friend class CallableLibrary;
@@ -388,7 +386,7 @@ private:
     Bitset _bits;
 
 public:
-    CallOpSet() noexcept = default;
+    CallOpSet() noexcept : _bits{0} {}
     ~CallOpSet() noexcept = default;
     /// Mark given CallOp
     void mark(CallOp op) noexcept { _bits.set(to_underlying(op)); }

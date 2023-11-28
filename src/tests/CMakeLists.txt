@@ -14,9 +14,9 @@ endfunction()
 
 luisa_compute_test_suite(feat)
 
-file(GLOB_RECURSE test_all_source next/test/**.cpp)
-luisa_compute_add_executable(test_all ${test_common_source} ${test_all_source})
-target_include_directories(test_all PRIVATE ./)
+#file(GLOB_RECURSE test_all_source next/test/**.cpp)
+#luisa_compute_add_executable(test_all ${test_common_source} ${test_all_source})
+#target_include_directories(test_all PRIVATE ./)
 
 luisa_compute_add_executable(test_main
         common/test_main.cpp
@@ -91,6 +91,7 @@ luisa_compute_add_executable(test_soa_simple test_soa_simple.cpp)
 luisa_compute_add_executable(test_raytracing_weekend test_raytracing_weekend/main.cpp)
 luisa_compute_add_executable(test_dml test_dml.cpp)
 luisa_compute_add_executable(test_oso_parser test_oso_parser.cpp)
+luisa_compute_add_executable(test_cuda_dx_interop test_cuda_dx_interop.cpp)
 luisa_compute_add_executable(test_sort test_sort.cpp)
 
 if (LUISA_COMPUTE_ENABLE_GUI)
@@ -105,15 +106,23 @@ if (LUISA_COMPUTE_ENABLE_GUI)
     luisa_compute_add_executable(test_path_tracing_nested_callable test_path_tracing_nested_callable.cpp)
     luisa_compute_add_executable(test_denoiser test_denoiser.cpp)
     luisa_compute_add_executable(test_path_tracing_cutout test_path_tracing_cutout.cpp)
+    luisa_compute_add_executable(test_curve test_curve.cpp)
+    luisa_compute_add_executable(test_curve_pbrt test_curve_pbrt.cpp)
+    luisa_compute_add_executable(test_curve_pbrt_diffuse test_curve_pbrt_diffuse.cpp)
     luisa_compute_add_executable(test_normal_encoding test_normal_encoding.cpp)
     luisa_compute_add_executable(test_mpm88 test_mpm88.cpp)
     luisa_compute_add_executable(test_mpm3d test_mpm3d.cpp)
     luisa_compute_add_executable(test_shader_visuals_present test_shader_visuals_present.cpp)
     luisa_compute_add_executable(test_texture3d test_texture3d.cpp)
+    luisa_compute_add_executable(test_imgui test_imgui.cpp)
 endif ()
 
-if (LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
-    luisa_compute_add_executable(test_cuda_lcub test_cuda_lcub.cpp)
+if (LUISA_COMPUTE_ENABLE_CUDA AND LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
+    find_package(CUDAToolkit QUIET)
+    if (CUDAToolkit_FOUND)
+        luisa_compute_add_executable(test_cuda_lcub test_cuda_lcub.cpp)
+        target_link_libraries(test_cuda_lcub PUBLIC CUDA::cudart CUDA::cuda_driver)
+    endif ()
 endif ()
 
 # GUI interaction with wxWidgets

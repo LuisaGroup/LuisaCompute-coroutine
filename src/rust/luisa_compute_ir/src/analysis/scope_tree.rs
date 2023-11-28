@@ -6,18 +6,18 @@ use crate::ir::{BasicBlock, Instruction, Module, ModulePools, NodeRef, INVALID_R
 use crate::{CArc, Pooled};
 
 pub struct ScopeTreeNode {
-    node: NodeRef, // INVALID_REF for the root node
-    blocks: Vec<ScopeTreeBlock>,
+    pub node: NodeRef, // INVALID_REF for the root node
+    pub blocks: Vec<ScopeTreeBlock>,
 }
 
 pub struct ScopeTreeBlock {
-    block: Pooled<BasicBlock>,
-    children: Vec<usize>, // indices into the tree nodes
+    pub block: Pooled<BasicBlock>,
+    pub children: Vec<usize>, // indices into the tree nodes
 }
 
 pub struct ScopeTree {
-    pools: CArc<ModulePools>,
-    nodes: Vec<ScopeTreeNode>,
+    pub pools: CArc<ModulePools>,
+    pub nodes: Vec<ScopeTreeNode>,
 }
 
 struct ScopeTreeBuilder;
@@ -96,7 +96,7 @@ impl ScopeTreeBuilder {
         }
     }
 
-    pub fn build(module: &Pooled<Module>) -> ScopeTree {
+    pub fn build(module: &Module) -> ScopeTree {
         let mut tree = ScopeTree {
             pools: module.pools.clone(),
             nodes: vec![ScopeTreeNode {
@@ -110,7 +110,7 @@ impl ScopeTreeBuilder {
 }
 
 impl ScopeTree {
-    pub fn from(module: &Pooled<Module>) -> ScopeTree {
+    pub fn from(module: &Module) -> ScopeTree {
         ScopeTreeBuilder::build(module)
     }
 

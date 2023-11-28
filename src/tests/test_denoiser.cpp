@@ -169,8 +169,9 @@ int main(int argc, char *argv[]) {
         return pdf_a / max(pdf_a + pdf_b, 1e-4f);
     };
 
-    auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 64u;
+    constexpr auto spp_per_dispatch = 1u;
 
+    // Note: we disable NEE to deliberately introduce noise
     Kernel2D raytracing_kernel = [&](ImageFloat image, ImageFloat albedo_img, ImageFloat normal_img, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
         set_block_size(16u, 16u, 1u);
         UInt2 coord = dispatch_id().xy();
@@ -192,14 +193,14 @@ int main(int argc, char *argv[]) {
             Float3 light_normal = normalize(cross(light_u, light_v));
             $for (depth, 10u) {
                 // trace
-                Var<TriangleHit> hit = accel.trace_closest(ray);
+                Var<TriangleHit> hit = accel.intersect(ray, {});
                 reorder_shader_execution();
                 $if (hit->miss()) { $break; };
                 Var<Triangle> triangle = heap->buffer<Triangle>(hit.inst).read(hit.prim);
                 Float3 p0 = vertex_buffer->read(triangle.i0);
                 Float3 p1 = vertex_buffer->read(triangle.i1);
                 Float3 p2 = vertex_buffer->read(triangle.i2);
-                Float3 p = hit->interpolate(p0, p1, p2);
+                Float3 p = triangle_interpolate(hit.bary, p0, p1, p2);
                 Float3 n = normalize(cross(p1 - p0, p2 - p0));
                 $if (depth == 0) {
                     albedo_img.write(coord, make_float4(materials.read(hit.inst), 1.0f));
@@ -231,7 +232,7 @@ int main(int argc, char *argv[]) {
                 Float d_light = distance(pp, pp_light);
                 Float3 wi_light = normalize(pp_light - pp);
                 Var<Ray> shadow_ray = make_ray(offset_ray_origin(pp, n), wi_light, 0.f, d_light);
-                Bool occluded = accel.trace_any(shadow_ray);
+                Bool occluded = accel.intersect_any(shadow_ray, {});
                 Float cos_wi_light = dot(wi_light, n);
                 Float cos_light = -dot(light_normal, wi_light);
                 Float3 albedo = materials.read(hit.inst);
@@ -287,9 +288,20 @@ int main(int argc, char *argv[]) {
         image.write(dispatch_id().xy(), make_float4(0.0f));
     };
 
-    Kernel2D hdr2ldr_kernel = [&](ImageFloat hdr_image, ImageFloat ldr_image, Float scale, Bool is_hdr) noexcept {
+    Kernel2D hdr2ldr_kernel = [&](UInt compare_x,
+                                  ImageFloat noisy_hdr_image,
+                                  ImageFloat denoised_hdr_image,
+                                  ImageFloat ldr_image,
+                                  Float scale, Bool is_hdr) noexcept {
         UInt2 coord = dispatch_id().xy();
-        Float4 hdr = hdr_image.read(coord);
+        Float4 hdr;
+        $if (coord.x < compare_x) {
+            hdr = noisy_hdr_image.read(coord);
+        } $elif (coord.x == compare_x) {
+            hdr = make_float4(.2f);
+        } $else {
+            hdr = denoised_hdr_image.read(coord);
+        };
         Float3 ldr = hdr.xyz() * scale;
         $if (!is_hdr) {
             ldr = linear_to_srgb(ldr);
@@ -298,18 +310,12 @@ int main(int argc, char *argv[]) {
     };
 
     ShaderOption o{.enable_debug_info = false};
-    o.name = "clear";
-    Shader2D<Image<float>> clear_shader = device.compile(clear_kernel, o);
-    o.name = "hdr2ldr";
-    Shader2D<Image<float>, Image<float>, float, bool> hdr2ldr_shader = device.compile(hdr2ldr_kernel, o);
-    o.name = "accumulate";
-    Shader2D<Image<float>, Image<float>> accumulate_shader = device.compile(accumulate_kernel, o);
-    o.name = "raytracing";
-    Shader2D<Image<float>, Image<float>, Image<float>, Image<uint>, Accel, uint2> raytracing_shader = device.compile(raytracing_kernel, o);
-    o.name = "make_sampler";
-    Shader2D<Image<uint>> make_sampler_shader = device.compile(make_sampler_kernel, o);
-    o.name = "noisy_image";
-    Shader2D<Image<float>, Image<float>> noisy_image_shader = device.compile(noisy_image_kernel, o);
+    auto clear_shader = device.compile(clear_kernel, o);
+    auto hdr2ldr_shader = device.compile(hdr2ldr_kernel, o);
+    auto accumulate_shader = device.compile(accumulate_kernel, o);
+    auto raytracing_shader = device.compile(raytracing_kernel, o);
+    auto make_sampler_shader = device.compile(make_sampler_kernel, o);
+    auto noisy_image_shader = device.compile(noisy_image_kernel, o);
 
     static constexpr uint2 resolution = make_uint2(1024u);
     Image<float> framebuffer = device.create_image<float>(PixelStorage::HALF4, resolution);
@@ -338,12 +344,15 @@ int main(int argc, char *argv[]) {
     }
 
     luisa::vector<std::array<uint8_t, 4u>> host_image(resolution.x * resolution.y);
-    CommandList cmd_list;
     Image<uint> seed_image = device.create_image<uint>(PixelStorage::INT1, resolution);
-    cmd_list << clear_shader(accum_image).dispatch(resolution)
-             << make_sampler_shader(seed_image).dispatch(resolution);
+    stream << clear_shader(accum_image).dispatch(resolution)
+           << make_sampler_shader(seed_image).dispatch(resolution);
 
     Window window{"path tracing", resolution};
+    auto compare_x = resolution.x / 2u;
+    window.set_mouse_callback([&compare_x](MouseButton, Action a, float2 p) noexcept {
+        compare_x = static_cast<uint>(std::clamp(p.x, 0.f, static_cast<float>(resolution.x)));
+    });
     Swapchain swap_chain{device.create_swapchain(
         window.native_handle(),
         stream,
@@ -355,20 +364,20 @@ int main(int argc, char *argv[]) {
     Clock clock;
 
     while (!window.should_close()) {
-        cmd_list << raytracing_shader(framebuffer, albedo_image, normal_image, seed_image, accel, resolution)
-                        .dispatch(resolution)
-                 << accumulate_shader(accum_image, framebuffer)
-                        .dispatch(resolution)
-                 << noisy_image_shader(noisy_image, accum_image)
-                        .dispatch(resolution)
-                 << noisy_image.copy_to(color_buf)
-                 << albedo_image.copy_to(albedo_buf)
-                 << normal_image.copy_to(normal_buf);
+        stream << raytracing_shader(framebuffer, albedo_image, normal_image, seed_image, accel, resolution)
+                      .dispatch(resolution)
+               << accumulate_shader(accum_image, framebuffer)
+                      .dispatch(resolution)
+               << noisy_image_shader(noisy_image, accum_image)
+                      .dispatch(resolution)
+               << noisy_image.copy_to(color_buf)
+               << albedo_image.copy_to(albedo_buf)
+               << normal_image.copy_to(normal_buf);
         denoiser->execute(true);
-        cmd_list
-            << beauty_image.copy_from(output_buf)
-            << hdr2ldr_shader(beauty_image, ldr_image, 1.0f, swap_chain.backend_storage() != PixelStorage::BYTE4).dispatch(resolution);
-        stream << cmd_list.commit()
+        stream << beauty_image.copy_from(output_buf)
+               << hdr2ldr_shader(compare_x, noisy_image, beauty_image, ldr_image, 1.0f,
+                                 swap_chain.backend_storage() != PixelStorage::BYTE4)
+                      .dispatch(resolution)
                << swap_chain.present(ldr_image) << synchronize();
         window.poll_events();
         double dt = clock.toc() - last_time;

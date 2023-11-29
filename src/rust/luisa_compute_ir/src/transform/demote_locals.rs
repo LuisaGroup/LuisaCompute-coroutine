@@ -17,8 +17,9 @@
 
 use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
 use crate::ir::debug::dump_ir_human_readable;
-use crate::ir::{BasicBlock, Instruction, Module, NodeRef};
+use crate::ir::{BasicBlock, Instruction, IrBuilder, Module, NodeRef};
 use crate::transform::Transform;
+use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};
 
 pub struct DemoteLocals;
@@ -78,6 +79,11 @@ impl VariablePropagator {
             ancestor_direct_refs.extend(&collection.direct_refs);
             // traverse children
             for &i in tree_block.children.iter() {
+                let mut builder = IrBuilder::new(tree.pools.clone());
+                builder.set_insert_point(tree.nodes[i].node.get().prev);
+                builder.comment(CBoxedSlice::from(
+                    format!("ScopeTree Node {}", i).to_string(),
+                ));
                 for child in tree.nodes[i].blocks.iter() {
                     Self::propagate_block(tree, child, &ancestor_direct_refs, propagation);
                     // merge propagated_refs
@@ -122,7 +128,7 @@ impl VariablePropagator {
                     if !ancestor_direct_refs.contains(node) {
                         direct_refs.insert(node.clone());
                         let index = propagation.indices.len();
-                        propagation.indices.get(&node).get_or_insert(&index);
+                        propagation.indices.entry(node.clone()).or_insert(index);
                     }
                 } else {
                     check_not_local!(init);
@@ -325,33 +331,27 @@ impl<'a> VariableDemoter<'a> {
 }
 
 impl DemoteLocals {
-    fn find_unused_locals_in_block(
+    fn collect_locals_in_block(
         tree: &ScopeTree,
         tree_block: &ScopeTreeBlock,
-        referenced: &HashMap<NodeRef, usize>,
-        unused: &mut HashSet<NodeRef>,
+        locals: &mut HashSet<NodeRef>,
     ) {
-        unused.extend(
-            tree_block
-                .block
-                .iter()
-                .filter(|node| node.is_local() && !referenced.contains_key(node)),
-        );
+        locals.extend(tree_block.block.iter().filter(|node| node.is_local()));
         for &i in tree_block.children.iter() {
-            for child in tree.nodes[i].blocks.iter() {
-                Self::find_unused_locals_in_block(tree, child, referenced, unused);
+            let child_tree_node = &tree.nodes[i];
+            for child_tree_block in child_tree_node.blocks.iter() {
+                Self::collect_locals_in_block(tree, child_tree_block, locals);
             }
         }
     }
 
-    fn remove_unused_locals(module: &Module, tree: &ScopeTree, p: &VariablePropagation) {
+    fn remove_locals(module: &Module, tree: &ScopeTree, p: &VariablePropagation) {
         assert_eq!(tree.root().blocks.len(), 1);
         let entry = &module.entry;
         assert_eq!(tree.root().blocks[0].block.as_ptr(), entry.as_ptr());
-        let referenced = &p.indices;
-        let mut unused = HashSet::new();
-        Self::find_unused_locals_in_block(&tree, &tree.root().blocks[0], referenced, &mut unused);
-        for node in unused.iter() {
+        let mut locals = HashSet::new();
+        Self::collect_locals_in_block(&tree, &tree.root().blocks[0], &mut locals);
+        for node in locals.iter() {
             node.remove();
         }
     }
@@ -398,6 +398,11 @@ impl DemoteLocals {
         let bb = &tree_block.block;
         // records the variables that are yet to be demoted
         let mut locals = demotion.relocation.get(&bb.as_ptr()).unwrap().clone();
+        // let first = bb.first.get().next;
+        // for &local in locals.iter() {
+        //     first.insert_before_self(local);
+        // }
+        // return;
         // demote directly referenced locals by the nodes in the block
         for node in bb.iter() {
             Self::demote_directly_referenced_locals_in_node(&node, &mut locals);
@@ -431,6 +436,13 @@ impl DemoteLocals {
             }
         }
         assert!(locals.is_empty(), "some variables are not demoted");
+        // recursively demote in children
+        for &i in tree_block.children.iter() {
+            let child_tree_node = &tree.nodes[i];
+            for child_tree_block in child_tree_node.blocks.iter() {
+                Self::demote_locals_in_block(tree, child_tree_block, propagation, demotion);
+            }
+        }
     }
 
     fn demote_locals(
@@ -439,11 +451,9 @@ impl DemoteLocals {
         propagation: &VariablePropagation,
         demotion: &VariableDemotion,
     ) {
-        // 1. Move all variable definitions out of the module
-        for (node, _) in propagation.indices.iter() {
-            node.remove();
-        }
-        // 2. Move variable definitions to proper places, where
+        // 1. Remove all local variable definitions.
+        Self::remove_locals(module, tree, propagation);
+        // 2. Re-insert variable definitions to proper places, where
         //   a. the variable is found to be demoted in the current block, and
         //   b. the references of the variable are right after the definition.
         // Also, we should preserve the order of the variable definitions so
@@ -460,23 +470,17 @@ impl Transform for DemoteLocals {
     fn transform_module(&self, module: Module) -> Module {
         let scope_tree = ScopeTree::from(&module);
         let propagation = VariablePropagator::propagate(&scope_tree);
-        println!(
-            "DemoteLocals: before demotion:\n{}",
-            dump_ir_human_readable(&module)
-        );
-        // remove unused locals
-        Self::remove_unused_locals(&module, &scope_tree, &propagation);
-        println!(
-            "DemoteLocals: after removing unused locals:\n{}",
-            dump_ir_human_readable(&module)
-        );
-        // demote locals
+        // println!(
+        //     "DemoteLocals: before demotion:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
         let demotion = VariableDemoter::new(&scope_tree, &propagation).process(&module);
+        // demote locals
         Self::demote_locals(&module, &scope_tree, &propagation, &demotion);
-        println!(
-            "DemoteLocals: after demotion:\n{}",
-            dump_ir_human_readable(&module)
-        );
+        // println!(
+        //     "DemoteLocals: after demotion:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
         module
     }
 }

@@ -218,7 +218,7 @@ impl DisplayIR {
             }
             Instruction::Local { init } => {
                 let temp = format!(
-                    "${}: {} = ${} [init]",
+                    "${}: {} = Local [init = ${}]",
                     self.get_or_insert(&node),
                     type_,
                     self.get_or_insert(init)

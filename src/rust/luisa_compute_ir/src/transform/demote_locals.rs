@@ -193,22 +193,20 @@ impl InitializationNormalizer {
         Self::normalize_non_uniform_inits_in_block(module, &module.entry);
         let mut uniform_inits = Vec::new();
         Self::collect_const_inits_in_block(&module.entry, &mut uniform_inits);
-        println!("uniform inits: {}", uniform_inits.len());
         // uniquify the initializers
         let mut unique_inits = HashMap::new();
         for (i, node) in uniform_inits.iter().enumerate() {
             unique_inits.entry(node).or_insert(i);
         }
-        println!("unique inits: {}", unique_inits.len());
         let mut uniform_inits: Vec<_> = unique_inits.keys().cloned().cloned().collect();
         uniform_inits.sort_by_key(|node| unique_inits.get(node).unwrap());
-        println!("sorted inits: {}", uniform_inits.len());
         for init in uniform_inits.iter() {
             init.remove();
         }
         for &init in uniform_inits.iter().rev() {
             module.entry.first.insert_after_self(init);
         }
+        // TODO: merge the initializers if possible
     }
 }
 
@@ -371,17 +369,17 @@ impl VariablePropagator {
     }
 }
 
-struct VariableDemoter<'a> {
+struct VariableRelocator<'a> {
     scope_tree: &'a ScopeTree,
     propagation: &'a VariablePropagation,
 }
 
-struct VariableDemotion {
+struct VariableRelocation {
     relocation: HashMap<*const BasicBlock, HashSet<NodeRef>>,
 }
 
 // Implementation of Step 3: demote variables to proper places.
-impl<'a> VariableDemoter<'a> {
+impl<'a> VariableRelocator<'a> {
     fn new(scope_tree: &'a ScopeTree, propagation: &'a VariablePropagation) -> Self {
         Self {
             scope_tree,
@@ -396,7 +394,7 @@ impl<'a> VariableDemoter<'a> {
     fn relocate_in_block(
         &self,
         tree_block: &'a ScopeTreeBlock,
-        demotion: &mut VariableDemotion,
+        relocation: &mut VariableRelocation,
         remaining: &mut HashSet<NodeRef>,
     ) {
         let collection = self
@@ -438,20 +436,20 @@ impl<'a> VariableDemoter<'a> {
         // remove the demoted variables from remaining
         remaining.retain(|node| !demoted.contains(node));
         // record the demoted variables
-        demotion
+        relocation
             .relocation
             .insert(tree_block.block.as_ptr(), demoted);
         // recursively demote in children
         for &child_tree_node in tree_block.children.iter() {
             let child_tree_node = &self.scope_tree.nodes[child_tree_node];
             for child_tree_block in child_tree_node.blocks.iter() {
-                self.relocate_in_block(child_tree_block, demotion, remaining);
+                self.relocate_in_block(child_tree_block, relocation, remaining);
             }
         }
     }
 
-    fn process(&self, module: &Module) -> VariableDemotion {
-        let mut demotion = VariableDemotion {
+    fn process(&self, module: &Module) -> VariableRelocation {
+        let mut relocation = VariableRelocation {
             relocation: HashMap::new(),
         };
         let entry = module.entry.as_ptr();
@@ -461,11 +459,11 @@ impl<'a> VariableDemoter<'a> {
         remaining.extend(entry_collection.propagated_refs.iter());
         self.relocate_in_block(
             &self.scope_tree.root().blocks[0],
-            &mut demotion,
+            &mut relocation,
             &mut remaining,
         );
         assert!(remaining.is_empty(), "some variables are not demoted");
-        demotion
+        relocation
     }
 }
 
@@ -484,7 +482,7 @@ impl DemoteLocals {
         }
     }
 
-    fn remove_locals(module: &Module, tree: &ScopeTree, p: &VariablePropagation) {
+    fn remove_locals(module: &Module, tree: &ScopeTree) {
         assert_eq!(tree.root().blocks.len(), 1);
         let entry = &module.entry;
         assert_eq!(tree.root().blocks[0].block.as_ptr(), entry.as_ptr());
@@ -532,7 +530,7 @@ impl DemoteLocals {
         tree: &ScopeTree,
         tree_block: &ScopeTreeBlock,
         propagation: &VariablePropagation,
-        demotion: &VariableDemotion,
+        demotion: &VariableRelocation,
     ) {
         let bb = &tree_block.block;
         // records the variables that are yet to be demoted
@@ -588,10 +586,10 @@ impl DemoteLocals {
         module: &Module,
         tree: &ScopeTree,
         propagation: &VariablePropagation,
-        demotion: &VariableDemotion,
+        relocation: &VariableRelocation,
     ) {
         // 1. Remove all local variable definitions.
-        Self::remove_locals(module, tree, propagation);
+        Self::remove_locals(module, tree);
         // 2. Re-insert variable definitions to proper places, where
         //   a. the variable is found to be demoted in the current block, and
         //   b. the references of the variable are right after the definition.
@@ -601,7 +599,7 @@ impl DemoteLocals {
         assert_eq!(tree.root().blocks.len(), 1);
         assert_eq!(tree.root().blocks[0].block.as_ptr(), entry.as_ptr());
         let tree_block = &tree.root().blocks[0];
-        Self::demote_locals_in_block(tree, tree_block, propagation, demotion);
+        Self::demote_locals_in_block(tree, tree_block, propagation, relocation);
     }
 }
 
@@ -610,17 +608,17 @@ impl Transform for DemoteLocals {
         InitializationNormalizer::normalize(&module);
         let scope_tree = ScopeTree::from(&module);
         let propagation = VariablePropagator::propagate(&scope_tree);
-        println!(
-            "DemoteLocals: before demotion:\n{}",
-            dump_ir_human_readable(&module)
-        );
-        let demotion = VariableDemoter::new(&scope_tree, &propagation).process(&module);
+        // println!(
+        //     "DemoteLocals: before demotion:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
+        let demotion = VariableRelocator::new(&scope_tree, &propagation).process(&module);
         // demote locals
         Self::demote_locals(&module, &scope_tree, &propagation, &demotion);
-        println!(
-            "DemoteLocals: after demotion:\n{}",
-            dump_ir_human_readable(&module)
-        );
+        // println!(
+        //     "DemoteLocals: after demotion:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
         module
     }
 }

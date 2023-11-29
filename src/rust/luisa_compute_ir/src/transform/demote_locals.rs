@@ -2,6 +2,14 @@
 //
 // This transform demotes local variables to its lowest possible scope, i.e., to right
 // before the lowest common ancestor of all its references, in the following steps:
+// 0. Normalize the initialization of local variables:
+//    a. uniform initializers are hoisted to top
+//       - ZeroInitializer
+//       - Const
+//       - Uniform
+//       - Argument (by_value = true)
+//       - One/Zero
+//    b. non-uniform initializers are split into a zero-initializer and an update.
 // 1. Construct a scope tree from the AST of the module, where each node is a instruction
 //    that contains nested basic blocks (using the `scope_tree` analysis).
 // 2. Recursively visit each node in the scope tree and propagate the referenced variables
@@ -17,12 +25,192 @@
 
 use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
 use crate::ir::debug::dump_ir_human_readable;
-use crate::ir::{BasicBlock, Instruction, IrBuilder, Module, NodeRef};
+use crate::ir::{new_node, BasicBlock, Func, Instruction, IrBuilder, Module, Node, NodeRef};
 use crate::transform::Transform;
 use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};
 
 pub struct DemoteLocals;
+
+struct InitializationNormalizer;
+
+// Implementation of Step 0: normalize the initialization of local variables.
+impl InitializationNormalizer {
+    fn _is_uniform_initializer(node: &NodeRef) -> bool {
+        match node.get().instruction.as_ref() {
+            Instruction::Uniform => true,
+            Instruction::Argument { by_value } => *by_value,
+            Instruction::Const(_) => true,
+            Instruction::Call(func, _) => match func {
+                Func::ZeroInitializer
+                | Func::DispatchId
+                | Func::ThreadId
+                | Func::BlockId
+                | Func::WarpLaneId
+                | Func::DispatchSize
+                | Func::WarpSize
+                | Func::CoroId
+                | Func::CoroToken => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn normalize_non_uniform_inits_in_block(module: &Module, block: &BasicBlock) {
+        for node in block.iter() {
+            match node.get().instruction.as_ref() {
+                Instruction::Local { init } => {
+                    if !Self::_is_uniform_initializer(init) {
+                        let mut builder = IrBuilder::new(module.pools.clone());
+                        // insert a zero initializer before the local variable
+                        builder.set_insert_point(node.get().prev);
+                        let local = builder.local_zero_init(node.type_().clone());
+                        // replace the local variable with the zero initializer
+                        local.remove();
+                        node.replace_with(local.get());
+                        // insert the update after the local variable
+                        builder.set_insert_point(node.clone());
+                        builder.update(node, init.clone());
+                    }
+                }
+                Instruction::Loop { body, .. } => {
+                    Self::normalize_non_uniform_inits_in_block(module, body);
+                }
+                Instruction::GenericLoop {
+                    prepare,
+                    body,
+                    update,
+                    ..
+                } => {
+                    Self::normalize_non_uniform_inits_in_block(module, prepare);
+                    Self::normalize_non_uniform_inits_in_block(module, body);
+                    Self::normalize_non_uniform_inits_in_block(module, update);
+                }
+                Instruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    Self::normalize_non_uniform_inits_in_block(module, true_branch);
+                    Self::normalize_non_uniform_inits_in_block(module, false_branch);
+                }
+                Instruction::Switch { cases, default, .. } => {
+                    for case in cases.iter() {
+                        Self::normalize_non_uniform_inits_in_block(module, &case.block);
+                    }
+                    Self::normalize_non_uniform_inits_in_block(module, default);
+                }
+                Instruction::AdScope { body, .. } => {
+                    Self::normalize_non_uniform_inits_in_block(module, body);
+                }
+                Instruction::RayQuery {
+                    on_triangle_hit,
+                    on_procedural_hit,
+                    ..
+                } => {
+                    Self::normalize_non_uniform_inits_in_block(module, on_triangle_hit);
+                    Self::normalize_non_uniform_inits_in_block(module, on_procedural_hit);
+                }
+                Instruction::AdDetach(body) => {
+                    Self::normalize_non_uniform_inits_in_block(module, body);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_const_inits_in_block(block: &BasicBlock, inits: &mut Vec<NodeRef>) {
+        for node in block.iter() {
+            match node.get().instruction.as_ref() {
+                Instruction::Local { init } => match init.get().instruction.as_ref() {
+                    Instruction::Const(_) => {
+                        inits.push(init.clone());
+                    }
+                    Instruction::Call(func, args) => match func {
+                        Func::ZeroInitializer
+                        | Func::DispatchId
+                        | Func::ThreadId
+                        | Func::BlockId
+                        | Func::WarpLaneId
+                        | Func::DispatchSize
+                        | Func::WarpSize
+                        | Func::CoroId
+                        | Func::CoroToken => {
+                            inits.push(init.clone());
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                },
+                Instruction::Loop { body, .. } => {
+                    Self::collect_const_inits_in_block(body, inits);
+                }
+                Instruction::GenericLoop {
+                    prepare,
+                    body,
+                    update,
+                    ..
+                } => {
+                    Self::collect_const_inits_in_block(prepare, inits);
+                    Self::collect_const_inits_in_block(body, inits);
+                    Self::collect_const_inits_in_block(update, inits);
+                }
+                Instruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    Self::collect_const_inits_in_block(true_branch, inits);
+                    Self::collect_const_inits_in_block(false_branch, inits);
+                }
+                Instruction::Switch { cases, default, .. } => {
+                    for case in cases.iter() {
+                        Self::collect_const_inits_in_block(&case.block, inits);
+                    }
+                    Self::collect_const_inits_in_block(default, inits);
+                }
+                Instruction::AdScope { body, .. } => {
+                    Self::collect_const_inits_in_block(body, inits);
+                }
+                Instruction::RayQuery {
+                    on_triangle_hit,
+                    on_procedural_hit,
+                    ..
+                } => {
+                    Self::collect_const_inits_in_block(on_triangle_hit, inits);
+                    Self::collect_const_inits_in_block(on_procedural_hit, inits);
+                }
+                Instruction::AdDetach(body) => {
+                    Self::collect_const_inits_in_block(body, inits);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn normalize(module: &Module) {
+        Self::normalize_non_uniform_inits_in_block(module, &module.entry);
+        let mut uniform_inits = Vec::new();
+        Self::collect_const_inits_in_block(&module.entry, &mut uniform_inits);
+        println!("uniform inits: {}", uniform_inits.len());
+        // uniquify the initializers
+        let mut unique_inits = HashMap::new();
+        for (i, node) in uniform_inits.iter().enumerate() {
+            unique_inits.entry(node).or_insert(i);
+        }
+        println!("unique inits: {}", unique_inits.len());
+        let mut uniform_inits: Vec<_> = unique_inits.keys().cloned().cloned().collect();
+        uniform_inits.sort_by_key(|node| unique_inits.get(node).unwrap());
+        println!("sorted inits: {}", uniform_inits.len());
+        for init in uniform_inits.iter() {
+            init.remove();
+        }
+        for &init in uniform_inits.iter().rev() {
+            module.entry.first.insert_after_self(init);
+        }
+    }
+}
 
 struct VariablePropagator;
 
@@ -55,7 +243,6 @@ impl VariablePropagator {
     fn propagate_block(
         tree: &ScopeTree,
         tree_block: &ScopeTreeBlock,
-        ancestor_direct_refs: &HashSet<NodeRef>, // should be excluded from propagation
         propagation: &mut VariablePropagation,
     ) {
         let mut collection = VariableCollection {
@@ -64,19 +251,10 @@ impl VariablePropagator {
         };
         // collect direct references
         for node in tree_block.block.iter() {
-            Self::collect_node_direct_refs(
-                &node,
-                &mut collection.direct_refs,
-                &ancestor_direct_refs,
-                propagation,
-                false,
-            );
+            Self::collect_node_direct_refs(&node, &mut collection.direct_refs, propagation, false);
         }
         // propagate references from children
         if !tree_block.children.is_empty() {
-            // update ancestor_direct_refs to include the current block
-            let mut ancestor_direct_refs = ancestor_direct_refs.clone();
-            ancestor_direct_refs.extend(&collection.direct_refs);
             // traverse children
             for &i in tree_block.children.iter() {
                 let mut builder = IrBuilder::new(tree.pools.clone());
@@ -85,7 +263,7 @@ impl VariablePropagator {
                     format!("ScopeTree Node {}", i).to_string(),
                 ));
                 for child in tree.nodes[i].blocks.iter() {
-                    Self::propagate_block(tree, child, &ancestor_direct_refs, propagation);
+                    Self::propagate_block(tree, child, propagation);
                     // merge propagated_refs
                     let child_collection =
                         propagation.collections.get(&child.block.as_ptr()).unwrap();
@@ -106,7 +284,6 @@ impl VariablePropagator {
     fn collect_node_direct_refs(
         node: &NodeRef,
         direct_refs: &mut HashSet<NodeRef>,
-        ancestor_direct_refs: &HashSet<NodeRef>, // should be excluded from propagation as they are anyways propagated to the parent
         propagation: &mut VariablePropagation,
         is_referenced: bool,
     ) {
@@ -125,11 +302,9 @@ impl VariablePropagator {
             Instruction::Uniform => {}
             Instruction::Local { init } => {
                 if is_referenced {
-                    if !ancestor_direct_refs.contains(node) {
-                        direct_refs.insert(node.clone());
-                        let index = propagation.indices.len();
-                        propagation.indices.entry(node.clone()).or_insert(index);
-                    }
+                    direct_refs.insert(node.clone());
+                    let index = propagation.indices.len();
+                    propagation.indices.entry(node.clone()).or_insert(index);
                 } else {
                     check_not_local!(init);
                 }
@@ -139,24 +314,12 @@ impl VariablePropagator {
             Instruction::Invalid => {}
             Instruction::Const(_) => {}
             Instruction::Update { var, value } => {
-                Self::collect_node_direct_refs(
-                    var,
-                    direct_refs,
-                    ancestor_direct_refs,
-                    propagation,
-                    true,
-                );
+                Self::collect_node_direct_refs(var, direct_refs, propagation, true);
                 check_not_local!(value);
             }
             Instruction::Call(_, args) => {
                 for arg in args.iter() {
-                    Self::collect_node_direct_refs(
-                        arg,
-                        direct_refs,
-                        ancestor_direct_refs,
-                        propagation,
-                        true,
-                    );
+                    Self::collect_node_direct_refs(arg, direct_refs, propagation, true);
                 }
             }
             Instruction::Phi(_) => panic!("phi node not supported"),
@@ -179,23 +342,11 @@ impl VariablePropagator {
             }
             Instruction::AdScope { .. } => {}
             Instruction::RayQuery { ray_query, .. } => {
-                Self::collect_node_direct_refs(
-                    ray_query,
-                    direct_refs,
-                    ancestor_direct_refs,
-                    propagation,
-                    true,
-                );
+                Self::collect_node_direct_refs(ray_query, direct_refs, propagation, true);
             }
             Instruction::Print { args, .. } => {
                 for arg in args.iter() {
-                    Self::collect_node_direct_refs(
-                        arg,
-                        direct_refs,
-                        ancestor_direct_refs,
-                        propagation,
-                        true,
-                    );
+                    Self::collect_node_direct_refs(arg, direct_refs, propagation, true);
                 }
             }
             Instruction::AdDetach(_) => {}
@@ -204,13 +355,7 @@ impl VariablePropagator {
             Instruction::CoroSuspend { .. } => {}
             Instruction::CoroResume { .. } => {}
             Instruction::CoroRegister { value, .. } => {
-                Self::collect_node_direct_refs(
-                    value,
-                    direct_refs,
-                    ancestor_direct_refs,
-                    propagation,
-                    true,
-                );
+                Self::collect_node_direct_refs(value, direct_refs, propagation, true);
             }
         }
     }
@@ -221,13 +366,7 @@ impl VariablePropagator {
             indices: HashMap::new(),
             collections: HashMap::new(),
         };
-        let ancestor_direct_refs = HashSet::new();
-        Self::propagate_block(
-            &tree,
-            &tree.root().blocks[0],
-            &ancestor_direct_refs,
-            &mut prop,
-        );
+        Self::propagate_block(&tree, &tree.root().blocks[0], &mut prop);
         prop
     }
 }
@@ -404,14 +543,14 @@ impl DemoteLocals {
         // }
         // return;
         // demote directly referenced locals by the nodes in the block
+        let nested_block_nodes: HashMap<_, _> = tree_block
+            .children
+            .iter()
+            .map(|&i| (tree.nodes[i].node.clone(), i))
+            .collect();
         for node in bb.iter() {
             Self::demote_directly_referenced_locals_in_node(&node, &mut locals);
-        }
-        // still some locals are not demoted, which means they are demoted here
-        // because of being propagated to more than one child node, so we have
-        // to check the nested blocks in the block
-        if !locals.is_empty() {
-            for &i in tree_block.children.iter() {
+            if let Some(&i) = nested_block_nodes.get(&node) {
                 let child_tree_node = &tree.nodes[i];
                 // demote the variables before the child node if any of its
                 // nested blocks references the variable
@@ -468,19 +607,20 @@ impl DemoteLocals {
 
 impl Transform for DemoteLocals {
     fn transform_module(&self, module: Module) -> Module {
+        InitializationNormalizer::normalize(&module);
         let scope_tree = ScopeTree::from(&module);
         let propagation = VariablePropagator::propagate(&scope_tree);
-        // println!(
-        //     "DemoteLocals: before demotion:\n{}",
-        //     dump_ir_human_readable(&module)
-        // );
+        println!(
+            "DemoteLocals: before demotion:\n{}",
+            dump_ir_human_readable(&module)
+        );
         let demotion = VariableDemoter::new(&scope_tree, &propagation).process(&module);
         // demote locals
         Self::demote_locals(&module, &scope_tree, &propagation, &demotion);
-        // println!(
-        //     "DemoteLocals: after demotion:\n{}",
-        //     dump_ir_human_readable(&module)
-        // );
+        println!(
+            "DemoteLocals: after demotion:\n{}",
+            dump_ir_human_readable(&module)
+        );
         module
     }
 }

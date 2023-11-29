@@ -667,6 +667,11 @@ void traverse_expressions(
             for (auto arg : print_stmt->arguments()) { do_visit(arg); }
             break;
         }
+        case Statement::Tag::COROBIND: {
+            auto coro_stmt = static_cast<const CoroBindStmt *>(stmt);
+            do_visit(coro_stmt->expression());
+            break;
+        }
     }
     exit_stmt(stmt);
 }

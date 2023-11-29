@@ -708,6 +708,7 @@ void CallableLibrary::deser_ptr(Statement *obj, std::byte const *&ptr, DeserPack
         case Statement::Tag::PRINT:
             create_stmt.template operator()<PrintStmt>();
             break;
+        default: LUISA_NOT_IMPLEMENTED();
     }
 }
 

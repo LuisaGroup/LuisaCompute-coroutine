@@ -378,6 +378,14 @@ private:
                 fb->print_(s->format(), args);
                 break;
             }
+            case Statement::Tag::SUSPEND: {
+                auto s = static_cast<const SuspendStmt *>(stmt);
+                LUISA_NOT_IMPLEMENTED();
+            }
+            case Statement::Tag::COROBIND: {
+                auto s = static_cast<const CoroBindStmt *>(stmt);
+                LUISA_NOT_IMPLEMENTED();
+            }
         }
     }
 

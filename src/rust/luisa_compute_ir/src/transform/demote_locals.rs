@@ -8,48 +8,92 @@
 //    to its parent node.
 // 3. At each node for each propagated variable, demote the variable definition here if
 //    following conditions are met:
-//    a) the variable has not been demoted by the node's ancestor, and
-//    b) the variable is found propagated to more than one child node.
+//    a. the variable has not been demoted by the node's ancestor, and
+//       b.1 the variable is found propagated to more than one child node, or
+//       b.2 the variable is found directly referenced in the node.
 // 4. Move variable definitions to proper places and remove unreferenced variables if any.
 //
 // Note: the `reg2mem` transform should be applied before this transform.
 
 use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock, ScopeTreeNode};
-use crate::ir::{BasicBlock, Instruction, Module, NodeRef};
+use crate::ir::{BasicBlock, Instruction, Module, Node, NodeRef};
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 pub struct DemoteLocals;
 
 struct VariablePropagator;
 
+struct VariableCollection {
+    direct_refs: HashSet<NodeRef>,
+    propagated_refs: HashSet<NodeRef>,
+}
+
+struct VariablePropagation {
+    collections: HashMap<*const BasicBlock, VariableCollection>,
+}
+
 // Implementation of Step 2: propagate referenced variables to parent nodes.
 // The result is a map from basic blocks to the variables defined in the block.
 // To get the variables defined in a node, simply traverse the internal blocks of the node.
 // The `ScopeTreeNode::blocks` field already has recorded the nested blocks in the node.
+// Rule:
+//   propagated_refs = child.direct_refs + child.propagated_refs - ancestor_direct_refs
+// Note:
+//   we don't need to propagate variables defined in the node itself and its ancestors as
+//   they are anyways propagated to the parent.
 impl VariablePropagator {
-    fn propagate_tree_block(
+    fn propagate_block(
         tree: &ScopeTree,
         tree_block: &ScopeTreeBlock,
-        vars: &mut HashMap<*const BasicBlock, HashSet<NodeRef>>,
+        ancestor_direct_refs: &HashSet<NodeRef>, // should be excluded from propagation
+        propagation: &mut VariablePropagation,
     ) {
-        // children nodes with blocks requires special handling
-        let block_nodes: HashMap<_, _> = tree_block
-            .children
-            .iter()
-            .map(|&i| (tree.nodes[i].node.clone(), i))
-            .collect();
-        let bb = &tree_block.block;
-        let mut block_vars = HashSet::new();
-        for node in bb.iter() {
-            Self::propagate_node(&node, &mut block_vars, false);
-            if let Some(block_node) = block_nodes.get(&node) {
-                Self::propagate_tree_node(tree, *block_node, &mut block_vars, vars);
+        let mut collection = VariableCollection {
+            direct_refs: HashSet::new(),
+            propagated_refs: HashSet::new(),
+        };
+        // collect direct references
+        for node in tree_block.block.iter() {
+            Self::collect_node_direct_refs(
+                &node,
+                &mut collection.direct_refs,
+                &ancestor_direct_refs,
+                false,
+            );
+        }
+        // propagate references from children
+        if !tree_block.children.is_empty() {
+            // update ancestor_direct_refs to include the current block
+            let mut ancestor_direct_refs = collection.direct_refs.clone();
+            ancestor_direct_refs.extend(&collection.direct_refs);
+            // traverse children
+            for &i in tree_block.children.iter() {
+                for child in tree.nodes[i].blocks.iter() {
+                    Self::propagate_block(tree, child, &ancestor_direct_refs, propagation);
+                    // merge propagated_refs
+                    let child_collection =
+                        propagation.collections.get(&child.block.as_ptr()).unwrap();
+                    collection
+                        .propagated_refs
+                        .extend(&child_collection.direct_refs);
+                    collection
+                        .propagated_refs
+                        .extend(&child_collection.propagated_refs);
+                }
             }
         }
-        vars.insert(bb.as_ptr(), block_vars);
+        propagation
+            .collections
+            .insert(tree_block.block.as_ptr(), collection);
     }
 
-    fn propagate_node(node: &NodeRef, vars: &mut HashSet<NodeRef>, is_referenced: bool) {
+    fn collect_node_direct_refs(
+        node: &NodeRef,
+        direct_refs: &mut HashSet<NodeRef>,
+        ancestor_direct_refs: &HashSet<NodeRef>, // should be excluded from propagation as they are anyways propagated to the parent
+        is_referenced: bool,
+    ) {
         macro_rules! check_not_local {
             ($node: expr) => {
                 assert!(!$node.is_local(), "local variable not loaded");
@@ -65,7 +109,9 @@ impl VariablePropagator {
             Instruction::Uniform => {}
             Instruction::Local { init } => {
                 if is_referenced {
-                    vars.insert(node.clone());
+                    if !ancestor_direct_refs.contains(node) {
+                        direct_refs.insert(node.clone());
+                    }
                 } else {
                     check_not_local!(init);
                 }
@@ -75,12 +121,12 @@ impl VariablePropagator {
             Instruction::Invalid => {}
             Instruction::Const(_) => {}
             Instruction::Update { var, value } => {
-                Self::propagate_node(var, vars, true);
+                Self::collect_node_direct_refs(var, direct_refs, ancestor_direct_refs, true);
                 check_not_local!(value);
             }
             Instruction::Call(_, args) => {
                 for arg in args.iter() {
-                    Self::propagate_node(arg, vars, true);
+                    Self::collect_node_direct_refs(arg, direct_refs, ancestor_direct_refs, true);
                 }
             }
             Instruction::Phi(_) => panic!("phi node not supported"),
@@ -103,11 +149,11 @@ impl VariablePropagator {
             }
             Instruction::AdScope { .. } => {}
             Instruction::RayQuery { ray_query, .. } => {
-                Self::propagate_node(ray_query, vars, true);
+                Self::collect_node_direct_refs(ray_query, direct_refs, ancestor_direct_refs, true);
             }
             Instruction::Print { args, .. } => {
                 for arg in args.iter() {
-                    Self::propagate_node(arg, vars, true);
+                    Self::collect_node_direct_refs(arg, direct_refs, ancestor_direct_refs, true);
                 }
             }
             Instruction::AdDetach(_) => {}
@@ -121,22 +167,18 @@ impl VariablePropagator {
         }
     }
 
-    fn propagate_tree_node(
-        tree: &ScopeTree,
-        tree_node: usize,
-        node_vars: &mut HashSet<NodeRef>,
-        vars: &mut HashMap<*const BasicBlock, HashSet<NodeRef>>,
-    ) {
-        for block in &tree.nodes[tree_node].blocks {
-            Self::propagate_tree_block(tree, block, vars);
-            node_vars.extend(vars.get(&block.block.as_ptr()).unwrap());
-        }
-    }
-
-    pub fn propagate(tree: &ScopeTree) -> HashMap<*const BasicBlock, HashSet<NodeRef>> {
-        let mut block_vars = HashMap::new();
+    pub fn propagate(tree: &ScopeTree) -> VariablePropagation {
         assert_eq!(tree.root().blocks.len(), 1);
-        Self::propagate_tree_block(&tree, &tree.root().blocks[0], &mut block_vars);
-        block_vars
+        let mut prop = VariablePropagation {
+            collections: HashMap::new(),
+        };
+        let ancestor_direct_refs = HashSet::new();
+        Self::propagate_block(
+            &tree,
+            &tree.root().blocks[0],
+            &ancestor_direct_refs,
+            &mut prop,
+        );
+        prop
     }
 }

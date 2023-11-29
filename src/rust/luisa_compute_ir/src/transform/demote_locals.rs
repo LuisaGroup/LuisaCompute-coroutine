@@ -65,7 +65,7 @@ impl VariablePropagator {
         // propagate references from children
         if !tree_block.children.is_empty() {
             // update ancestor_direct_refs to include the current block
-            let mut ancestor_direct_refs = collection.direct_refs.clone();
+            let mut ancestor_direct_refs = ancestor_direct_refs.clone();
             ancestor_direct_refs.extend(&collection.direct_refs);
             // traverse children
             for &i in tree_block.children.iter() {

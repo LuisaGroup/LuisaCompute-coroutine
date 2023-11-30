@@ -1861,6 +1861,11 @@ void CodegenUtility::PostprocessCodegenProperties(vstd::StringBuilder &finalResu
         finalResult << "];\n"sv;
     }
 }
+uint CodegenUtility::AddPrinter(vstd::string_view name, Type const* structType){
+    auto z = opt->printer.size();
+    opt->printer.emplace_back(name, structType);
+    return z;
+}
 void CodegenUtility::CodegenProperties(
     CodegenResult::Properties &properties,
     vstd::StringBuilder &varData,
@@ -1964,7 +1969,7 @@ void CodegenUtility::CodegenProperties(
         auto &&r = registerCount.get((uint8_t)RegisterType::UAV);
         {
             Property prop = {
-                .type = ShaderVariableType::PrintBuffer,
+                .type = ShaderVariableType::RWStructuredBuffer,
                 .space_index = 0,
                 .register_index = r,
                 .array_size = 1};
@@ -1976,7 +1981,7 @@ void CodegenUtility::CodegenProperties(
         }
         {
             Property prop = {
-                .type = ShaderVariableType::PrintBuffer,
+                .type = ShaderVariableType::RWStructuredBuffer,
                 .space_index = 0,
                 .register_index = r,
                 .array_size = 1};
@@ -2073,6 +2078,7 @@ uint4 dsp_c;
     }
     return {
         std::move(finalResult),
+        std::move(opt->printer),
         std::move(properties),
         opt->useTex2DBindless,
         opt->useTex3DBindless,
@@ -2257,6 +2263,7 @@ uint iid:SV_INSTANCEID;
     }
     return {
         std::move(finalResult),
+        std::move(opt->printer),
         std::move(properties),
         opt->useTex2DBindless,
         opt->useTex3DBindless,

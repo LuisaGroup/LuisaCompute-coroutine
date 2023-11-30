@@ -122,10 +122,6 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = extract_loop_cond::ExtractLoopCond;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
-        "demotion" => {
-            let transform = demotion::Demotion;
-            unsafe { (*pipeline).add_transform(Box::new(transform)) };
-        }
         _ => panic!("unknown transform {}", name),
     }
 }

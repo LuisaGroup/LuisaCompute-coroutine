@@ -113,7 +113,7 @@ namespace luisa::compute::dsl_detail {
     *([&] { return __VA_ARGS__; }) % [&]() noexcept -> void
 
 #define $suspend(...) ::luisa::compute::suspend(__VA_ARGS__)
-#define $default ::luisa::compute::detail::SwitchDefaultStmtBuilder{} % [&]() noexcept
+
 #define $loop                                                                       \
     ::luisa::compute::detail::LoopStmtBuilder::create_with_comment(                 \
         ::luisa::compute::dsl_detail::format_source_location(__FILE__, __LINE__)) % \

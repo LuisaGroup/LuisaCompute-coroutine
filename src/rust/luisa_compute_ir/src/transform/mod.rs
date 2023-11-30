@@ -18,7 +18,6 @@ pub mod extract_loop_cond;
 pub mod demote_locals;
 
 pub mod inliner;
-mod demotion;
 
 use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
 

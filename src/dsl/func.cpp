@@ -21,6 +21,7 @@ void perform_autodiff_transform(M *m) noexcept {
 void perform_coroutine_transform(ir::CallableModule *m) noexcept {
     auto coroutine_pipeline = ir::luisa_compute_ir_transform_pipeline_new();
     ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "canonicalize_control_flow");
+    ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "demote_locals");
     ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "extract_loop_cond");
     ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "coroutine");
     auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform_callable(coroutine_pipeline, *m);

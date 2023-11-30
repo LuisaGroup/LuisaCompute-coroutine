@@ -25,7 +25,7 @@
 
 use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
 use crate::ir::debug::dump_ir_human_readable;
-use crate::ir::{new_node, BasicBlock, Func, Instruction, IrBuilder, Module, Node, NodeRef};
+use crate::ir::{new_node, BasicBlock, Func, Instruction, IrBuilder, Module, Node, NodeRef, Type};
 use crate::transform::Transform;
 use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};
@@ -287,7 +287,8 @@ impl VariablePropagator {
     ) {
         macro_rules! check_not_local {
             ($node: expr) => {
-                assert!(!$node.is_local(), "local variable not loaded");
+                assert!(!($node.valid() && $node.is_local()),
+                        "local variable not loaded");
             };
         }
         match node.get().instruction.as_ref() {

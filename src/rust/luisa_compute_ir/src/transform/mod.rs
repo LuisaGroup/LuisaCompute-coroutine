@@ -18,6 +18,7 @@ pub mod extract_loop_cond;
 pub mod demote_locals;
 
 pub mod inliner;
+pub mod split_coro;
 
 use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
 
@@ -127,6 +128,10 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
         }
         "demote_locals" => {
             let transform = demote_locals::DemoteLocals;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "split_coro" => {
+            let transform = split_coro::SplitCoro;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),

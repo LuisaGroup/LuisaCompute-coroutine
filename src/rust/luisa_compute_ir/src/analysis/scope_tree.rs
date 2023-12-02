@@ -5,17 +5,17 @@
 use crate::ir::{BasicBlock, Instruction, Module, ModulePools, NodeRef, INVALID_REF};
 use crate::{CArc, Pooled};
 
-pub struct ScopeTreeNode {
+pub(crate) struct ScopeTreeNode {
     pub node: NodeRef, // INVALID_REF for the root node
     pub blocks: Vec<ScopeTreeBlock>,
 }
 
-pub struct ScopeTreeBlock {
+pub(crate) struct ScopeTreeBlock {
     pub block: Pooled<BasicBlock>,
     pub children: Vec<usize>, // indices into the tree nodes
 }
 
-pub struct ScopeTree {
+pub(crate) struct ScopeTree {
     pub pools: CArc<ModulePools>,
     pub nodes: Vec<ScopeTreeNode>,
 }

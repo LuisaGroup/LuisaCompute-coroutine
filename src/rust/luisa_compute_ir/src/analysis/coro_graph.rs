@@ -164,3 +164,240 @@ pub(crate) struct CoroGraph {
     instructions: Vec<CoroInstruction>, // all the instructions in the graph
     node_to_instr: HashMap<NodeRef, usize>, // IR node to instruction index
 }
+
+// Method:
+// Auxiliary data structures:
+//   1. Instruction stack S: a stack of the parent control flow instructions containing the current
+//      instruction for convenient backtracking and dominance checking (details below).
+//   2. Condition stack C: a stack of the condition values (`true` or `false`) of the parent control
+//      flow that leads to the current instruction for convenient replay.
+// Continuation extraction: when a split mark is encountered, create a new scope and traverse the IR
+// until another split mark is encountered. Details to process the control flows in the continuation:
+//   1. All instructions dominated by the split mark are added to the start of the new sub-coroutine:
+//      a. If S[:-1] (i.e., the instruction stack without the *direct* parent) contain loops, then
+//         only the remaining instructions in the current block are dominated by the split mark.
+//      b. If S[:-1] are non-loops (`if`s and `switch`es), then all reachable instructions from the
+//         split mark are dominated by the split mark (as we will never loop back to the precedents).
+//   2. For the non-dominated instructions, the control flows are copied into the new sub-coroutine.
+//      However, we need to maintain a `first` flag that helps to skip the instructions when we replay
+//      the condition stack. The `first` flag is assigned to `false` at the original split mark.
+//      Remark: to avoid passing conditions through the coroutine frame, we replay the condition stack
+//      to "fool" the following def-use analysis.
+//   3. Special handling when the only, direct parent is a `loop` (i.e., S[-1] is a `loop` and S[:-1]
+//      is empty): the loop can be simplified to an `if`. (Otherwise we may also have it done in later
+//      passes, e.g., `simplify_control_flow`.)
+//   4. Each new sub-coroutine ends with another split mark or a terminate mark (end of the function).
+//      So the split-into-continuation process is recursive.
+//
+// Example #1 (simple `if`):
+//   if (cond) {
+//       << A >>
+//       suspend(token); // C = [cond = true]
+//       << B >>
+//   } else {
+//      << C >>
+//   }
+//   << D >>
+// Continuation from the `suspend` instruction:
+//   cond = true;// condition stack replay
+//   << B >>
+//   << D >>
+//
+// Example #2 (the only, direct parent is a `loop`):
+//   do {
+//       << A >>
+//       suspend(token);
+//       << B >>
+//   } while (cond);
+//   << C >>
+// Continuation from the `suspend` instruction (note the special handling in 3. above):
+//   << B >>
+//   if (cond) {
+//       << A >>
+//       suspend(token);
+//   }
+//   << C >>
+//
+// Example #3 (`loop` mixed with `if`):
+//   do {
+//       << A >>
+//       if (cond1) {
+//           << B >>
+//           suspend(token); // C = [cond1 = true]
+//           << C >>
+//       } else {
+//           << D >>
+//       }
+//       << E >>
+//   } while (cond2);
+//   << F >>
+// Continuation from the `suspend` instruction:
+//   cond1 = true;// condition stack replay
+//   << C >>      // only the remaining instructions in the current block are dominated by the split mark
+//   first = true;// first flag
+//   do {
+//       // mask the instructions in the loop body that precede the split mark with the `first` flag
+//       if (!first) {
+//           << A >>
+//       }
+//       if (cond1) {
+//           if (!first) {
+//               << B >>
+//               suspend(token);
+//           }
+//           first = false; // reset the `first` flag at the original split mark
+//       } else {
+//           << D >>
+//       }
+//       // instructions after the split mark are executed normally
+//       << E >>
+//       first_flag = false; // the `first` flag is assigned to `false` at the end of the loop body
+//   } while (cond2);
+//   << F >>
+//
+// Example #4 (nested `loop`s):
+//   do {// outer loop
+//       << A >>
+//       do {// inner loop
+//           << B >>
+//           suspend(token);
+//           << C >>
+//       } while (cond1);
+//       << D >>
+//   } while (cond2);
+//   << E >>
+// Continuation from the `suspend` instruction:
+//   << C >>      // only the remaining instructions in the current block are dominated by the split mark
+//   first = true;// first flag
+//   do {// outer loop
+//       // mask the instructions in the loop body that precede the split mark with the `first` flag
+//       if (!first) {
+//           << A >>
+//       }
+//       do {// inner loop
+//           // mask the instructions in the loop body that precede the split mark with the `first` flag
+//           if (!first) {
+//               << B >>
+//               suspend(token);
+//           }
+//           first = false; // reset the `first` flag at the original split mark
+//       } while (cond1);
+//       // instructions after the split mark are executed normally
+//       << D >>
+//   } while (cond2);
+//   << E >>
+// With the special handling in 3. above, the inner loop can be simplified to an `if`:
+//   << C >>
+//   first = true;
+//   do {// outer loop
+//       // mask the instructions in the loop body that precede the split mark with the `first` flag
+//       if (!first) {
+//           << A >>
+//       }
+//       if (cond1) {
+//           << B >>
+//           suspend(token);
+//       }
+//       first = false; // reset the `first` flag at the original split mark
+//       // instructions after the split mark are executed normally
+//       << D >>
+//   } while (cond2);
+//   << E >>
+//
+// Example #5 (nested `loop`s and `if`s):
+//   do {// outer loop
+//       << A >>
+//       do {// inner loop
+//           << B >>
+//           if (cond1) {
+//               << C >>
+//               suspend(token);// C = [cond1 = true]
+//               << D >>
+//           } else {
+//               << E >>
+//           }
+//           << F >>
+//       } while (cond2);
+//       << G >>
+//   } while (cond3);
+//   << H >>
+// Continuation from the `suspend` instruction:
+//   cond1 = true;// condition stack replay
+//   << D >>      // only the remaining instructions in the current block are dominated by the split mark
+//   first = true;// first flag
+//   do {// outer loop
+//       // mask the instructions in the loop body that precede the split mark with the `first` flag
+//       if (!first) {
+//          << A >>
+//       }
+//       do {// inner loop
+//           // mask the instructions in the loop body that precede the split mark with the `first` flag
+//           if (!first) {
+//               << B >>
+//           }
+//           if (cond1) {
+//               if (!first) {
+//                   << C >>
+//                   suspend(token);
+//               }
+//               first = false; // reset the `first` flag at the original split mark
+//           } else {
+//               << E >>
+//           }
+//           // instructions after the split mark are executed normally
+//           << F >>
+//       } while (cond2);
+//       // instructions after the split mark are executed normally
+//       << G >>
+//   } while (cond3);
+//   << H >>
+//
+// Example #6 (nested `loop`s and `if`s):
+//   do {// outer loop
+//      << A >>
+//      if (cond1) {
+//          << B >>
+//          do {// inner loop
+//              << C >>
+//              suspend(token);// C = [cond1 = true]
+//              << D >>
+//          } while (cond2);
+//          << E >>
+//      } else {
+//          << F >>
+//      }
+//      << G >>
+//   } while (cond3);
+//   << H >>
+// Continuation from the `suspend` instruction:
+//   cond1 = true;// condition stack replay
+//   << D >>      // only the remaining instructions in the current block are dominated by the split mark
+//   first = true;// first flag
+//   do {// outer loop
+//       // mask the instructions in the loop body that precede the split mark with the `first` flag
+//       if (!first) {
+//           << A >>
+//       }
+//       if (cond1) {
+//           if (!first) {
+//               << B >>
+//           }
+//           do {// inner loop
+//               // mask the instructions in the loop body that precede the split mark with the `first` flag
+//               if (!first) {
+//                   << C >>
+//                   suspend(token);
+//               }
+//               first = false; // reset the `first` flag at the original split mark
+//               // instructions after the split mark are executed normally
+//               << D >>
+//           } while (cond2);
+//           // instructions after the split mark are executed normally
+//           << E >>
+//       } else {
+//           << F >>
+//       }
+//       // instructions after the split mark are executed normally
+//       << G >>
+//   } while (cond3);
+//   << H >>

@@ -1,9 +1,11 @@
 // Vars scope
 
+// FIXME: do not use NodeRef as key in HashMap/HashSet directly, it will cause kernel cache miss
+
 use crate::analysis::frame_token_manager::{FrameTokenManager, INVALID_FRAME_TOKEN_MASK};
 use crate::context::is_type_equal;
 use crate::display::DisplayIR;
-use crate::ir::{BasicBlock, CallableModule, Instruction, INVALID_REF, NodeRef, SwitchCase, Type};
+use crate::ir::{BasicBlock, CallableModule, Func, Instruction, INVALID_REF, NodeRef, SwitchCase, Type};
 use crate::{CArc, CBoxedSlice, Pool, Pooled};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
@@ -290,17 +292,17 @@ impl ActiveVar {
         let token = self.token;
         self.var_scopes.push(VarScope::new());
     }
-    fn resume_last_scope(&mut self) {
-        let token = self.token;
-        let var_scope = self.var_scope_exited.pop().unwrap();
-        for (node, defined_in_scope) in var_scope.defined.iter() {
-            let defined = self.defined.entry(*node).or_default();
-            for defined_index in defined_in_scope.iter() {
-                defined.insert(*defined_index);
-            }
-        }
-        self.var_scopes.push(var_scope);
-    }
+    // fn resume_last_scope(&mut self) {
+    //     let token = self.token;
+    //     let var_scope = self.var_scope_exited.pop().unwrap();
+    //     for (node, defined_in_scope) in var_scope.defined.iter() {
+    //         let defined = self.defined.entry(*node).or_default();
+    //         for defined_index in defined_in_scope.iter() {
+    //             defined.insert(*defined_index);
+    //         }
+    //     }
+    //     self.var_scopes.push(var_scope);
+    // }
     fn exit_scope(&mut self) {
         let token = self.token;
         let var_scope = self.var_scopes.pop().unwrap();
@@ -311,12 +313,12 @@ impl ActiveVar {
                 defined.remove(defined_index);
             }
         }
-        self.var_scope_exited.push(var_scope);
+        // self.var_scope_exited.push(var_scope);
     }
-    fn exit_without_resume(&mut self) {
-        self.exit_scope();
-        self.var_scope_exited.pop();
-    }
+    // fn exit_without_resume(&mut self) {
+    //     self.exit_scope();
+    //     self.var_scope_exited.pop();
+    // }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -336,6 +338,7 @@ pub(crate) struct CoroFrameAnalyser {
     active_var_by_token_next: HashMap<u32, HashSet<usize>>,
 
     coro_frame: CoroFrame,
+    const_zero_node: HashSet<NodeRef>,
 }
 
 impl CoroFrameAnalyser {
@@ -351,6 +354,7 @@ impl CoroFrameAnalyser {
             active_var_by_token_next: HashMap::new(),
 
             coro_frame: CoroFrame::default(),
+            const_zero_node: HashSet::new(),
         }
     }
 
@@ -365,6 +369,7 @@ impl CoroFrameAnalyser {
         unsafe { DISPLAY_IR_DEBUG.get().display_ir_callable(callable); }  // for DEBUG
 
         self.process_split_possibility(&callable.module.entry);
+        self.record_const_zero_node(&callable.module.entry);
 
         let entry_token = FrameTokenManager::get_new_token();
         self.entry_token = entry_token;
@@ -569,7 +574,6 @@ impl CoroFrameAnalyser {
                 Instruction::GenericLoop { .. }
                 | Instruction::Break
                 | Instruction::Continue => {
-                    // TODO
                     unreachable!("{:?} should be lowered in CCF", instruction)
                 }
 
@@ -588,6 +592,82 @@ impl CoroFrameAnalyser {
             }
         }
         self.split_possibility.insert(bb.as_ptr(), split_poss);
+    }
+    fn record_const_zero_node(&mut self, bb: &Pooled<BasicBlock>) {
+        for node_ref_present in bb.iter() {
+            let node = node_ref_present.get();
+            let instruction = node.instruction.as_ref();
+            match instruction {
+                Instruction::Buffer
+                | Instruction::Bindless
+                | Instruction::Texture2D
+                | Instruction::Texture3D
+                | Instruction::Accel
+                | Instruction::Shared
+                | Instruction::Uniform
+                | Instruction::Argument { .. } => {
+                    unreachable!("{:?} should not appear in basic block", instruction)
+                }
+                Instruction::Invalid => {
+                    unreachable!("Invalid node should not appear in non-sentinel nodes")
+                }
+
+                // 3 Instructions after CCF
+                Instruction::Loop { body, cond } => {
+                    self.record_const_zero_node(body);
+                }
+                Instruction::If {
+                    cond,
+                    true_branch,
+                    false_branch,
+                } => {
+                    self.record_const_zero_node(true_branch);
+                    self.record_const_zero_node(false_branch);
+                }
+                Instruction::Switch {
+                    value: _,
+                    default,
+                    cases,
+                } => {
+                    for SwitchCase { value: _, block } in cases.as_ref().iter() {
+                        self.record_const_zero_node(block);
+                    }
+                    self.record_const_zero_node(default);
+                }
+
+                Instruction::CoroSplitMark { token } => {}
+                Instruction::CoroSuspend { .. }
+                | Instruction::CoroResume { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),
+                Instruction::CoroRegister { token, value, var } => {}
+
+                Instruction::Return(_) => {}
+                Instruction::GenericLoop { .. }
+                | Instruction::Break
+                | Instruction::Continue => {
+                    unreachable!("{:?} should be lowered in CCF", instruction)
+                }
+
+                Instruction::Const(_) => {
+                    self.const_zero_node.insert(node_ref_present);
+                }
+                Instruction::Call(func, args) => {
+                    if let Func::ZeroInitializer = func {
+                        self.const_zero_node.insert(node_ref_present);
+                    }
+                }
+
+                Instruction::Local { .. }
+                | Instruction::UserData(_)
+                | Instruction::Update { .. }
+                | Instruction::Phi(_)
+                | Instruction::RayQuery { .. }
+                | Instruction::Print { .. }
+                | Instruction::Comment(_) => {}
+
+                Instruction::AdDetach(_)
+                | Instruction::AdScope { .. } => unimplemented!("Auto-differentiate is not compatible with Coroutine"),
+            }
+        }
     }
 
     fn visit_coro_split_mark(
@@ -657,9 +737,9 @@ impl CoroFrameAnalyser {
                 .unwrap()
                 .definitely
         );
-        fb_body.active_var.resume_last_scope();
+        // fb_body.active_var.resume_last_scope();
         fb_body.active_var.record_use(*cond); // FIXME: cond is in body block
-        fb_body.active_var.exit_without_resume();
+        // fb_body.active_var.exit_without_resume();
 
         let mut visit_state_after = visit_state.clone();
         visit_state_after.present = visit_state.present.get().next;
@@ -677,16 +757,16 @@ impl CoroFrameAnalyser {
             } else {
                 let mut temp_vec = vec![];
 
-                fb_after.active_var.resume_last_scope();
+                // fb_after.active_var.resume_last_scope();
                 fb_after.active_var.record_use(*cond); // FIXME: cond is in body block
-                fb_after.active_var.exit_without_resume();
+                // fb_after.active_var.exit_without_resume();
 
                 fb_after = self.visit_branch_split(&fb_after, body, &mut temp_vec);
                 assert_eq!(temp_vec.len(), 0);
 
-                fb_after.active_var.resume_last_scope();
+                // fb_after.active_var.resume_last_scope();
                 fb_after.active_var.record_use(*cond);
-                fb_after.active_var.exit_without_resume();
+                // fb_after.active_var.exit_without_resume();
 
                 visit_result.result.extend(self.visit_bb(fb_after, visit_state_after.clone()));
             }
@@ -903,15 +983,18 @@ impl CoroFrameAnalyser {
                         active_var.record_use(*value);
                     }
                 }
-                Instruction::GenericLoop { .. } => todo!(),
-                Instruction::RayQuery { .. } => todo!(),
+                Instruction::Break
+                | Instruction::Continue
+                | Instruction::GenericLoop { .. } => {
+                    unreachable!("{:?} should be lowered in CCF", instruction);
+                }
 
-                Instruction::Break => {}
-                Instruction::Continue => {}
-                Instruction::AdScope { .. } => {}
-                Instruction::AdDetach(_) => {}
-                Instruction::Comment(_) => {}
-                Instruction::Print { .. } => {}
+                Instruction::RayQuery { .. }
+                | Instruction::AdScope { .. }
+                | Instruction::AdDetach(_)
+                | Instruction::Comment(_)
+                | Instruction::Print { .. } => {}
+
                 Instruction::CoroRegister { token: token_next, value, var } => {
                     assert_eq!(*token_next, frame_builder.token);
                     // var <-> frame[token][index] <-> value

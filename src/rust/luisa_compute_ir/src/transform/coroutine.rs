@@ -1061,25 +1061,25 @@ impl SplitManager {
                 .unwrap()
                 .clone()
         } else {
-            // unimplemented!("local_zero_init");
-            // FIXME: this is a temporary solution, local_zero_init
-            let type_ = node.type_().clone();
-            self.coro_local_builder
-                .get_mut(&frame_token)
-                .unwrap()
-                .comment(CBoxedSlice::from("local_zero_init".as_bytes()));
-            let local = self
-                .coro_local_builder
-                .get_mut(&frame_token)
-                .unwrap()
-                .local_zero_init(type_);
-            self.record_node_mapping(frame_token, node, local);
-            self.old2new
-                .nodes
-                .get_mut(&node)
-                .unwrap()
-                .insert(frame_token, local.clone());
-            local
+            unimplemented!("local_zero_init");
+            // // FIXME: this is a temporary solution, local_zero_init
+            // let type_ = node.type_().clone();
+            // self.coro_local_builder
+            //     .get_mut(&frame_token)
+            //     .unwrap()
+            //     .comment(CBoxedSlice::from("local_zero_init".as_bytes()));
+            // let local = self
+            //     .coro_local_builder
+            //     .get_mut(&frame_token)
+            //     .unwrap()
+            //     .local_zero_init(type_);
+            // self.record_node_mapping(frame_token, node, local);
+            // self.old2new
+            //     .nodes
+            //     .get_mut(&node)
+            //     .unwrap()
+            //     .insert(frame_token, local.clone());
+            // local
         }
     }
     fn record_node_mapping(&mut self, frame_token: u32, old: NodeRef, new: NodeRef) {

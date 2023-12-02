@@ -179,13 +179,14 @@ pub(crate) struct CoroGraph {
 //      b. If S[:-1] are non-loops (`if`s and `switch`es), then all reachable instructions from the
 //         split mark are dominated by the split mark (as we will never loop back to the precedents).
 //   2. For the non-dominated instructions, the control flows are copied into the new sub-coroutine.
-//      However, we need to maintain a `first` flag that helps to skip the instructions when we replay
+//      However, we need to maintain a `first` flag that helps skip the instructions when we replay
 //      the condition stack. The `first` flag is assigned to `false` at the original split mark.
-//      Remark: to avoid passing conditions through the coroutine frame, we replay the condition stack
-//      to "fool" the following def-use analysis.
-//   3. Special handling when the only, direct parent is a `loop` (i.e., S[-1] is a `loop` and S[:-1]
-//      is empty): the loop can be simplified to an `if`. (Otherwise we may also have it done in later
-//      passes, e.g., `simplify_control_flow`.)
+//      - Remark 1: we replay the condition stack to "fool" the following def-use analysis, so that we
+//        can avoid passing conditions through the coroutine frame. Maybe we can replay more information
+//        in the future.
+//      - Remark 2: Special handling when the only direct parent is a `loop` (i.e., S[-1] is a `loop`
+//        and S[:-1] is empty): the loop can be simplified to an `if`. (Otherwise we may also have it
+//        done in a later `simplify_control_flow` pass.)
 //   4. Each new sub-coroutine ends with another split mark or a terminate mark (end of the function).
 //      So the split-into-continuation process is recursive.
 //
@@ -210,7 +211,7 @@ pub(crate) struct CoroGraph {
 //       << B >>
 //   } while (cond);
 //   << C >>
-// Continuation from the `suspend` instruction (note the special handling in 3. above):
+// Continuation from the `suspend` instruction (note the special handling in [Step 2. Remark 2.] above):
 //   << B >>
 //   if (cond) {
 //       << A >>
@@ -286,7 +287,7 @@ pub(crate) struct CoroGraph {
 //       << D >>
 //   } while (cond2);
 //   << E >>
-// With the special handling in 3. above, the inner loop can be simplified to an `if`:
+// With the special handling in [Step 2. Remark 2.] above, the inner loop can be simplified to an `if`:
 //   << C >>
 //   first = true;
 //   do {// outer loop

@@ -255,7 +255,8 @@ public                                                           \
     Kernel<N, Args...> {                                         \
         using Kernel<N, Args...>::Kernel;                        \
         Kernel##N##D(Kernel<N, Args...> k) noexcept              \
-            : Kernel<N, Args...>{std::move(k._builder)} {}       \
+            : Kernel<N, Args...> { std::move(k._builder) }       \
+        {}                                                       \
         Kernel##N##D &operator=(Kernel<N, Args...> k) noexcept { \
             this->_builder = std::move(k._builder);              \
             return *this;                                        \
@@ -514,7 +515,7 @@ public:
                 using var_tuple = std::tuple<Var<std::remove_cvref_t<FrameType>>,
                                              Var<std::remove_cvref_t<Args>>...>;
                 using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<FrameType>, detail::prototype_to_creation_tag_t<Args>...>;
-                
+
                 auto args = detail::create_argument_definitions<var_tuple, tag_tuple>(std::tuple<>{});
                 static_assert(std::tuple_size_v<decltype(args)> == 1 + sizeof...(Args));
                 return luisa::invoke(std::forward<decltype(def)>(def),
@@ -541,6 +542,7 @@ public:
     [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
     [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
     [[nodiscard]] auto const suspend_count() noexcept { return _coro_tokens.size(); }
+    [[nodiscard]] auto const coro_tokens() noexcept { return _coro_tokens; }
     //Call from start of coroutine
     auto operator()(detail::prototype_to_callable_invocation_t<FrameType> type,
                     detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
@@ -565,7 +567,7 @@ public:
         return builder->second;
     };
     auto operator[](luisa::string &&index) const noexcept {
-        return (*this)[function_builder()->coro_tokens()[index]];
+        return (*this)[coro_tokens()[index]];
     };
 };
 namespace detail {

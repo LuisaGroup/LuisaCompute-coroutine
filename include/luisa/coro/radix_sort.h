@@ -8,32 +8,44 @@
 #include <luisa/runtime/shader.h>
 #include <luisa/dsl/builtin.h>
 namespace luisa::compute {
-
+const uint HIST_BLOCK_SIZE = 128;
+const uint SM_COUNT = 256;
+const uint ONESWEEP_BLOCK_SIZE = 256;
+const uint ONESWEEP_ITEM_COUNT = 32;
+const uint WARP_LOG = 5;
+const uint WARP_SIZE = 1 << WARP_LOG;
+const uint WARP_MASK = WARP_SIZE - 1;
+const uint ALL_MASK = 0xffff'ffff;
+const uint BIN_LOCAL_MASK = 0x4000'0000;
+const uint BIN_GLOBAL_MASK = 0x8000'0000;
+const uint BIN_VAL_MASK = 0x3fff'ffff;
 class radix_sort {
     //2 mod: limit digit mode: search from a get_key, make single histogram and return
     // or make a histogram for bit segment, and run onesweep multiple times
     //return index intead of key
     // extra buffer we need: key_out, intermediate_key. can be passed in
+public:
+    struct temp_storage {
+        Buffer<uint> bin_buffer;
+        Buffer<uint> launch_count;
+        Buffer<uint> hist_buffer;
+        temp_storage(Device device, uint maxn, uint max_digit) noexcept
+            : bin_buffer{device.create_buffer<uint>(ceil_div(maxn, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * max_digit)},
+              launch_count{device.create_buffer<uint>(1u)},
+              hist_buffer{device.create_buffer<uint>(32 * max_digit)} {}
+    };
+    struct temp_storage_view {
+        BufferView<uint> bin_buffer;
+        BufferView<uint> launch_count;
+        BufferView<uint> hist_buffer;
+        temp_storage_view(temp_storage &storage) noexcept
+            : bin_buffer{storage.bin_buffer.view()},
+              launch_count{storage.launch_count.view()},
+              hist_buffer{storage.hist_buffer.view()} {}
+    };
 private:
-    const uint HIST_BLOCK_SIZE = 128;
-    const uint SM_COUNT = 256;
-    const uint ONESWEEP_BLOCK_SIZE = 256;
-    const uint ONESWEEP_ITEM_COUNT = 32;
-    const uint WARP_LOG = 5;
-    const uint WARP_SIZE = 1 << WARP_LOG;
-    const uint WARP_MASK = WARP_SIZE - 1;
-    const uint ALL_MASK = 0xffff'ffff;
-    const uint BIN_LOCAL_MASK = 0x4000'0000;
-    const uint BIN_GLOBAL_MASK = 0x8000'0000;
-    const uint BIN_VAL_MASK = 0x3fff'ffff;
-    /*BufferView<uint> temp_key;
-    BufferView<uint> temp_val;
-    BufferView<uint> key_out;
-    BufferView<uint> val_out;*/
+    temp_storage_view _temp;
     luisa::vector<uint> bit_split;
-    Buffer<uint> bin_buffer;
-    Buffer<uint> launch_count;
-    Buffer<uint> hist_buffer;
     Shader1D<Buffer<uint> /*hist_buffer*/, uint /*item_count*/, uint /*n*/> hist_shader;
     Shader1D<Buffer<uint> /*hist_buffer*/> accum_shader;
     Shader1D<Buffer<uint>, Buffer<uint> /*key_out*/, Buffer<uint>, Buffer<uint> /*val_out*/, Buffer<uint> /*launch_counter*/, Buffer<uint> /*hist_buffer*/,
@@ -63,10 +75,10 @@ public:
     ///@param digit: number of digits used for one pass of bucket sort, default 128
     ///@param low_bit: lowest bit of radix sort, will use bit in [low_bit,high_bit]
     ///@param high_bit: highest bit of radix sort
-    radix_sort(Device device, uint maxn,
+    radix_sort(Device device, uint maxn, temp_storage &temp,
                Callable<uint(uint)> *get_key, Callable<uint(uint)> *get_val, Callable<uint(uint)> *get_key_set = nullptr,
                uint mode = 0, uint digit = 128, uint low_bit = 0, uint high_bit = 31) noexcept
-        : DIGIT{digit}, low_bit{low_bit}, high_bit{high_bit}, MAXN{maxn} {
+        : DIGIT{digit}, low_bit{low_bit}, high_bit{high_bit}, MAXN{maxn}, _temp{temp} {
         LUISA_ASSERT(mode == 0 || mode == 1, "mode should be 0 for radix sort and 1 for bucket sort!");
         BIT = 0;
         while ((1u << BIT) < DIGIT) {
@@ -84,9 +96,6 @@ public:
             bit_split.push_back(0);
         }
         HIST_GROUP = bit_split.size();
-        hist_buffer = device.create_buffer<uint>(HIST_GROUP * DIGIT);
-        launch_count = device.create_buffer<uint>(1u);
-        bin_buffer = device.create_buffer<uint>(ceil_div(MAXN, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
         Kernel1D get_hist = [&](BufferUInt hist_buffer, UInt item_count, UInt n) {
             set_block_size(HIST_BLOCK_SIZE);
             Shared<uint> local_hist{DIGIT * HIST_GROUP};
@@ -263,13 +272,13 @@ public:
     }
     void build_histogram(Stream &stream, uint n) {
         auto thread_count = HIST_BLOCK_SIZE * SM_COUNT;
-        stream << clear_shader(hist_buffer).dispatch(HIST_GROUP * DIGIT);
+        stream << clear_shader(_temp.hist_buffer).dispatch(HIST_GROUP * DIGIT);
         if (thread_count >= n) {
-            stream << hist_shader(hist_buffer, 1, n).dispatch(ceil_div(n, HIST_BLOCK_SIZE) * HIST_BLOCK_SIZE);
+            stream << hist_shader(_temp.hist_buffer, 1, n).dispatch(ceil_div(n, HIST_BLOCK_SIZE) * HIST_BLOCK_SIZE);
         } else {
-            stream << hist_shader(hist_buffer, ceil_div(n, SM_COUNT * HIST_BLOCK_SIZE), n).dispatch(SM_COUNT * HIST_BLOCK_SIZE);
+            stream << hist_shader(_temp.hist_buffer, ceil_div(n, SM_COUNT * HIST_BLOCK_SIZE), n).dispatch(SM_COUNT * HIST_BLOCK_SIZE);
         }
-        stream << accum_shader(hist_buffer).dispatch(HIST_GROUP * 32);
+        stream << accum_shader(_temp.hist_buffer).dispatch(HIST_GROUP * 32);
     }
     ///standard sort, output to a certain array
     void sort(Stream &stream, BufferView<uint> temp_key, BufferView<uint> temp_val, BufferView<uint> key_out, BufferView<uint> val_out, uint n) {
@@ -279,12 +288,16 @@ public:
         BufferView<uint> vals[2] = {temp_val, val_out};
         uint out = HIST_GROUP & 1;
         for (int i = 0; i < HIST_GROUP; ++i) {
-            stream << clear_shader(launch_count).dispatch(1u);
-            stream << clear_shader(bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
+            stream << clear_shader(_temp.launch_count).dispatch(1u);
+            stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
             if (i == 0) {
-                stream << onesweep_first_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], launch_count, hist_buffer.view(i * DIGIT, DIGIT), bin_buffer, bit_split[i], n).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
+                stream << onesweep_first_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
+                                                _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
+                              .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
             } else {
-                stream << onesweep_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], launch_count, hist_buffer.view(i * DIGIT, DIGIT), bin_buffer, bit_split[i], n).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
+                stream << onesweep_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
+                                          _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
+                              .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
             }
             out ^= 1;
         }
@@ -296,12 +309,16 @@ public:
         build_histogram(stream, n);
         uint out = 1u;
         for (int i = 0; i < HIST_GROUP; ++i) {
-            stream << clear_shader(launch_count).dispatch(1u);
-            stream << clear_shader(bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
+            stream << clear_shader(_temp.launch_count).dispatch(1u);
+            stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
             if (i == 0) {
-                stream << onesweep_first_shader(temp_key[out ^ 1], temp_key[out], temp_val[out ^ 1], temp_val[out], launch_count, hist_buffer.view(i * DIGIT, DIGIT), bin_buffer, bit_split[i], n).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
+                stream << onesweep_first_shader(temp_key[out ^ 1], temp_key[out], temp_val[out ^ 1], temp_val[out], _temp.launch_count,
+                                                _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
+                              .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
             } else {
-                stream << onesweep_shader(temp_key[out ^ 1], temp_key[out], temp_val[out ^ 1], temp_val[out], launch_count, hist_buffer.view(i * DIGIT, DIGIT), bin_buffer, bit_split[i], n).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
+                stream << onesweep_shader(temp_key[out ^ 1], temp_key[out], temp_val[out ^ 1], temp_val[out], _temp.launch_count,
+                                          _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
+                              .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
             }
             out ^= 1;
         }

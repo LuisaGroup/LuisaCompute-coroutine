@@ -107,18 +107,27 @@ private:
     uint _max_frame_count;
     bool _debug;
     void _await_step(Stream &stream) noexcept;
+    radix_sort::temp_storage _sort_temp_storage;
+    radix_sort _sort_token;
+    radix_sort _sort_hint;
+    luisa::vector<bool> _have_hint;
+    compute::Buffer<uint> _temp_key[2];
+    compute::Buffer<uint> _temp_index;
 public:
     //TODO: check async problem with these two functions
     bool all_dispatched() const noexcept;
     bool all_done() const noexcept;
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream &stream,
-                            uint max_frame_count = 2000000, bool debug = false) noexcept
+                            uint max_frame_count = 2000000, luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           _max_frame_count{max_frame_count}, _debug{debug} {
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
         _resume_index = device.create_buffer<uint>(max_frame_count);
+        _temp_index = device.create_buffer<uint>(max_frame_count);
+        _temp_key[0] = device.create_buffer<uint>(max_frame_count);
+        _temp_key[1] = device.create_buffer<uint>(max_frame_count);
         _resume_count = device.create_buffer<uint>(max_sub_coro);
         _resume_offset = device.create_buffer<uint>(max_sub_coro);
         _global_buffer = device.create_buffer<uint>(1);
@@ -127,6 +136,10 @@ public:
         _frame = device.create_buffer<FrameType>(max_frame_count);
         _host_offset.resize(max_sub_coro);
         _host_count.resize(max_sub_coro);
+        _have_hint.resize(max_sub_coro, false);
+        for (auto token : hint_token) {
+            _have_hint[coroutine->coro_tokens[token]] = true;
+        }
         for (auto i = 0u; i < max_sub_coro; i++) {
             if (i) {
                 _host_count[i] = 0;
@@ -136,6 +149,27 @@ public:
                 _host_offset[i] = 0;
             }
         }
+        Callable get_coro_token = [&](uint index) {
+            auto frame = _frame.read(index);
+            return read_promise<uint>(frame, "coro_token") & token_mask;
+        };
+        Callable id = [&](uint index) {
+            return index;
+        };
+
+        Callable keep_index = [&](uint index) {
+            return _resume_index->read(index);
+        };
+        Callable get_coro_hint = [&](uint index) {
+            auto id = keep_index(index);
+            auto frame = _frame->read(id);
+            return read_promise<uint>(frame, "coro_hint");
+        };
+        _sort_temp_storage = radix_sort::temp_storage(device, max_frame_count, std::max(128u, max_sub_coro));
+        _sort_token = radix_sort(device, max_frame_count, _sort_temp_storage,
+                                 &get_coro_token, &id, &get_coro_token, 1, max_sub_coro);
+        _sort_hint = radix_sort(device, max_frame_count, _sort_temp_storage,
+                                &get_coro_hint, &keep_index);
         Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, Var<Buffer<FrameType>> frame_buffer, UInt st_task_id, UInt n, Var<Args>... args) {
             auto x = dispatch_x();
             $if (x >= n) {
@@ -146,11 +180,11 @@ public:
             auto frame_id = offset + x;
             auto frame = frame_buffer.read(frame_id);
             initialize_coroframe(frame, def<uint3>(st_task_id + x, 0, 0));
-            count.atomic(0).fetch_add(-1u);
+            //count.atomic(0).fetch_add(-1u);
             (*coroutine)(frame, args...);
             frame_buffer.write(frame_id, frame);
-            auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
-            count.atomic(nxt).fetch_add(1u);
+            //auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
+            //count.atomic(nxt).fetch_add(1u);
         };
         _gen_shader = device.compile(gen_kernel);
         _resume_shaders.resize(max_sub_coro);
@@ -162,29 +196,17 @@ public:
                 };
                 auto frame_id = index.read(x);
                 auto frame = frame_buffer.read(frame_id);
-                count.atomic(i).fetch_add(-1u);
+                //count.atomic(i).fetch_add(-1u);
                 (*coroutine)[i](frame, args...);
                 auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
                 frame_buffer.write(frame_id, frame);
                 if (debug)
                     this->_printer.info("resume kernel {} : id {} goto kernel {}", i, frame_id, nxt);
-                count.atomic(nxt).fetch_add(1u);
+                //count.atomic(nxt).fetch_add(1u);
             };
             _resume_shaders[i] = device.compile(resume_kernel);
         }
         Kernel1D _prefix_kernel = [&](BufferUInt count, BufferUInt prefix, UInt n) {
-            /*_global_buffer->write(0, 0);
-            sync_block();
-            auto x = dispatch_x();
-            auto val = ite(x < n, count->read(x), 0u);
-            auto sum = warp_active_sum(val);
-            auto w_pre = warp_prefix_sum(val);
-            UInt res = 0u;
-            $if (warp_is_first_active_lane()) {
-                res = _global_buffer->atomic(0).fetch_add(sum);
-            };
-            res = warp_read_first_active_lane(res);
-            prefix->write(x, res + w_pre);*/
             $if (dispatch_x() == 0) {
                 auto pre = def(0u);
                 $for (i, 0u, _max_sub_coro) {
@@ -473,6 +495,50 @@ void CoroAwait<T>::operator()(Stream &stream) && noexcept {
 }
 template<typename FrameRef, typename... Args>
 void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noexcept {
+    auto host_update = [&] {
+        _host_empty = true;
+        auto sum = 0u;
+        for (uint i = 0; i < _max_sub_coro; i++) {
+            _host_offset[i] = sum;
+            sum += _host_count[i];
+            _host_empty = _host_empty && (i == 0 || _host_count[i] == 0);
+        }
+    };
+    _sort_token.sort(stream, _temp_key[0], _resume_index, _temp_key[1], _resume_index, _max_frame_count);
+    stream << _sort_temp_storage.hist_buffer.view(0, _max_sub_coro).copy_to(_host_count.data())
+           << host_update;
+    if (_debug)
+        for (int i = 0; i < _max_sub_coro; ++i) {
+            LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
+        }
+    if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
+        if (_host_count[0] != _max_frame_count) {
+            stream << _compact_shader(_resume_index, _frame, _host_count[0], _max_frame_count).dispatch(_max_frame_count - _host_count[0]);
+        }
+        stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Buffer<FrameType>, uint, uint>(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _frame, _dispatch_counter, _max_frame_count).dispatch(_host_count[0]);
+        _dispatch_counter += _host_count[0];
+    } else {
+        for (uint i = 1; i < _max_sub_coro; i++) {
+            if (_host_count[i] > 0) {
+                if (_have_hint[i]) {
+                    BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
+                    BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
+                    uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
+                    stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Buffer<FrameType>, uint>(_resume_shaders[i], _index[out],
+                                                                                                                 _resume_count, _frame, _max_frame_count)
+                                  .dispatch(_host_count[i]);
+                } else {
+                    stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Buffer<FrameType>, uint>(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
+                                                                                                                 _resume_count, _frame, _max_frame_count)
+                                  .dispatch(_host_count[i]);
+                }
+            }
+        }
+    }
+    stream << synchronize();
+}
+/*template<typename FrameRef, typename... Args>
+void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noexcept {
     if (_debug)
         for (int i = 0; i < _max_sub_coro; ++i) {
             LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
@@ -509,7 +575,7 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
         stream << this->_printer.retrieve();
     }
     stream << synchronize();
-};
+}*/
 template<typename FrameRef, typename... Args>
 bool WavefrontCoroDispatcher<FrameRef, Args...>::all_dispatched() const noexcept {
     return this->_dispatch_size == this->_dispatch_counter;

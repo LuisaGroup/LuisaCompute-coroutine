@@ -6,35 +6,79 @@
 // Note: this analysis only works on a single module without recurse into its callees.
 
 use crate::ir::{BasicBlock, Instruction, Module, NodeRef};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CoroInstrRef(usize);
+
+impl CoroInstrRef {
+    fn invalid() -> Self {
+        Self(usize::MAX)
+    }
+}
+
+impl CoroScopeRef {
+    fn invalid() -> Self {
+        Self(usize::MAX)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CoroScopeRef(usize);
+
+pub(crate) struct ConditionStackItem {
+    // the condition node (for `if` and `switch`)
+    pub node: NodeRef,
+    // the condition value that leads to the current instruction
+    // (0/1 for `if`, i32 values for `switch` cases, `loops` and
+    // `switch` default are not recorded)
+    pub value: i32,
+}
 
 pub(crate) struct CoroSwitchCase {
-    pub value: i64,
-    pub body: Vec<usize>, // indices into the graph nodes
+    pub value: i32,
+    pub body: Vec<CoroInstrRef>, // indices into the graph nodes
 }
 
 pub(crate) enum CoroInstruction {
+    // entry
+    Entry,
+
+    // entry scope
+    EntryScope {
+        body: Vec<CoroInstrRef>, // indices into the graph nodes
+    },
+
     // A simple IR node that does not contain any nested basic blocks.
     Simple(NodeRef),
 
+    // replay the condition stack
+    ConditionStackReplay {
+        items: Vec<ConditionStackItem>,
+    },
+
+    FirstFlag,                      // initialization of a first flag
+    FirstFlagIsFalse(CoroInstrRef), // check if a first flag is false
+    FirstFlagClear(CoroInstrRef),   // clear a first flag
+
     // A do-while loop
     Loop {
-        body: Vec<usize>, // indices into the graph nodes
-        cond: usize,      // indices into the graph nodes
+        body: Vec<CoroInstrRef>, // indices into the graph nodes
+        cond: CoroInstrRef,      // indices into the graph nodes
     },
 
     // An if-then-else branch
     If {
-        cond: usize,              // indices into the graph nodes
-        true_branch: Vec<usize>,  // indices into the graph nodes
-        false_branch: Vec<usize>, // indices into the graph nodes
+        cond: CoroInstrRef,              // indices into the graph nodes
+        true_branch: Vec<CoroInstrRef>,  // indices into the graph nodes
+        false_branch: Vec<CoroInstrRef>, // indices into the graph nodes
     },
 
     // A switch statement
     Switch {
-        value: usize,               // indices into the graph nodes
+        cond: CoroInstrRef,         // indices into the graph nodes
         cases: Vec<CoroSwitchCase>, // indices into the graph nodes
-        default: Vec<usize>,        // indices into the graph nodes
+        default: Vec<CoroInstrRef>, // indices into the graph nodes
     },
 
     // An suspend mark
@@ -47,27 +91,27 @@ pub(crate) enum CoroInstruction {
 }
 
 pub(crate) struct CoroScope {
-    pub instructions: Vec<usize>, // indices into the graph nodes
+    pub instructions: Vec<CoroInstrRef>, // indices into the graph nodes
 }
 
 // This struct is a direct translation from the IR to the coroutine graph without
 // splitting the coroutine scopes, i.e., the only scope is the root (entry) scope.
 pub(crate) struct CoroPreliminaryGraph {
-    pub scope: CoroScope,                       // the current scope
-    pub instructions: Vec<CoroInstruction>,     // all the instructions in the graph
-    pub node_to_instr: HashMap<NodeRef, usize>, // IR node to instruction index
+    pub entry_scope: CoroInstrRef,          // index of the entry scope
+    pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
+    pub node_to_instr: HashMap<NodeRef, CoroInstrRef>, // IR node to instruction index
 }
 
 impl CoroPreliminaryGraph {
     fn translate_node(
         node: &NodeRef,
         instructions: &mut Vec<CoroInstruction>,
-        node_to_instr: &mut HashMap<NodeRef, usize>,
-    ) -> usize {
+        node_to_instr: &mut HashMap<NodeRef, CoroInstrRef>,
+    ) -> CoroInstrRef {
         assert!(!node_to_instr.contains_key(node), "Duplicate node in IR.");
         macro_rules! register {
             ($node: expr, $instr: expr) => {{
-                let index = instructions.len();
+                let index = CoroInstrRef(instructions.len());
                 instructions.push($instr);
                 node_to_instr.insert($node.clone(), index);
                 assert_eq!(instructions.len(), node_to_instr.len());
@@ -109,13 +153,13 @@ impl CoroPreliminaryGraph {
                 let cases = cases
                     .iter()
                     .map(|case| CoroSwitchCase {
-                        value: case.value as i64,
+                        value: case.value,
                         body: Self::translate_block(&case.block, instructions, node_to_instr),
                     })
                     .collect();
                 let default = Self::translate_block(default, instructions, node_to_instr);
                 let instr = CoroInstruction::Switch {
-                    value,
+                    cond: value,
                     cases,
                     default,
                 };
@@ -133,8 +177,8 @@ impl CoroPreliminaryGraph {
     fn translate_block(
         block: &BasicBlock,
         instructions: &mut Vec<CoroInstruction>,
-        node_to_instr: &mut HashMap<NodeRef, usize>,
-    ) -> Vec<usize> {
+        node_to_instr: &mut HashMap<NodeRef, CoroInstrRef>,
+    ) -> Vec<CoroInstrRef> {
         block
             .iter()
             .map(|node| Self::translate_node(&node, instructions, node_to_instr))
@@ -144,12 +188,18 @@ impl CoroPreliminaryGraph {
     pub fn from(module: &Module) -> Self {
         let mut instructions = Vec::new();
         let mut node_to_instr = HashMap::new();
-        let entry =
+        let mut entry_scope =
             Self::translate_block(module.entry.as_ref(), &mut instructions, &mut node_to_instr);
+        // add the entry scope to the graph
+        let entry_instr = CoroInstruction::Entry;
+        let entry = CoroInstrRef(instructions.len());
+        instructions.push(entry_instr);
+        entry_scope.insert(0, entry);
+        let entry_scope = CoroInstruction::EntryScope { body: entry_scope };
+        let entry = CoroInstrRef(instructions.len());
+        instructions.push(entry_scope);
         Self {
-            scope: CoroScope {
-                instructions: entry,
-            },
+            entry_scope: entry,
             instructions,
             node_to_instr,
         }
@@ -158,11 +208,11 @@ impl CoroPreliminaryGraph {
 
 // This struct is the final coroutine graph after splitting the coroutine scopes.
 pub(crate) struct CoroGraph {
-    scopes: Vec<CoroScope>,                 // all the scopes in the graph
-    entry: usize, // the index of the scope that contains the entry split mark
-    marks: HashMap<u32, usize>, // map from split mark token to scope index
-    instructions: Vec<CoroInstruction>, // all the instructions in the graph
-    node_to_instr: HashMap<NodeRef, usize>, // IR node to instruction index
+    scopes: Vec<CoroScope>,                        // all the scopes in the graph
+    entry: CoroScopeRef,                           // the index of the entry scope (the root scope)
+    marks: HashMap<u32, CoroScopeRef>,             // map from split mark token to scope index
+    instructions: Vec<CoroInstruction>,            // all the instructions in the graph
+    node_to_instr: HashMap<NodeRef, CoroInstrRef>, // IR node to instruction index
 }
 
 // Method:
@@ -233,8 +283,8 @@ pub(crate) struct CoroGraph {
 //   } while (cond2);
 //   << F >>
 // Continuation from the `suspend` instruction:
-//   cond1 = true;// condition stack replay
 //   << C >>      // only the remaining instructions in the current block are dominated by the split mark
+//   cond1 = true;// condition stack replay
 //   first = true;// first flag
 //   do {
 //       // mask the instructions in the loop body that precede the split mark with the `first` flag
@@ -323,8 +373,8 @@ pub(crate) struct CoroGraph {
 //   } while (cond3);
 //   << H >>
 // Continuation from the `suspend` instruction:
-//   cond1 = true;// condition stack replay
 //   << D >>      // only the remaining instructions in the current block are dominated by the split mark
+//   cond1 = true;// condition stack replay
 //   first = true;// first flag
 //   do {// outer loop
 //       // mask the instructions in the loop body that precede the split mark with the `first` flag
@@ -371,8 +421,8 @@ pub(crate) struct CoroGraph {
 //   } while (cond3);
 //   << H >>
 // Continuation from the `suspend` instruction:
-//   cond1 = true;// condition stack replay
 //   << D >>      // only the remaining instructions in the current block are dominated by the split mark
+//   cond1 = true;// condition stack replay
 //   first = true;// first flag
 //   do {// outer loop
 //       // mask the instructions in the loop body that precede the split mark with the `first` flag
@@ -402,3 +452,136 @@ pub(crate) struct CoroGraph {
 //       << G >>
 //   } while (cond3);
 //   << H >>
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CoroGraphIndexer {
+    parent: CoroInstrRef,
+    branch: usize,
+    index: usize,
+}
+
+impl CoroGraph {
+    pub(crate) fn instr(&self, i: CoroInstrRef) -> &CoroInstruction {
+        &self.instructions[i.0]
+    }
+
+    pub(crate) fn get(&self, i: CoroGraphIndexer) -> CoroInstrRef {
+        let parent_instr = self.instr(i.parent);
+        match parent_instr {
+            CoroInstruction::EntryScope { body } => {
+                assert_eq!(i.branch, 0);
+                assert!(i.index < body.len());
+                body[i.branch]
+            }
+            CoroInstruction::Loop { body, .. } => {
+                assert_eq!(i.branch, 0);
+                assert!(i.index < body.len());
+                body[i.branch]
+            }
+            CoroInstruction::If {
+                true_branch,
+                false_branch,
+                ..
+            } => match i.branch {
+                0 => {
+                    assert!(i.index < true_branch.len());
+                    true_branch[i.index]
+                }
+                1 => {
+                    assert!(i.index < false_branch.len());
+                    false_branch[i.index]
+                }
+                _ => panic!("Unexpected branch index."),
+            },
+            CoroInstruction::Switch { cases, default, .. } => {
+                if i.branch < cases.len() {
+                    assert!(i.index < cases[i.branch].body.len());
+                    cases[i.branch].body[i.index]
+                } else {
+                    assert_eq!(i.branch, cases.len());
+                    assert!(i.index < default.len());
+                    default[i.index]
+                }
+            }
+            _ => panic!("Not a control-flow instruction."),
+        }
+    }
+
+    pub(crate) fn get_instr(&self, i: CoroGraphIndexer) -> &CoroInstruction {
+        self.instr(self.get(i))
+    }
+
+    // depth-first traversal of the stacked control flows
+    pub(crate) fn next(
+        &self,
+        i: CoroGraphIndexer,
+        stack: &mut Vec<CoroGraphIndexer>,
+    ) -> Option<CoroGraphIndexer> {
+        todo!()
+    }
+}
+
+impl CoroGraph {
+    fn construct_sub_scope(
+        graph: &mut CoroGraph,
+        current: CoroGraphIndexer,
+        ancestors: &Vec<CoroGraphIndexer>,
+    ) -> CoroScope {
+        todo!()
+    }
+
+    fn extract_continuation_at_suspend(
+        graph: &mut CoroGraph,
+        current: CoroGraphIndexer,
+        ancestors: &mut Vec<CoroGraphIndexer>,
+    ) {
+        let instr = graph.get_instr(current);
+        let token = match instr {
+            CoroInstruction::Entry => None,
+            CoroInstruction::Suspend { token } => Some(*token),
+            _ => panic!("Unexpected instruction."),
+        };
+        if let Some(token) = token {
+            if graph.marks.contains_key(&token) {
+                // the continuation has been extracted
+                return;
+            }
+        }
+        // actually extract the continuation
+        let sub_scope = Self::construct_sub_scope(graph, current, ancestors);
+        // add the sub-scope to the graph
+        let sub_scope_index = graph.scopes.len();
+        graph.scopes.push(sub_scope);
+        if let Some(token) = token {
+            graph.marks.insert(token, CoroScopeRef(sub_scope_index));
+        } else {
+            graph.entry = CoroScopeRef(sub_scope_index);
+        }
+    }
+
+    fn build(preliminary_graph: CoroPreliminaryGraph) -> CoroGraph {
+        let mut graph = CoroGraph {
+            scopes: Vec::new(),
+            entry: CoroScopeRef::invalid(),
+            marks: HashMap::new(),
+            instructions: preliminary_graph.instructions,
+            node_to_instr: preliminary_graph.node_to_instr,
+        };
+        let mut iter = Some(CoroGraphIndexer {
+            parent: preliminary_graph.entry_scope,
+            branch: 0,
+            index: 0,
+        });
+        let mut stack = Vec::new();
+        while let Some(i) = iter {
+            match graph.get_instr(i) {
+                CoroInstruction::Entry | CoroInstruction::Suspend { .. } => {
+                    Self::extract_continuation_at_suspend(&mut graph, i, &mut stack);
+                }
+                _ => {}
+            }
+            iter = graph.next(i, &mut stack);
+        }
+        graph
+    }
+}

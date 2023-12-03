@@ -545,8 +545,7 @@ private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
 
 public:
-    PrintStmt(luisa::string fmt, luisa::vector<const Expression *> args) noexcept
-        : Statement{Tag::PRINT}, _format{std::move(fmt)}, _args{std::move(args)} {}
+    PrintStmt(luisa::string fmt, luisa::vector<const Expression *> args) noexcept;
     [[nodiscard]] auto format() const noexcept { return luisa::string_view{_format}; }
     [[nodiscard]] auto arguments() const noexcept { return luisa::span{_args}; }
     LUISA_STATEMENT_COMMON()

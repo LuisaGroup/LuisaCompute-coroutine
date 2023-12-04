@@ -563,27 +563,27 @@ impl CoroGraph {
         body: &Vec<CoroInstrRef>,
         ancestors: &mut Vec<CoroGraphIndexer>,
     ) {
-        macro_rules! recurse {
-            ($scope: expr, $branch: expr, $block: expr) => {
-                let i = CoroGraphIndexer {
-                    parent: parent_scope,
-                    branch: parent_branch,
-                    index: 0,
-                };
-                ancestors.push(i);
-                Self::recurse_continuation_extraction(
-                    graph,
-                    instructions,
-                    $scope,
-                    $branch,
-                    $block,
-                    ancestors,
-                );
-                let popped = ancestors.pop();
-                assert_eq!(popped, Some(i));
-            };
-        }
         for (instr_index, &instr_ref) in body.iter().enumerate() {
+            macro_rules! recurse {
+                ($branch: expr, $block: expr) => {
+                    let i = CoroGraphIndexer {
+                        parent: parent_scope,
+                        branch: parent_branch,
+                        index: instr_index,
+                    };
+                    ancestors.push(i);
+                    Self::recurse_continuation_extraction(
+                        graph,
+                        instructions,
+                        instr_ref,
+                        $branch,
+                        $block,
+                        ancestors,
+                    );
+                    let popped = ancestors.pop();
+                    assert_eq!(popped, Some(i));
+                };
+            }
             let instr = &instructions[instr_ref.0];
             match instr {
                 CoroInstruction::Entry | CoroInstruction::Suspend { .. } => {
@@ -600,21 +600,21 @@ impl CoroGraph {
                 }
                 CoroInstruction::Simple(_) => { /* do nothing */ }
                 CoroInstruction::Loop { body, .. } => {
-                    recurse!(instr_ref, 0, body);
+                    recurse!(0, body);
                 }
                 CoroInstruction::If {
                     true_branch,
                     false_branch,
                     ..
                 } => {
-                    recurse!(instr_ref, 0, true_branch);
-                    recurse!(instr_ref, 1, false_branch);
+                    recurse!(0, true_branch);
+                    recurse!(1, false_branch);
                 }
                 CoroInstruction::Switch { cases, default, .. } => {
                     for (case_index, case) in cases.iter().enumerate() {
-                        recurse!(instr_ref, case_index, &case.body);
+                        recurse!(case_index, &case.body);
                     }
-                    recurse!(instr_ref, cases.len(), default);
+                    recurse!(cases.len(), default);
                 }
                 CoroInstruction::Terminate => {}
                 _ => panic!("Unexpected instruction."),

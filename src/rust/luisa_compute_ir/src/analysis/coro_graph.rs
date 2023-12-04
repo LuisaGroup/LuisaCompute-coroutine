@@ -897,14 +897,19 @@ impl CoroGraph {
                 true_branch,
                 false_branch,
                 ..
-            } => traverse!(true_branch) && traverse!(false_branch),
+            } => {
+                let true_is_terminator = traverse!(true_branch);
+                let false_is_terminator = traverse!(false_branch);
+                true_is_terminator && false_is_terminator
+            }
             CoroInstruction::Switch { cases, default, .. } => {
-                let mut all = true;
+                let mut cases_are_all_terminators = true;
                 for case in cases.iter() {
-                    all = all && traverse!(&case.body);
+                    let case_is_terminator = traverse!(&case.body);
+                    cases_are_all_terminators = cases_are_all_terminators && case_is_terminator;
                 }
-                all = all && traverse!(default);
-                all
+                let default_is_terminator = traverse!(default);
+                cases_are_all_terminators && default_is_terminator
             }
             _ => false,
         };
@@ -912,17 +917,23 @@ impl CoroGraph {
     }
 
     fn build(preliminary_graph: CoroPreliminaryGraph) -> CoroGraph {
+        // find the terminator set
         let mut terminators = HashMap::new();
         Self::find_terminators(
             &preliminary_graph.instructions,
             &preliminary_graph.entry_scope,
             &mut terminators,
         );
+        assert!((0..preliminary_graph.instructions.len()).all(|instr| {
+            let instr = CoroInstrRef(instr);
+            terminators.contains_key(&instr)
+        }));
         let terminators: HashSet<_> = terminators
             .iter()
             .filter_map(|(k, v)| if *v { Some(*k) } else { None })
             .collect();
 
+        // build the graph
         let mut graph = CoroGraph {
             scopes: Vec::new(),
             entry: CoroScopeRef::invalid(),
@@ -931,9 +942,8 @@ impl CoroGraph {
             node_to_instr: preliminary_graph.node_to_instr,
         };
 
-        if let CoroInstruction::EntryScope { body: entry_body } =
-            &preliminary_graph.instructions[preliminary_graph.entry_scope.0]
-        {
+        let entry = &preliminary_graph.instructions[preliminary_graph.entry_scope.0];
+        if let CoroInstruction::EntryScope { body: entry_body } = entry {
             Self::recurse_continuation_extraction(
                 &mut graph,
                 &preliminary_graph.instructions,

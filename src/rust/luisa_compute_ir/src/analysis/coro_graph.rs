@@ -283,8 +283,8 @@ pub(crate) struct CoroGraph {
 //   } while (cond2);
 //   << F >>
 // Continuation from the `suspend` instruction:
-//   << C >>      // only the remaining instructions in the current block are dominated by the split mark
 //   cond1 = true;// condition stack replay
+//   << C >>      // only the remaining instructions in the current block are dominated by the split mark
 //   first = true;// first flag
 //   do {
 //       // mask the instructions in the loop body that precede the split mark with the `first` flag
@@ -302,7 +302,6 @@ pub(crate) struct CoroGraph {
 //       }
 //       // instructions after the split mark are executed normally
 //       << E >>
-//       first_flag = false; // the `first` flag is assigned to `false` at the end of the loop body
 //   } while (cond2);
 //   << F >>
 //
@@ -373,8 +372,8 @@ pub(crate) struct CoroGraph {
 //   } while (cond3);
 //   << H >>
 // Continuation from the `suspend` instruction:
-//   << D >>      // only the remaining instructions in the current block are dominated by the split mark
 //   cond1 = true;// condition stack replay
+//   << D >>      // only the remaining instructions in the current block are dominated by the split mark
 //   first = true;// first flag
 //   do {// outer loop
 //       // mask the instructions in the loop body that precede the split mark with the `first` flag
@@ -421,8 +420,8 @@ pub(crate) struct CoroGraph {
 //   } while (cond3);
 //   << H >>
 // Continuation from the `suspend` instruction:
-//   << D >>      // only the remaining instructions in the current block are dominated by the split mark
 //   cond1 = true;// condition stack replay
+//   << D >>      // only the remaining instructions in the current block are dominated by the split mark
 //   first = true;// first flag
 //   do {// outer loop
 //       // mask the instructions in the loop body that precede the split mark with the `first` flag
@@ -522,7 +521,7 @@ impl CoroGraph {
 }
 
 impl CoroGraph {
-    fn construct_sub_scope(
+    fn construct_subscope(
         graph: &mut CoroGraph,
         current: CoroGraphIndexer,
         ancestors: &Vec<CoroGraphIndexer>,
@@ -533,7 +532,7 @@ impl CoroGraph {
     fn extract_continuation_at_suspend(
         graph: &mut CoroGraph,
         current: CoroGraphIndexer,
-        ancestors: &mut Vec<CoroGraphIndexer>,
+        ancestors: &Vec<CoroGraphIndexer>,
     ) {
         let instr = graph.get_instr(current);
         let token = match instr {
@@ -548,7 +547,7 @@ impl CoroGraph {
             }
         }
         // actually extract the continuation
-        let sub_scope = Self::construct_sub_scope(graph, current, ancestors);
+        let sub_scope = Self::construct_subscope(graph, current, ancestors);
         // add the sub-scope to the graph
         let sub_scope_index = graph.scopes.len();
         graph.scopes.push(sub_scope);

@@ -465,82 +465,35 @@ pub(crate) struct CoroGraphIndexer {
     index_in_parent_branch: usize,
 }
 
-impl CoroGraph {
-    pub(crate) fn instr(&self, i: CoroInstrRef) -> &CoroInstruction {
-        &self.instructions[i.0]
-    }
-
-    pub(crate) fn get(&self, i: CoroGraphIndexer) -> CoroInstrRef {
-        let parent_instr = self.instr(i.parent);
+impl CoroGraphIndexer {
+    fn get_parent_branch<'a>(
+        &self,
+        instructions: &'a Vec<CoroInstruction>,
+    ) -> Option<&'a Vec<CoroInstrRef>> {
+        let parent_instr = instructions.get(self.parent.0).unwrap();
         match parent_instr {
             CoroInstruction::EntryScope { body } => {
-                assert_eq!(i.parent_branch, 0);
-                assert!(i.index_in_parent_branch < body.len());
-                body[i.parent_branch]
-            }
-            CoroInstruction::Loop { body, .. } => {
-                assert_eq!(i.parent_branch, 0);
-                assert!(i.index_in_parent_branch < body.len());
-                body[i.parent_branch]
-            }
-            CoroInstruction::If {
-                true_branch,
-                false_branch,
-                ..
-            } => match i.parent_branch {
-                0 => {
-                    assert!(i.index_in_parent_branch < true_branch.len());
-                    true_branch[i.index_in_parent_branch]
-                }
-                1 => {
-                    assert!(i.index_in_parent_branch < false_branch.len());
-                    false_branch[i.index_in_parent_branch]
-                }
-                _ => panic!("Unexpected branch index."),
-            },
-            CoroInstruction::Switch { cases, default, .. } => {
-                if i.parent_branch < cases.len() {
-                    assert!(i.index_in_parent_branch < cases[i.parent_branch].body.len());
-                    cases[i.parent_branch].body[i.index_in_parent_branch]
-                } else {
-                    assert_eq!(i.parent_branch, cases.len());
-                    assert!(i.index_in_parent_branch < default.len());
-                    default[i.index_in_parent_branch]
-                }
-            }
-            _ => panic!("Not a control-flow instruction."),
-        }
-    }
-
-    pub(crate) fn get_instr(&self, i: CoroGraphIndexer) -> &CoroInstruction {
-        self.instr(self.get(i))
-    }
-
-    pub(crate) fn get_parent_branch(&self, i: CoroGraphIndexer) -> Option<&Vec<CoroInstrRef>> {
-        let parent_instr = self.instr(i.parent);
-        match parent_instr {
-            CoroInstruction::EntryScope { body } => {
-                assert_eq!(i.parent_branch, 0);
+                assert_eq!(self.parent_branch, 0);
                 Some(body)
             }
             CoroInstruction::Loop { body, .. } => {
-                assert_eq!(i.parent_branch, 0);
+                assert_eq!(self.parent_branch, 0);
                 Some(body)
             }
             CoroInstruction::If {
                 true_branch,
                 false_branch,
                 ..
-            } => match i.parent_branch {
+            } => match self.parent_branch {
                 0 => Some(true_branch),
                 1 => Some(false_branch),
                 _ => panic!("Unexpected branch index."),
             },
             CoroInstruction::Switch { cases, default, .. } => {
-                if i.parent_branch < cases.len() {
-                    Some(&cases[i.parent_branch].body)
+                if self.parent_branch < cases.len() {
+                    Some(&cases[self.parent_branch].body)
                 } else {
-                    assert_eq!(i.parent_branch, cases.len());
+                    assert_eq!(self.parent_branch, cases.len());
                     Some(default)
                 }
             }
@@ -548,10 +501,41 @@ impl CoroGraph {
         }
     }
 
+    fn get_instr_ref(&self, instructions: &Vec<CoroInstruction>) -> CoroInstrRef {
+        self.get_parent_branch(instructions)
+            .unwrap()
+            .get(self.index_in_parent_branch)
+            .unwrap()
+            .clone()
+    }
+
+    fn get_instr<'a>(&self, instructions: &'a Vec<CoroInstruction>) -> &'a CoroInstruction {
+        let index = self.get_instr_ref(instructions).0;
+        instructions.get(index).unwrap()
+    }
+}
+
+impl CoroGraph {
+    pub(crate) fn instr(&self, i: CoroInstrRef) -> &CoroInstruction {
+        &self.instructions[i.0]
+    }
+
+    pub(crate) fn get(&self, i: CoroGraphIndexer) -> CoroInstrRef {
+        i.get_instr_ref(&self.instructions).clone()
+    }
+
+    pub(crate) fn get_instr(&self, i: CoroGraphIndexer) -> &CoroInstruction {
+        i.get_instr(&self.instructions)
+    }
+
+    pub(crate) fn get_parent_branch(&self, i: CoroGraphIndexer) -> Option<&Vec<CoroInstrRef>> {
+        i.get_parent_branch(&self.instructions)
+    }
+
     fn add(&mut self, instr: CoroInstruction) -> CoroInstrRef {
-        let i = CoroInstrRef(self.instructions.len());
+        let i = self.instructions.len();
         self.instructions.push(instr);
-        i
+        CoroInstrRef(i)
     }
 }
 
@@ -957,5 +941,10 @@ impl CoroGraph {
             panic!("Unexpected instruction.");
         }
         graph
+    }
+
+    pub fn from(module: &Module) -> Self {
+        let preliminary_graph = CoroPreliminaryGraph::from(module);
+        Self::build(preliminary_graph)
     }
 }

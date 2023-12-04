@@ -459,7 +459,7 @@ pub(crate) struct CoroGraph {
 //   << H >>
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct CoroGraphIndexer {
+struct CoroGraphIndexer {
     parent: CoroInstrRef,
     parent_branch: usize,
     index_in_parent_branch: usize,

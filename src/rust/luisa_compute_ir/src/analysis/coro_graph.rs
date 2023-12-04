@@ -5,7 +5,7 @@
 // through all the reachable instructions until the next split mark is encountered.
 // Note: this analysis only works on a single module without recurse into its callees.
 
-use crate::ir::{BasicBlock, Instruction, Module, NodeRef};
+use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -461,8 +461,8 @@ pub(crate) struct CoroGraph {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct CoroGraphIndexer {
     parent: CoroInstrRef,
-    branch: usize,
-    index: usize,
+    parent_branch: usize,
+    index_in_parent_branch: usize,
 }
 
 impl CoroGraph {
@@ -474,38 +474,38 @@ impl CoroGraph {
         let parent_instr = self.instr(i.parent);
         match parent_instr {
             CoroInstruction::EntryScope { body } => {
-                assert_eq!(i.branch, 0);
-                assert!(i.index < body.len());
-                body[i.branch]
+                assert_eq!(i.parent_branch, 0);
+                assert!(i.index_in_parent_branch < body.len());
+                body[i.parent_branch]
             }
             CoroInstruction::Loop { body, .. } => {
-                assert_eq!(i.branch, 0);
-                assert!(i.index < body.len());
-                body[i.branch]
+                assert_eq!(i.parent_branch, 0);
+                assert!(i.index_in_parent_branch < body.len());
+                body[i.parent_branch]
             }
             CoroInstruction::If {
                 true_branch,
                 false_branch,
                 ..
-            } => match i.branch {
+            } => match i.parent_branch {
                 0 => {
-                    assert!(i.index < true_branch.len());
-                    true_branch[i.index]
+                    assert!(i.index_in_parent_branch < true_branch.len());
+                    true_branch[i.index_in_parent_branch]
                 }
                 1 => {
-                    assert!(i.index < false_branch.len());
-                    false_branch[i.index]
+                    assert!(i.index_in_parent_branch < false_branch.len());
+                    false_branch[i.index_in_parent_branch]
                 }
                 _ => panic!("Unexpected branch index."),
             },
             CoroInstruction::Switch { cases, default, .. } => {
-                if i.branch < cases.len() {
-                    assert!(i.index < cases[i.branch].body.len());
-                    cases[i.branch].body[i.index]
+                if i.parent_branch < cases.len() {
+                    assert!(i.index_in_parent_branch < cases[i.parent_branch].body.len());
+                    cases[i.parent_branch].body[i.index_in_parent_branch]
                 } else {
-                    assert_eq!(i.branch, cases.len());
-                    assert!(i.index < default.len());
-                    default[i.index]
+                    assert_eq!(i.parent_branch, cases.len());
+                    assert!(i.index_in_parent_branch < default.len());
+                    default[i.index_in_parent_branch]
                 }
             }
             _ => panic!("Not a control-flow instruction."),
@@ -515,15 +515,195 @@ impl CoroGraph {
     pub(crate) fn get_instr(&self, i: CoroGraphIndexer) -> &CoroInstruction {
         self.instr(self.get(i))
     }
+
+    fn add(&mut self, instr: CoroInstruction) -> CoroInstrRef {
+        let i = CoroInstrRef(self.instructions.len());
+        self.instructions.push(instr);
+        i
+    }
 }
 
 impl CoroGraph {
+    fn replay_condition_stack(
+        graph: &mut CoroGraph,
+        ancestors: &Vec<CoroGraphIndexer>,
+        subscope: &mut CoroScope,
+    ) {
+        let stack: Vec<_> = ancestors
+            .iter()
+            .filter_map(|ancestor| {
+                let instr = graph.instr(ancestor.parent);
+                match instr {
+                    CoroInstruction::If { cond, .. } => {
+                        if let CoroInstruction::Simple(node) = graph.instr(*cond) {
+                            let value = match ancestor.parent_branch {
+                                0 => true as i32,
+                                1 => false as i32,
+                                _ => panic!("Unexpected branch index."),
+                            };
+                            Some(ConditionStackItem { node: *node, value })
+                        } else {
+                            panic!("Unexpected instruction.");
+                        }
+                    }
+                    CoroInstruction::Switch { cond, cases, .. } => {
+                        if let CoroInstruction::Simple(node) = graph.instr(*cond) {
+                            if ancestor.parent_branch < cases.len() {
+                                // we can determine the case value from the branch index
+                                let value = cases[ancestor.parent_branch].value;
+                                Some(ConditionStackItem { node: *node, value })
+                            } else {
+                                None // ignore the default branch as it does not ensure the condition to be constant
+                            }
+                        } else {
+                            panic!("Unexpected instruction.");
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        if !stack.is_empty() {
+            let replay = graph.add(CoroInstruction::ConditionStackReplay { items: stack });
+            subscope.instructions.push(replay);
+        }
+    }
+
+    fn find_dominated_instructions(
+        graph: &mut CoroGraph,
+        current: CoroGraphIndexer,
+        ancestors: &Vec<CoroGraphIndexer>,
+        subscope: &mut CoroScope,
+    ) {
+    }
+
     fn construct_subscope(
         graph: &mut CoroGraph,
         current: CoroGraphIndexer,
         ancestors: &Vec<CoroGraphIndexer>,
     ) -> CoroScope {
+        let mut subscope = CoroScope {
+            instructions: Vec::new(),
+        };
+        Self::replay_condition_stack(graph, ancestors, &mut subscope);
+        Self::find_dominated_instructions(graph, current, ancestors, &mut subscope);
+
         todo!()
+    }
+
+    fn is_terminator(
+        graph: &CoroGraph,
+        instr_ref: &CoroInstrRef,
+        known: &mut HashMap<CoroInstrRef, bool>,
+    ) -> bool {
+        if let Some(&is_terminator) = known.get(instr_ref) {
+            return is_terminator;
+        }
+        let instr = graph.instr(*instr_ref);
+        let result = match instr {
+            CoroInstruction::Simple(node) => match node.get().instruction.as_ref() {
+                Instruction::Call(func, _) => match func {
+                    Func::Unreachable(_) => true,
+                    _ => false,
+                },
+                _ => false,
+            },
+            CoroInstruction::Entry
+            | CoroInstruction::Suspend { .. }
+            | CoroInstruction::EntryScope { .. }
+            | CoroInstruction::Terminate => true,
+            CoroInstruction::Loop { body, .. } => body
+                .iter()
+                .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known)),
+            CoroInstruction::If {
+                true_branch,
+                false_branch,
+                ..
+            } => {
+                true_branch
+                    .iter()
+                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+                    && false_branch
+                        .iter()
+                        .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+            }
+            CoroInstruction::Switch { cases, default, .. } => {
+                cases.iter().all(|case| {
+                    case.body
+                        .iter()
+                        .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+                }) && default
+                    .iter()
+                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+            }
+            _ => false,
+        };
+        known.insert(*instr_ref, result);
+        result
+    }
+
+    fn terminated_in_current_branch(
+        graph: &CoroGraph,
+        current: CoroGraphIndexer,
+        known: &mut HashMap<CoroInstrRef, bool>,
+    ) -> bool {
+        let parent = graph.instr(current.parent);
+        let n_skip = current.index_in_parent_branch + 1;
+        match parent {
+            CoroInstruction::EntryScope { .. } => true,
+            CoroInstruction::If {
+                true_branch,
+                false_branch,
+                ..
+            } => {
+                let branch = match current.parent_branch {
+                    0 => true_branch,
+                    1 => false_branch,
+                    _ => panic!("Unexpected branch index."),
+                };
+                branch
+                    .iter()
+                    .skip(n_skip)
+                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+            }
+            CoroInstruction::Switch { cases, default, .. } => {
+                let branch = if current.parent_branch < cases.len() {
+                    &cases[current.parent_branch].body
+                } else {
+                    default
+                };
+                branch
+                    .iter()
+                    .skip(n_skip)
+                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+            }
+            CoroInstruction::Loop { body, .. } => body
+                .iter()
+                .skip(n_skip)
+                .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known)),
+            _ => panic!("Unexpected instruction."),
+        }
+    }
+
+    fn find_reachable_ancestors(
+        graph: &CoroGraph,
+        current: CoroGraphIndexer,
+        ancestors: &Vec<CoroGraphIndexer>,
+    ) -> Vec<CoroGraphIndexer> {
+        let mut known_terminators = HashMap::new();
+        let mut reachable_ancestors = Vec::new();
+        let mut instr = current;
+        for ancestor in ancestors.iter().rev() {
+            // if terminated in the current branch, then only the remaining ancestors are unreachable
+            if Self::terminated_in_current_branch(graph, instr, &mut known_terminators) {
+                break;
+            }
+            // otherwise, the current ancestor is reachable, we need to check the ancestor itself
+            reachable_ancestors.push(*ancestor);
+            instr = *ancestor;
+        }
+        reachable_ancestors.reverse();
+        reachable_ancestors
     }
 
     fn extract_continuation_at_suspend(
@@ -544,14 +724,15 @@ impl CoroGraph {
             }
         }
         // actually extract the continuation
-        let sub_scope = Self::construct_subscope(graph, current, ancestors);
+        let ancestors = Self::find_reachable_ancestors(graph, current, ancestors);
+        let subscope = Self::construct_subscope(graph, current, &ancestors);
         // add the sub-scope to the graph
-        let sub_scope_index = graph.scopes.len();
-        graph.scopes.push(sub_scope);
+        let subscope_index = graph.scopes.len();
+        graph.scopes.push(subscope);
         if let Some(token) = token {
-            graph.marks.insert(token, CoroScopeRef(sub_scope_index));
+            graph.marks.insert(token, CoroScopeRef(subscope_index));
         } else {
-            graph.entry = CoroScopeRef(sub_scope_index);
+            graph.entry = CoroScopeRef(subscope_index);
         }
     }
 
@@ -566,12 +747,12 @@ impl CoroGraph {
         for (instr_index, &instr_ref) in body.iter().enumerate() {
             macro_rules! recurse {
                 ($branch: expr, $block: expr) => {
-                    let i = CoroGraphIndexer {
+                    let current = CoroGraphIndexer {
                         parent: parent_scope,
-                        branch: parent_branch,
-                        index: instr_index,
+                        parent_branch: parent_branch,
+                        index_in_parent_branch: instr_index,
                     };
-                    ancestors.push(i);
+                    ancestors.push(current);
                     Self::recurse_continuation_extraction(
                         graph,
                         instructions,
@@ -581,7 +762,7 @@ impl CoroGraph {
                         ancestors,
                     );
                     let popped = ancestors.pop();
-                    assert_eq!(popped, Some(i));
+                    assert_eq!(popped, Some(current));
                 };
             }
             let instr = &instructions[instr_ref.0];
@@ -592,8 +773,8 @@ impl CoroGraph {
                         graph,
                         CoroGraphIndexer {
                             parent: parent_scope,
-                            branch: parent_branch,
-                            index: instr_index,
+                            parent_branch: parent_branch,
+                            index_in_parent_branch: instr_index,
                         },
                         ancestors,
                     );

@@ -516,6 +516,38 @@ impl CoroGraph {
         self.instr(self.get(i))
     }
 
+    pub(crate) fn get_parent_branch(&self, i: CoroGraphIndexer) -> Option<&Vec<CoroInstrRef>> {
+        let parent_instr = self.instr(i.parent);
+        match parent_instr {
+            CoroInstruction::EntryScope { body } => {
+                assert_eq!(i.parent_branch, 0);
+                Some(body)
+            }
+            CoroInstruction::Loop { body, .. } => {
+                assert_eq!(i.parent_branch, 0);
+                Some(body)
+            }
+            CoroInstruction::If {
+                true_branch,
+                false_branch,
+                ..
+            } => match i.parent_branch {
+                0 => Some(true_branch),
+                1 => Some(false_branch),
+                _ => panic!("Unexpected branch index."),
+            },
+            CoroInstruction::Switch { cases, default, .. } => {
+                if i.parent_branch < cases.len() {
+                    Some(&cases[i.parent_branch].body)
+                } else {
+                    assert_eq!(i.parent_branch, cases.len());
+                    Some(default)
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn add(&mut self, instr: CoroInstruction) -> CoroInstrRef {
         let i = CoroInstrRef(self.instructions.len());
         self.instructions.push(instr);
@@ -569,8 +601,100 @@ impl CoroGraph {
         }
     }
 
+    fn clone_instruction(
+        graph: &mut CoroGraph,
+        instructions: &Vec<CoroInstruction>,
+        instr_ref: CoroInstrRef,
+        terminators: &HashSet<CoroInstrRef>,
+    ) -> CoroInstrRef {
+        macro_rules! clone_block {
+            ($block: expr) => {{
+                let mut block = Vec::new();
+                for &instr_ref in $block.iter() {
+                    block.push(Self::clone_instruction(
+                        graph,
+                        instructions,
+                        instr_ref,
+                        terminators,
+                    ));
+                    if terminators.contains(&instr_ref) {
+                        break;
+                    }
+                }
+                block
+            }};
+        }
+        match &instructions[instr_ref.0] {
+            CoroInstruction::Simple(_)
+            | CoroInstruction::Suspend { .. }
+            | CoroInstruction::Terminate => instr_ref,
+            CoroInstruction::If {
+                cond,
+                true_branch,
+                false_branch,
+            } => {
+                let true_branch = clone_block!(true_branch);
+                let false_branch = clone_block!(false_branch);
+                graph.add(CoroInstruction::If {
+                    cond: *cond,
+                    true_branch,
+                    false_branch,
+                })
+            }
+            CoroInstruction::Loop { body, cond } => {
+                let body = clone_block!(body);
+                graph.add(CoroInstruction::Loop { body, cond: *cond })
+            }
+            CoroInstruction::Switch {
+                cond,
+                cases,
+                default,
+            } => {
+                let cases = cases
+                    .iter()
+                    .map(|case| CoroSwitchCase {
+                        value: case.value,
+                        body: clone_block!(&case.body),
+                    })
+                    .collect();
+                let default = clone_block!(default);
+                graph.add(CoroInstruction::Switch {
+                    cond: *cond,
+                    cases,
+                    default,
+                })
+            }
+            _ => unreachable!("Invalid instruction."),
+        }
+    }
+
+    fn include_directly_dominated_instructions(
+        graph: &mut CoroGraph,
+        instructions: &Vec<CoroInstruction>,
+        current: CoroGraphIndexer,
+        terminators: &HashSet<CoroInstrRef>,
+        subscope: &mut CoroScope,
+    ) {
+        let parent_branch = graph.get_parent_branch(current).unwrap().clone();
+        for &successor in parent_branch
+            .iter()
+            .skip(current.index_in_parent_branch + 1)
+        {
+            subscope.instructions.push(Self::clone_instruction(
+                graph,
+                instructions,
+                successor,
+                terminators,
+            ));
+            if terminators.contains(&successor) {
+                break;
+            }
+        }
+    }
+
     fn construct_subscope(
         graph: &mut CoroGraph,
+        instructions: &Vec<CoroInstruction>,
         current: CoroGraphIndexer,
         ancestors: &Vec<CoroGraphIndexer>,
         terminators: &HashSet<CoroInstrRef>,
@@ -578,7 +702,19 @@ impl CoroGraph {
         let mut subscope = CoroScope {
             instructions: Vec::new(),
         };
+        // replay the condition stack
         Self::replay_condition_stack(graph, ancestors, &mut subscope);
+        // find the direct successors of the split mark -- they must be dominated by the split mark
+        Self::include_directly_dominated_instructions(
+            graph,
+            instructions,
+            current,
+            terminators,
+            &mut subscope,
+        );
+        // process the non-directly dominated instructions
+        let first_flag = graph.add(CoroInstruction::MakeFirstFlag);
+        subscope.instructions.push(first_flag);
 
         todo!()
     }
@@ -588,42 +724,12 @@ impl CoroGraph {
         current: CoroGraphIndexer,
         terminators: &HashSet<CoroInstrRef>,
     ) -> bool {
-        let parent = graph.instr(current.parent);
-        let n_skip = current.index_in_parent_branch + 1;
-        match parent {
-            CoroInstruction::EntryScope { .. } => true,
-            CoroInstruction::If {
-                true_branch,
-                false_branch,
-                ..
-            } => {
-                let branch = match current.parent_branch {
-                    0 => true_branch,
-                    1 => false_branch,
-                    _ => panic!("Unexpected branch index."),
-                };
-                branch
-                    .iter()
-                    .skip(n_skip)
-                    .any(|instr_ref| terminators.contains(instr_ref))
-            }
-            CoroInstruction::Switch { cases, default, .. } => {
-                let branch = if current.parent_branch < cases.len() {
-                    &cases[current.parent_branch].body
-                } else {
-                    default
-                };
-                branch
-                    .iter()
-                    .skip(n_skip)
-                    .any(|instr_ref| terminators.contains(instr_ref))
-            }
-            CoroInstruction::Loop { body, .. } => body
-                .iter()
-                .skip(n_skip)
-                .any(|instr_ref| terminators.contains(instr_ref)),
-            _ => panic!("Unexpected instruction."),
-        }
+        graph
+            .get_parent_branch(current)
+            .unwrap()
+            .iter()
+            .skip(current.index_in_parent_branch + 1)
+            .any(|instr_ref| terminators.contains(instr_ref))
     }
 
     fn find_reachable_ancestors(
@@ -649,6 +755,7 @@ impl CoroGraph {
 
     fn extract_continuation_at_suspend(
         graph: &mut CoroGraph,
+        instructions: &Vec<CoroInstruction>,
         current: CoroGraphIndexer,
         ancestors: &Vec<CoroGraphIndexer>,
         terminators: &HashSet<CoroInstrRef>,
@@ -667,7 +774,8 @@ impl CoroGraph {
         }
         // actually extract the continuation
         let ancestors = Self::find_reachable_ancestors(graph, current, ancestors, terminators);
-        let subscope = Self::construct_subscope(graph, current, &ancestors, terminators);
+        let subscope =
+            Self::construct_subscope(graph, instructions, current, &ancestors, terminators);
         // add the sub-scope to the graph
         let subscope_index = graph.scopes.len();
         graph.scopes.push(subscope);
@@ -715,9 +823,10 @@ impl CoroGraph {
                     // a split mark is encountered
                     Self::extract_continuation_at_suspend(
                         graph,
+                        instructions,
                         CoroGraphIndexer {
                             parent: parent_scope,
-                            parent_branch: parent_branch,
+                            parent_branch,
                             index_in_parent_branch: instr_index,
                         },
                         ancestors,

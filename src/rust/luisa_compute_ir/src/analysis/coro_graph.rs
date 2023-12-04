@@ -6,10 +6,13 @@
 // Note: this analysis only works on a single module without recurse into its callees.
 
 use crate::ir::{BasicBlock, Instruction, Module, NodeRef};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct CoroInstrRef(usize);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct CoroScopeRef(usize);
 
 impl CoroInstrRef {
     fn invalid() -> Self {
@@ -23,9 +26,7 @@ impl CoroScopeRef {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct CoroScopeRef(usize);
-
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct ConditionStackItem {
     // the condition node (for `if` and `switch`)
     pub node: NodeRef,
@@ -35,11 +36,13 @@ pub(crate) struct ConditionStackItem {
     pub value: i32,
 }
 
+#[derive(Clone)]
 pub(crate) struct CoroSwitchCase {
     pub value: i32,
     pub body: Vec<CoroInstrRef>, // indices into the graph nodes
 }
 
+#[derive(Clone)]
 pub(crate) enum CoroInstruction {
     // entry
     Entry,
@@ -57,9 +60,12 @@ pub(crate) enum CoroInstruction {
         items: Vec<ConditionStackItem>,
     },
 
-    FirstFlag,                      // initialization of a first flag
-    FirstFlagIsFalse(CoroInstrRef), // check if a first flag is false
-    FirstFlagClear(CoroInstrRef),   // clear a first flag
+    MakeFirstFlag, // initialization of a first flag
+    SkipIfFirstFlag {
+        flag: CoroInstrRef,      // indices into the graph nodes
+        body: Vec<CoroInstrRef>, // indices into the graph nodes
+    },
+    ClearFirstFlag(CoroInstrRef), // clear a first flag
 
     // A do-while loop
     Loop {
@@ -452,7 +458,7 @@ pub(crate) struct CoroGraph {
 //   } while (cond3);
 //   << H >>
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct CoroGraphIndexer {
     parent: CoroInstrRef,
     branch: usize,
@@ -509,15 +515,6 @@ impl CoroGraph {
     pub(crate) fn get_instr(&self, i: CoroGraphIndexer) -> &CoroInstruction {
         self.instr(self.get(i))
     }
-
-    // depth-first traversal of the stacked control flows
-    pub(crate) fn next(
-        &self,
-        i: CoroGraphIndexer,
-        stack: &mut Vec<CoroGraphIndexer>,
-    ) -> Option<CoroGraphIndexer> {
-        todo!()
-    }
 }
 
 impl CoroGraph {
@@ -558,28 +555,94 @@ impl CoroGraph {
         }
     }
 
+    fn recurse_continuation_extraction(
+        graph: &mut CoroGraph,
+        instructions: &Vec<CoroInstruction>,
+        parent_scope: CoroInstrRef,
+        parent_branch: usize,
+        body: &Vec<CoroInstrRef>,
+        ancestors: &mut Vec<CoroGraphIndexer>,
+    ) {
+        macro_rules! recurse {
+            ($scope: expr, $branch: expr, $block: expr) => {
+                let i = CoroGraphIndexer {
+                    parent: parent_scope,
+                    branch: parent_branch,
+                    index: 0,
+                };
+                ancestors.push(i);
+                Self::recurse_continuation_extraction(
+                    graph,
+                    instructions,
+                    $scope,
+                    $branch,
+                    $block,
+                    ancestors,
+                );
+                let popped = ancestors.pop();
+                assert_eq!(popped, Some(i));
+            };
+        }
+        for (instr_index, &instr_ref) in body.iter().enumerate() {
+            let instr = &instructions[instr_ref.0];
+            match instr {
+                CoroInstruction::Entry | CoroInstruction::Suspend { .. } => {
+                    // a split mark is encountered
+                    Self::extract_continuation_at_suspend(
+                        graph,
+                        CoroGraphIndexer {
+                            parent: parent_scope,
+                            branch: parent_branch,
+                            index: instr_index,
+                        },
+                        ancestors,
+                    );
+                }
+                CoroInstruction::Simple(_) => { /* do nothing */ }
+                CoroInstruction::Loop { body, .. } => {
+                    recurse!(instr_ref, 0, body);
+                }
+                CoroInstruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    recurse!(instr_ref, 0, true_branch);
+                    recurse!(instr_ref, 1, false_branch);
+                }
+                CoroInstruction::Switch { cases, default, .. } => {
+                    for (case_index, case) in cases.iter().enumerate() {
+                        recurse!(instr_ref, case_index, &case.body);
+                    }
+                    recurse!(instr_ref, cases.len(), default);
+                }
+                CoroInstruction::Terminate => {}
+                _ => panic!("Unexpected instruction."),
+            }
+        }
+    }
+
     fn build(preliminary_graph: CoroPreliminaryGraph) -> CoroGraph {
         let mut graph = CoroGraph {
             scopes: Vec::new(),
             entry: CoroScopeRef::invalid(),
             marks: HashMap::new(),
-            instructions: preliminary_graph.instructions,
+            instructions: preliminary_graph.instructions.clone(),
             node_to_instr: preliminary_graph.node_to_instr,
         };
-        let mut iter = Some(CoroGraphIndexer {
-            parent: preliminary_graph.entry_scope,
-            branch: 0,
-            index: 0,
-        });
-        let mut stack = Vec::new();
-        while let Some(i) = iter {
-            match graph.get_instr(i) {
-                CoroInstruction::Entry | CoroInstruction::Suspend { .. } => {
-                    Self::extract_continuation_at_suspend(&mut graph, i, &mut stack);
-                }
-                _ => {}
-            }
-            iter = graph.next(i, &mut stack);
+        if let CoroInstruction::EntryScope { body: entry_body } =
+            &preliminary_graph.instructions[preliminary_graph.entry_scope.0]
+        {
+            Self::recurse_continuation_extraction(
+                &mut graph,
+                &preliminary_graph.instructions,
+                preliminary_graph.entry_scope,
+                0,
+                entry_body,
+                &mut Vec::new(),
+            );
+        } else {
+            panic!("Unexpected instruction.");
         }
         graph
     }

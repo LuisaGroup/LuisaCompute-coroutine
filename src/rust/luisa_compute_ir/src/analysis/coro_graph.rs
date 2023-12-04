@@ -6,7 +6,7 @@
 // Note: this analysis only works on a single module without recurse into its callees.
 
 use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct CoroInstrRef(usize);
@@ -569,83 +569,24 @@ impl CoroGraph {
         }
     }
 
-    fn find_dominated_instructions(
-        graph: &mut CoroGraph,
-        current: CoroGraphIndexer,
-        ancestors: &Vec<CoroGraphIndexer>,
-        subscope: &mut CoroScope,
-    ) {
-    }
-
     fn construct_subscope(
         graph: &mut CoroGraph,
         current: CoroGraphIndexer,
         ancestors: &Vec<CoroGraphIndexer>,
+        terminators: &HashSet<CoroInstrRef>,
     ) -> CoroScope {
         let mut subscope = CoroScope {
             instructions: Vec::new(),
         };
         Self::replay_condition_stack(graph, ancestors, &mut subscope);
-        Self::find_dominated_instructions(graph, current, ancestors, &mut subscope);
 
         todo!()
-    }
-
-    fn is_terminator(
-        graph: &CoroGraph,
-        instr_ref: &CoroInstrRef,
-        known: &mut HashMap<CoroInstrRef, bool>,
-    ) -> bool {
-        if let Some(&is_terminator) = known.get(instr_ref) {
-            return is_terminator;
-        }
-        let instr = graph.instr(*instr_ref);
-        let result = match instr {
-            CoroInstruction::Simple(node) => match node.get().instruction.as_ref() {
-                Instruction::Call(func, _) => match func {
-                    Func::Unreachable(_) => true,
-                    _ => false,
-                },
-                _ => false,
-            },
-            CoroInstruction::Entry
-            | CoroInstruction::Suspend { .. }
-            | CoroInstruction::EntryScope { .. }
-            | CoroInstruction::Terminate => true,
-            CoroInstruction::Loop { body, .. } => body
-                .iter()
-                .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known)),
-            CoroInstruction::If {
-                true_branch,
-                false_branch,
-                ..
-            } => {
-                true_branch
-                    .iter()
-                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
-                    && false_branch
-                        .iter()
-                        .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
-            }
-            CoroInstruction::Switch { cases, default, .. } => {
-                cases.iter().all(|case| {
-                    case.body
-                        .iter()
-                        .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
-                }) && default
-                    .iter()
-                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
-            }
-            _ => false,
-        };
-        known.insert(*instr_ref, result);
-        result
     }
 
     fn terminated_in_current_branch(
         graph: &CoroGraph,
         current: CoroGraphIndexer,
-        known: &mut HashMap<CoroInstrRef, bool>,
+        terminators: &HashSet<CoroInstrRef>,
     ) -> bool {
         let parent = graph.instr(current.parent);
         let n_skip = current.index_in_parent_branch + 1;
@@ -664,7 +605,7 @@ impl CoroGraph {
                 branch
                     .iter()
                     .skip(n_skip)
-                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+                    .any(|instr_ref| terminators.contains(instr_ref))
             }
             CoroInstruction::Switch { cases, default, .. } => {
                 let branch = if current.parent_branch < cases.len() {
@@ -675,12 +616,12 @@ impl CoroGraph {
                 branch
                     .iter()
                     .skip(n_skip)
-                    .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known))
+                    .any(|instr_ref| terminators.contains(instr_ref))
             }
             CoroInstruction::Loop { body, .. } => body
                 .iter()
                 .skip(n_skip)
-                .any(|&instr_ref| Self::is_terminator(graph, &instr_ref, known)),
+                .any(|instr_ref| terminators.contains(instr_ref)),
             _ => panic!("Unexpected instruction."),
         }
     }
@@ -689,13 +630,13 @@ impl CoroGraph {
         graph: &CoroGraph,
         current: CoroGraphIndexer,
         ancestors: &Vec<CoroGraphIndexer>,
+        terminators: &HashSet<CoroInstrRef>,
     ) -> Vec<CoroGraphIndexer> {
-        let mut known_terminators = HashMap::new();
         let mut reachable_ancestors = Vec::new();
         let mut instr = current;
         for ancestor in ancestors.iter().rev() {
             // if terminated in the current branch, then only the remaining ancestors are unreachable
-            if Self::terminated_in_current_branch(graph, instr, &mut known_terminators) {
+            if Self::terminated_in_current_branch(graph, instr, terminators) {
                 break;
             }
             // otherwise, the current ancestor is reachable, we need to check the ancestor itself
@@ -710,6 +651,7 @@ impl CoroGraph {
         graph: &mut CoroGraph,
         current: CoroGraphIndexer,
         ancestors: &Vec<CoroGraphIndexer>,
+        terminators: &HashSet<CoroInstrRef>,
     ) {
         let instr = graph.get_instr(current);
         let token = match instr {
@@ -724,8 +666,8 @@ impl CoroGraph {
             }
         }
         // actually extract the continuation
-        let ancestors = Self::find_reachable_ancestors(graph, current, ancestors);
-        let subscope = Self::construct_subscope(graph, current, &ancestors);
+        let ancestors = Self::find_reachable_ancestors(graph, current, ancestors, terminators);
+        let subscope = Self::construct_subscope(graph, current, &ancestors, terminators);
         // add the sub-scope to the graph
         let subscope_index = graph.scopes.len();
         graph.scopes.push(subscope);
@@ -743,6 +685,7 @@ impl CoroGraph {
         parent_branch: usize,
         body: &Vec<CoroInstrRef>,
         ancestors: &mut Vec<CoroGraphIndexer>,
+        terminators: &HashSet<CoroInstrRef>,
     ) {
         for (instr_index, &instr_ref) in body.iter().enumerate() {
             macro_rules! recurse {
@@ -760,6 +703,7 @@ impl CoroGraph {
                         $branch,
                         $block,
                         ancestors,
+                        terminators,
                     );
                     let popped = ancestors.pop();
                     assert_eq!(popped, Some(current));
@@ -777,6 +721,7 @@ impl CoroGraph {
                             index_in_parent_branch: instr_index,
                         },
                         ancestors,
+                        terminators,
                     );
                 }
                 CoroInstruction::Simple(_) => { /* do nothing */ }
@@ -803,7 +748,72 @@ impl CoroGraph {
         }
     }
 
+    fn find_terminators(
+        instructions: &Vec<CoroInstruction>,
+        instr_ref: &CoroInstrRef,
+        known: &mut HashMap<CoroInstrRef, bool>,
+    ) {
+        if known.contains_key(instr_ref) {
+            return;
+        }
+        let instr = &instructions[instr_ref.0];
+        macro_rules! traverse {
+            ($body: expr) => {{
+                for instr_ref in $body.iter() {
+                    Self::find_terminators(instructions, instr_ref, known);
+                }
+                $body.iter().any(|instr_ref| known.contains_key(instr_ref))
+            }};
+        }
+        let result = match instr {
+            CoroInstruction::Simple(node) => match node.get().instruction.as_ref() {
+                Instruction::Call(func, _) => match func {
+                    Func::Unreachable(_) => true,
+                    _ => false,
+                },
+                _ => false,
+            },
+            CoroInstruction::EntryScope { body } => {
+                let result = traverse!(body);
+                assert!(result);
+                true
+            }
+            CoroInstruction::Entry
+            | CoroInstruction::Suspend { .. }
+            | CoroInstruction::Terminate => true,
+            CoroInstruction::Loop { body, .. } => {
+                traverse!(body)
+            }
+            CoroInstruction::If {
+                true_branch,
+                false_branch,
+                ..
+            } => traverse!(true_branch) && traverse!(false_branch),
+            CoroInstruction::Switch { cases, default, .. } => {
+                let mut all = true;
+                for case in cases.iter() {
+                    all = all && traverse!(&case.body);
+                }
+                all = all && traverse!(default);
+                all
+            }
+            _ => false,
+        };
+        known.insert(*instr_ref, result);
+    }
+
     fn build(preliminary_graph: CoroPreliminaryGraph) -> CoroGraph {
+        let mut terminators = HashMap::new();
+        Self::find_terminators(
+            &preliminary_graph.instructions,
+            &preliminary_graph.entry_scope,
+            &mut terminators,
+        );
+        let terminators: HashSet<_> = terminators
+            .iter()
+            .filter_map(|(k, v)| if *v { Some(*k) } else { None })
+            .collect();
+
         let mut graph = CoroGraph {
             scopes: Vec::new(),
             entry: CoroScopeRef::invalid(),
@@ -811,6 +821,7 @@ impl CoroGraph {
             instructions: preliminary_graph.instructions.clone(),
             node_to_instr: preliminary_graph.node_to_instr,
         };
+
         if let CoroInstruction::EntryScope { body: entry_body } =
             &preliminary_graph.instructions[preliminary_graph.entry_scope.0]
         {
@@ -821,6 +832,7 @@ impl CoroGraph {
                 0,
                 entry_body,
                 &mut Vec::new(),
+                &terminators,
             );
         } else {
             panic!("Unexpected instruction.");

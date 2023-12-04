@@ -520,15 +520,15 @@ impl CoroGraph {
         &self.instructions[i.0]
     }
 
-    pub(crate) fn get(&self, i: CoroGraphIndexer) -> CoroInstrRef {
+    fn get(&self, i: CoroGraphIndexer) -> CoroInstrRef {
         i.get_instr_ref(&self.instructions).clone()
     }
 
-    pub(crate) fn get_instr(&self, i: CoroGraphIndexer) -> &CoroInstruction {
+    fn get_instr(&self, i: CoroGraphIndexer) -> &CoroInstruction {
         i.get_instr(&self.instructions)
     }
 
-    pub(crate) fn get_parent_branch(&self, i: CoroGraphIndexer) -> Option<&Vec<CoroInstrRef>> {
+    fn get_parent_branch(&self, i: CoroGraphIndexer) -> Option<&Vec<CoroInstrRef>> {
         i.get_parent_branch(&self.instructions)
     }
 

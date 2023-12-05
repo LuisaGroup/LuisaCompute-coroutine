@@ -9,6 +9,7 @@ impl Transform for SplitCoro {
     fn transform_module(&self, module: Module) -> Module {
         println!("SplitCoro::transform_module");
         let graph = CoroGraph::from(&module);
+        println!("graph: {:?}", graph);
         module
     }
 }

@@ -37,13 +37,13 @@ pub(crate) struct ConditionStackItem {
     pub value: i32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct CoroSwitchCase {
     pub value: i32,
     pub body: Vec<CoroInstrRef>, // indices into the graph nodes
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum CoroInstruction {
     // entry
     Entry,
@@ -97,6 +97,7 @@ pub(crate) enum CoroInstruction {
     Terminate,
 }
 
+#[derive(Debug)]
 pub(crate) struct CoroScope {
     pub instructions: Vec<CoroInstrRef>, // indices into the graph nodes
 }
@@ -290,6 +291,7 @@ impl CoroPreliminaryGraph {
 }
 
 // This struct is the final coroutine graph after splitting the coroutine scopes.
+#[derive(Debug)]
 pub(crate) struct CoroGraph {
     pub scopes: Vec<CoroScope>,             // all the scopes in the graph
     pub entry: CoroScopeRef,                // the index of the entry scope (the root scope)

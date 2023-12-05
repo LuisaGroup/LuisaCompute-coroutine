@@ -102,11 +102,11 @@ pub(crate) struct CoroScope {
 
 // This struct is a direct translation from the IR to the coroutine graph without
 // splitting the coroutine scopes, i.e., the only scope is the root (entry) scope.
-pub(crate) struct CoroPreliminaryGraph {
-    pub entry_scope: CoroInstrRef,          // index of the entry scope
-    pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
-    pub node_to_instr: HashMap<NodeRef, CoroInstrRef>, // IR node to instruction index
-    pub terminators: HashSet<CoroInstrRef>, // all the terminators in the graph (recursively)
+struct CoroPreliminaryGraph {
+    entry_scope: CoroInstrRef,                     // index of the entry scope
+    instructions: Vec<CoroInstruction>,            // all the instructions in the graph
+    node_to_instr: HashMap<NodeRef, CoroInstrRef>, // IR node to instruction index
+    terminators: HashSet<CoroInstrRef>,            // all the terminators in the graph (recursively)
 }
 
 impl CoroPreliminaryGraph {
@@ -251,7 +251,7 @@ impl CoroPreliminaryGraph {
         known.insert(*instr_ref, result);
     }
 
-    pub fn from(module: &Module) -> Self {
+    fn from(module: &Module) -> Self {
         let mut instructions = Vec::new();
         let mut node_to_instr = HashMap::new();
         let mut entry_scope =

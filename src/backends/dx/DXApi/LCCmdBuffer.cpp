@@ -403,6 +403,7 @@ public:
 class LCCmdVisitor : public CommandVisitor {
 public:
     Device *device;
+    luisa::function<void(luisa::string_view)> *logger;
     CommandBufferBuilder *bd;
     ResourceStateTracker *stateTracker;
     BufferView argBuffer;
@@ -576,7 +577,7 @@ public:
             stateTracker->UpdateState(*bd);
             bd->CopyBuffer(count_buffer.buffer, readback_count_buffer.buffer, count_buffer.offset, readback_count_buffer.offset, sizeof(uint));
             bd->CopyBuffer(data_buffer.buffer, readback_buffer.buffer, data_buffer.offset, readback_buffer.offset, data_buffer.byteSize);
-            alloc->ExecuteAfterComplete([shader, readback_count_buffer, readback_buffer]() {
+            alloc->ExecuteAfterComplete([logger = this->logger, shader, readback_count_buffer, readback_buffer]() {
                 uint size{0};
                 static_cast<ReadbackBuffer const *>(readback_count_buffer.buffer)
                     ->CopyData(
@@ -600,7 +601,9 @@ public:
                     luisa::string result;
                     formatter(result, {ptr, type.second->size()});
                     ptr += type.second->size();
-                    LUISA_INFO("{}", result);
+                    if (logger) [[likely]] {
+                        (*logger)(result);
+                    }
                 }
                 // while(reinterpret_cast<size_t>(ptr) < reinterpret_cast<size_t>())
             });
@@ -942,6 +945,7 @@ void LCCmdBuffer::Execute(
     auto commands = cmdList.commands();
     auto funcs = std::move(cmdList).steal_callbacks();
     auto allocator = queue.CreateAllocator(maxAlloc);
+    auto allocType = allocator->Type();
     bool cmdListIsEmpty = true;
     {
         std::unique_lock lck{mtx};
@@ -958,6 +962,11 @@ void LCCmdBuffer::Execute(
         accelOffset.clear();
 
         LCCmdVisitor visitor;
+        if (logCallback) {
+            visitor.logger = &logCallback;
+        } else {
+            visitor.logger = nullptr;
+        }
         visitor.bindProps = &bindProps;
         visitor.updateAccel = &updateAccel;
         visitor.vbv = &vbv;
@@ -967,7 +976,10 @@ void LCCmdBuffer::Execute(
             ID3D12DescriptorHeap *h[2] = {
                 device->globalHeap->GetHeap(),
                 device->samplerHeap->GetHeap()};
-            bd->GetCB()->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
+            auto cb = bd->GetCB();
+            if (cb->GetAlloc()->Type() != D3D12_COMMAND_LIST_TYPE_COPY) {
+                cb->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
+            }
         };
         auto cmdBuffer = allocator->GetBuffer();
         auto cmdBuilder = cmdBuffer->Build();
@@ -983,11 +995,11 @@ void LCCmdBuffer::Execute(
         ID3D12DescriptorHeap *h[2] = {
             device->globalHeap->GetHeap(),
             device->samplerHeap->GetHeap()};
+        if (!commands.empty() && allocType != D3D12_COMMAND_LIST_TYPE_COPY) {
+            cmdBuffer->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
+        }
         for (auto lst : cmdLists) {
             cmdListIsEmpty = cmdListIsEmpty && (lst == nullptr);
-            if (!cmdListIsEmpty) {
-                cmdBuffer->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
-            }
             // Clear caches
             ppVisitor.argVecs->clear();
             ppVisitor.argBuffer->clear();

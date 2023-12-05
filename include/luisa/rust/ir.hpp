@@ -369,6 +369,7 @@ struct Func {
         IndirectDispatchSetCount,
         IndirectDispatchSetKernel,
         Load,
+        AddressOf,
         Cast,
         Bitcast,
         Pack,
@@ -504,6 +505,8 @@ struct Func {
         BufferWrite,
         /// buffer -> uint: returns buffer size in *elements*
         BufferSize,
+        /// buffer -> u64: returns address of the buffer
+        BufferAddress,
         /// (buffer, index_bytes) -> value
         ByteBufferRead,
         /// (buffer, index_bytes, value) -> void
@@ -560,6 +563,8 @@ struct Func {
         BindlessBufferWrite,
         /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
         BindlessBufferSize,
+        /// (bindless_array, index: uint) -> u64: returns the address of the buffer
+        BindlessBufferAddress,
         BindlessBufferType,
         BindlessByteBufferRead,
         Vec,

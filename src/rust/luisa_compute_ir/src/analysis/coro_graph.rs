@@ -6,7 +6,7 @@
 // Note: this analysis only works on a single module without recurse into its callees.
 
 use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::mem::transmute;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -293,10 +293,10 @@ impl CoroPreliminaryGraph {
 // This struct is the final coroutine graph after splitting the coroutine scopes.
 #[derive(Debug)]
 pub(crate) struct CoroGraph {
-    pub scopes: Vec<CoroScope>,             // all the scopes in the graph
-    pub entry: CoroScopeRef,                // the index of the entry scope (the root scope)
-    pub tokens: HashMap<u32, CoroScopeRef>, // map from split mark token to scope index
-    pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
+    pub scopes: Vec<CoroScope>,              // all the scopes in the graph
+    pub entry: CoroScopeRef,                 // the index of the entry scope (the root scope)
+    pub tokens: BTreeMap<u32, CoroScopeRef>, // map from split mark token to scope index
+    pub instructions: Vec<CoroInstruction>,  // all the instructions in the graph
 }
 
 // Method:
@@ -1140,7 +1140,7 @@ impl CoroGraph {
         let mut graph = CoroGraph {
             scopes: Vec::new(),
             entry: CoroScopeRef::invalid(),
-            tokens: HashMap::new(),
+            tokens: BTreeMap::new(),
             // clone so that the indices are not changed when we add new instructions
             instructions: preliminary_graph.instructions.clone(),
         };

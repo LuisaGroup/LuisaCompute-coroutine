@@ -600,7 +600,7 @@ public:
             shader->get()->module.flags |= ir::ModuleFlags_REQUIRES_REV_AD_TRANSFORM;
             transform_ir_kernel_module_auto(shader->get());
         }
-        // demote locals transform for debugging
+        // for debugging
         // Clock clk;
         // auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
         // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "canonicalize_control_flow");

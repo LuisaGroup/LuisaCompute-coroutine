@@ -138,6 +138,7 @@ const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const l
     if (var != -1) {
         return _create_expression<MemberExpr>(expr->type()->corotype()->members()[var], expr, var);
     }
+    return nullptr;
 }
 void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
     auto member_coro_id = member(Type::of<uint3>(), expr, 0u);

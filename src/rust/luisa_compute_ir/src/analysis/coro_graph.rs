@@ -610,14 +610,18 @@ impl CoroPreliminaryGraph {
 }
 
 impl CoroGraph {
-    fn add(&mut self, instr: CoroInstruction) -> CoroInstrRef {
+    fn add_instr(&mut self, instr: CoroInstruction) -> CoroInstrRef {
         let i = self.instructions.len();
         self.instructions.push(instr);
         CoroInstrRef(i)
     }
-}
 
-impl CoroGraph {
+    fn add_scope(&mut self, scope: CoroScope) -> CoroScopeRef {
+        let i = self.scopes.len();
+        self.scopes.push(scope);
+        CoroScopeRef(i)
+    }
+
     fn replay_condition_stack(
         graph: &mut CoroGraph,
         preliminary: &CoroPreliminaryGraph,
@@ -659,7 +663,7 @@ impl CoroGraph {
             })
             .collect();
         if !stack.is_empty() {
-            let replay = graph.add(CoroInstruction::ConditionStackReplay { items: stack });
+            let replay = graph.add_instr(CoroInstruction::ConditionStackReplay { items: stack });
             subscope.instructions.push(replay);
         }
     }
@@ -692,7 +696,7 @@ impl CoroGraph {
             } => {
                 let true_branch = clone_block!(true_branch);
                 let false_branch = clone_block!(false_branch);
-                graph.add(CoroInstruction::If {
+                graph.add_instr(CoroInstruction::If {
                     cond: *cond,
                     true_branch,
                     false_branch,
@@ -700,7 +704,7 @@ impl CoroGraph {
             }
             CoroInstruction::Loop { body, cond } => {
                 let body = clone_block!(body);
-                graph.add(CoroInstruction::Loop { body, cond: *cond })
+                graph.add_instr(CoroInstruction::Loop { body, cond: *cond })
             }
             CoroInstruction::Switch {
                 cond,
@@ -715,7 +719,7 @@ impl CoroGraph {
                     })
                     .collect();
                 let default = clone_block!(default);
-                graph.add(CoroInstruction::Switch {
+                graph.add_instr(CoroInstruction::Switch {
                     cond: *cond,
                     cases,
                     default,
@@ -759,7 +763,7 @@ impl CoroGraph {
         // find the direct successors of the split mark -- they must be dominated by the split mark
         Self::include_directly_dominated_instructions(graph, preliminary, current, &mut subscope);
         // process the non-directly dominated instructions
-        let first_flag = graph.add(CoroInstruction::MakeFirstFlag);
+        let first_flag = graph.add_instr(CoroInstruction::MakeFirstFlag);
         subscope.instructions.push(first_flag);
 
         todo!()
@@ -820,8 +824,7 @@ impl CoroGraph {
         let ancestors = Self::find_reachable_ancestors(graph, preliminary, current, ancestors);
         let subscope = Self::construct_subscope(graph, preliminary, current, &ancestors);
         // add the sub-scope to the graph
-        let subscope_ref = CoroScopeRef(graph.scopes.len());
-        graph.scopes.push(subscope);
+        let subscope_ref = graph.add_scope(subscope);
         if let Some(token) = token {
             graph.marks.insert(token, subscope_ref);
         } else {
@@ -921,7 +924,10 @@ impl CoroGraph {
         }
         graph
     }
+}
 
+// public API
+impl CoroGraph {
     pub fn from(module: &Module) -> Self {
         let preliminary_graph = CoroPreliminaryGraph::from(module);
         Self::build(preliminary_graph)

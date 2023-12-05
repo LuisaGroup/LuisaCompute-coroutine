@@ -41,7 +41,8 @@ public:
 
 CUDAStream::CUDAStream(CUDADevice *device) noexcept
     : _device{device},
-      _upload_pool{64_M, true}, _download_pool{32_M, false} {
+      _upload_pool{64_M, true},
+      _download_pool{32_M, false} {
 
     // initialize the callback semaphore
     {
@@ -147,13 +148,13 @@ void CUDAStream::callback(CUDAStream::CallbackContainer &&callbacks) noexcept {
                                                   ticket, CU_STREAM_WRITE_VALUE_DEFAULT));
         } else {
             auto update = StreamCallbackSemaphoreUpdate::create(_callback_semaphore, ticket);
-            cuLaunchHostFunc(
+            LUISA_CHECK_CUDA(cuLaunchHostFunc(
                 _stream,
                 [](void *data) noexcept {
                     auto update = static_cast<StreamCallbackSemaphoreUpdate *>(data);
                     update->recycle();
                 },
-                update);
+                update));
         }
         // enqueue callbacks
         {

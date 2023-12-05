@@ -1295,7 +1295,7 @@ impl CoroGraph {
         for (token, scope) in self.tokens.iter() {
             println!();
             println!(
-                "===================== Subscope {} ======================",
+                "===================== Subscope {} =====================",
                 token
             );
             self.dump_scope(&self.scopes[scope.0]);

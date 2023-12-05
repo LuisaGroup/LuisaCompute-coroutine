@@ -627,6 +627,10 @@ impl CoroGraph {
         CoroScopeRef(i)
     }
 
+    fn instr_mut(&mut self, i: CoroInstrRef) -> &mut CoroInstruction {
+        &mut self.instructions[i.0]
+    }
+
     fn replay_condition_stack(
         graph: &mut CoroGraph,
         preliminary: &CoroPreliminaryGraph,
@@ -747,10 +751,17 @@ impl CoroGraph {
         if stack.is_empty() {
             if inside_loop {
                 let suspend = preliminary.get(suspend);
-                block.push(graph.add_instr(CoroInstruction::SkipIfFirstFlag {
-                    flag: first_flag,
-                    body: vec![suspend],
-                }));
+                if let Some(CoroInstruction::SkipIfFirstFlag { flag, body }) =
+                    block.last().map(|i| graph.instr_mut(*i))
+                {
+                    assert_eq!(flag, &first_flag);
+                    body.push(suspend);
+                } else {
+                    block.push(graph.add_instr(CoroInstruction::SkipIfFirstFlag {
+                        flag: first_flag,
+                        body: vec![suspend],
+                    }));
+                }
             }
             block.push(graph.add_instr(CoroInstruction::ClearFirstFlag(first_flag)));
             return;
@@ -893,6 +904,64 @@ impl CoroGraph {
         }
     }
 
+    fn remove_unreachable_from_instructions(graph: &mut CoroGraph, instr: CoroInstrRef) -> bool /* whether the block is terminated */
+    {
+        unsafe {
+            // Sorry, Rust, but this is really safe.
+            let p_graph = &mut *(graph as *mut CoroGraph);
+            match p_graph.instr_mut(instr) {
+                CoroInstruction::Simple(node) => match node.get().instruction.as_ref() {
+                    Instruction::Call(func, _) => match func {
+                        Func::Unreachable(_) => true,
+                        _ => false,
+                    },
+                    _ => false,
+                },
+                CoroInstruction::Loop { body, .. } => {
+                    Self::remove_unreachable_from_block(graph, body)
+                }
+                CoroInstruction::SkipIfFirstFlag { body, .. } => {
+                    Self::remove_unreachable_from_block(graph, body);
+                    false
+                }
+                CoroInstruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    let true_terminated = Self::remove_unreachable_from_block(graph, true_branch);
+                    let false_terminated = Self::remove_unreachable_from_block(graph, false_branch);
+                    true_terminated && false_terminated
+                }
+                CoroInstruction::Switch { cases, default, .. } => {
+                    let mut cases_terminated = true;
+                    for case in cases.iter() {
+                        let p_case = &mut *(case as *const CoroSwitchCase as *mut CoroSwitchCase);
+                        let terminated =
+                            Self::remove_unreachable_from_block(graph, &mut p_case.body);
+                        cases_terminated = cases_terminated && terminated;
+                    }
+                    let default_terminated = Self::remove_unreachable_from_block(graph, default);
+                    cases_terminated && default_terminated
+                }
+                CoroInstruction::Suspend { .. } | CoroInstruction::Terminate => true,
+                _ => false,
+            }
+        }
+    }
+
+    fn remove_unreachable_from_block(graph: &mut CoroGraph, block: &mut Vec<CoroInstrRef>) -> bool {
+        if let Some(terminated_index) = block
+            .iter()
+            .position(|&instr| Self::remove_unreachable_from_instructions(graph, instr))
+        {
+            block.truncate(terminated_index + 1);
+            true
+        } else {
+            false
+        }
+    }
+
     fn construct_subscope(
         graph: &mut CoroGraph,
         preliminary: &CoroPreliminaryGraph,
@@ -902,13 +971,13 @@ impl CoroGraph {
         let mut subscope = CoroScope {
             instructions: Vec::new(),
         };
+        let mut stack = ancestors.clone();
+        stack.push(current);
         // replay the condition stack
-        Self::replay_condition_stack(graph, preliminary, ancestors, &mut subscope);
+        Self::replay_condition_stack(graph, preliminary, &stack, &mut subscope);
         // process the non-directly dominated instructions
         let first_flag = graph.add_instr(CoroInstruction::MakeFirstFlag);
         subscope.instructions.push(first_flag);
-        let mut stack = ancestors.clone();
-        stack.push(current);
         Self::construct_subscope_for_ancestors(
             graph,
             preliminary,
@@ -932,6 +1001,8 @@ impl CoroGraph {
                 break;
             }
         }
+        // minor simplifications
+        Self::remove_unreachable_from_block(graph, &mut subscope.instructions);
         subscope
     }
 
@@ -1129,7 +1200,7 @@ impl CoroGraph {
                 let indent = indent + 1;
                 for item in items.iter() {
                     print_indent!(indent);
-                    println!("{:?}", item);
+                    println!("{:?} = {}", item.node, item.value);
                 }
                 print_indent!(indent - 1);
                 println!("}}");

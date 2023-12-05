@@ -10,32 +10,9 @@ use crate::analysis::{
 };
 use crate::analysis::coro_graph::{CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
-use crate::analysis::utility::{display_node_map, display_node_set, value_copiable};
+use crate::analysis::utility::{DISPLAY_IR_DEBUG, display_node_map, display_node_set, value_copiable};
 use crate::display::DisplayIR;
 use crate::ir::{CallableModule, Func, Instruction, NodeRef};
-
-
-// Singleton pattern for DisplayIR
-struct LazyDisplayIR {
-    inner: Option<DisplayIR>,
-}
-
-impl LazyDisplayIR {
-    const fn new() -> Self {
-        Self { inner: None }
-    }
-}
-
-impl LazyDisplayIR {
-    fn get(&mut self) -> &mut DisplayIR {
-        if self.inner.is_none() {
-            self.inner = Some(DisplayIR::new());
-        }
-        self.inner.as_mut().unwrap()
-    }
-}
-
-static mut DISPLAY_IR_DEBUG: LazyDisplayIR = LazyDisplayIR::new();  // for DEBUG
 
 
 // CoroFrame analysis
@@ -158,7 +135,7 @@ impl<'a> CoroScopeInfo<'a> {
         self.value_copiable.insert(node);
     }
 
-    fn analyse_instr_source(&mut self, bb: &Vec<CoroInstrRef>) {
+    fn analyse(&mut self, bb: &Vec<CoroInstrRef>) {
         let instr_map = &self.coro_graph.instructions;
         for instr_ref in bb.iter() {
             let instruction = instr_map.get(instr_ref.0).unwrap();
@@ -176,12 +153,11 @@ impl<'a> CoroScopeInfo<'a> {
                                 }
                             }
                             Instruction::Update { var, value } => {
-                                // TODO: whether update should apply copiable?
-                                if self.value_copiable.contains(value) || value_copiable(value) {
-                                    self.value_copiable.insert(*var);
-                                }
+                                // // TODO: whether update should apply copiable?
+                                // if self.value_copiable.contains(value) || value_copiable(value) {
+                                //     self.value_copiable.insert(*var);
+                                // }
                             }
-
                             Instruction::Const(..)
                             | Instruction::Call(..) => { /* has been processed */ }
                             // end
@@ -247,15 +223,15 @@ impl<'a> CoroScopeInfo<'a> {
                     body,
                     cond
                 } => {
-                    self.analyse_instr_source(body);
+                    self.analyse(body);
                 }
                 CoroInstruction::If {
                     cond,
                     true_branch,
                     false_branch
                 } => {
-                    self.analyse_instr_source(true_branch);
-                    self.analyse_instr_source(false_branch);
+                    self.analyse(true_branch);
+                    self.analyse(false_branch);
                 }
                 CoroInstruction::Switch {
                     cond,
@@ -263,9 +239,9 @@ impl<'a> CoroScopeInfo<'a> {
                     default
                 } => {
                     for case in cases.iter() {
-                        self.analyse_instr_source(&case.body);
+                        self.analyse(&case.body);
                     }
-                    self.analyse_instr_source(default);
+                    self.analyse(default);
                 }
                 CoroInstruction::Suspend { token } => {}
                 CoroInstruction::Terminate => {}
@@ -317,10 +293,10 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
         }
     }
 
-    fn analyse_instr_source(&mut self) {
+    fn analyse(&mut self) {
         for (token, coro_info) in self.coro_infos.iter_mut() {
             let coro_scope = self.coro_graph.scopes.get(coro_info.scope_index.0).unwrap();
-            coro_info.analyse_instr_source(&coro_scope.instructions);
+            coro_info.analyse(&coro_scope.instructions);
         }
     }
 
@@ -348,11 +324,12 @@ pub(crate) struct CoroFrameAnalyser;
 
 impl<'a> CoroFrameAnalyser {
     pub(crate) fn analyse(coro_graph: &'a CoroGraph, callable: &CallableModule) {
-        unsafe { DISPLAY_IR_DEBUG.get().display_ir_callable(callable); }    // for DEBUG
+        let callable_string = unsafe { DISPLAY_IR_DEBUG.get().display_ir_callable(callable) };    // for DEBUG
+        println!("Before:\n{}", callable_string);    // for DEBUG
 
         let mut impl_ = CoroFrameAnalyserImpl::new(coro_graph);
         impl_.register_args_captures(callable);
-        impl_.analyse_instr_source();
+        impl_.analyse();
 
         for coro_info in impl_.coro_infos.values() {
             println!("{:?}", coro_info);

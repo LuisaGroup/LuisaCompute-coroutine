@@ -778,17 +778,18 @@ impl CoroGraph {
                     body: preceding,
                 });
                 let mut cloned_suspend_block = vec![masked];
-                let parent_is_loop = match preliminary.instr(current.parent) {
-                    CoroInstruction::Loop { .. } => true,
-                    _ => false,
-                };
+                let inside_loop = inside_loop
+                    || match preliminary.instr(current.parent) {
+                        CoroInstruction::Loop { .. } => true,
+                        _ => false,
+                    };
                 Self::construct_subscope_for_ancestors(
                     graph,
                     preliminary,
                     suspend,
                     &stack[1..],
                     first_flag,
-                    inside_loop | parent_is_loop,
+                    inside_loop,
                     &mut cloned_suspend_block,
                 );
                 clone_branch!(
@@ -1089,10 +1090,144 @@ impl CoroGraph {
     }
 }
 
+impl CoroGraph {
+    fn dump_instr(&self, indent: usize, instr_ref: CoroInstrRef) {
+        macro_rules! print_indent {
+            ($n: expr) => {
+                for _ in 0..$n {
+                    print!("    ");
+                }
+            };
+        }
+        macro_rules! print_body {
+            ($body: expr, $indent: expr) => {
+                println!("{{");
+                let indent = $indent + 1;
+                for instr_ref in $body.iter() {
+                    self.dump_instr(indent, *instr_ref);
+                }
+                print_indent!(indent - 1);
+                print!("}}");
+            };
+        }
+        match &self.instructions[instr_ref.0] {
+            CoroInstruction::Simple(node) => match node.get().instruction.as_ref() {
+                Instruction::Comment(msg) => {
+                    for line in msg.to_string().lines() {
+                        print_indent!(indent);
+                        println!("// {}", line);
+                    }
+                }
+                _ => {
+                    print_indent!(indent);
+                    println!("${} = Simple({:?})", instr_ref.0, node);
+                }
+            },
+            CoroInstruction::ConditionStackReplay { items } => {
+                print_indent!(indent);
+                println!("ConditionStackReplay {{");
+                let indent = indent + 1;
+                for item in items.iter() {
+                    print_indent!(indent);
+                    println!("{:?}", item);
+                }
+                print_indent!(indent - 1);
+                println!("}}");
+            }
+            CoroInstruction::MakeFirstFlag => {
+                print_indent!(indent);
+                println!("${} = MakeFirstFlag", instr_ref.0);
+            }
+            CoroInstruction::SkipIfFirstFlag { flag, body } => {
+                print_indent!(indent);
+                print!("SkipIfFirstFlag(${}) ", flag.0);
+                print_body!(body, indent);
+                println!();
+            }
+            CoroInstruction::ClearFirstFlag(flag) => {
+                print_indent!(indent);
+                println!("ClearFirstFlag(${})", flag.0);
+            }
+            CoroInstruction::Loop { body, cond } => {
+                print_indent!(indent);
+                print!("Loop ");
+                print_body!(body, indent);
+                println!(" While (${})", cond.0);
+            }
+            CoroInstruction::If {
+                cond,
+                true_branch,
+                false_branch,
+            } => {
+                print_indent!(indent);
+                print!("If (${}) ", cond.0);
+                print_body!(true_branch, indent);
+                print!(" Else ");
+                print_body!(false_branch, indent);
+                println!();
+            }
+            CoroInstruction::Switch {
+                cond,
+                cases,
+                default,
+            } => {
+                print_indent!(indent);
+                print!("Switch (${}) {{", cond.0);
+                let indent = indent + 1;
+                for case in cases.iter() {
+                    print_indent!(indent);
+                    print!("Case {} ", case.value);
+                    print_body!(&case.body, indent);
+                    println!();
+                }
+                print_indent!(indent);
+                print!("Default ");
+                print_body!(default, indent);
+                println!();
+                print_indent!(indent - 1);
+                println!("}}");
+            }
+            CoroInstruction::Suspend { token } => {
+                print_indent!(indent);
+                println!("Suspend({})", token);
+            }
+            CoroInstruction::Terminate => {
+                print_indent!(indent);
+                println!("Terminate");
+            }
+            _ => panic!("Unexpected instruction."),
+        }
+    }
+
+    fn dump_scope(&self, scope: &CoroScope) {
+        for instr_ref in scope.instructions.iter() {
+            self.dump_instr(0, *instr_ref);
+        }
+    }
+}
+
 // public API
 impl CoroGraph {
     pub fn from(module: &Module) -> Self {
         let preliminary_graph = CoroPreliminaryGraph::from(module);
         Self::build(preliminary_graph)
+    }
+
+    pub fn dump(&self) {
+        println!("====================== CoroGraph ======================");
+        println!("Subscope count: {}", self.scopes.len());
+        println!("Entry scope: {}", self.entry.0);
+        println!("Tokens: {:?}", self.tokens);
+        println!();
+        println!("===================== Entry Scope =====================");
+        self.dump_scope(&self.scopes[self.entry.0]);
+        for (token, scope) in self.tokens.iter() {
+            println!();
+            println!(
+                "===================== Subscope {} =====================",
+                token
+            );
+            self.dump_scope(&self.scopes[scope.0]);
+        }
     }
 }

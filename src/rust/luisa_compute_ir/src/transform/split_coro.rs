@@ -10,6 +10,7 @@ impl Transform for SplitCoro {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         println!("SplitCoro::transform_module");
         let graph = CoroGraph::from(&callable.module);
+        graph.dump();
         CoroFrameAnalyser::analyse(&graph, &callable);
         todo!()
     }

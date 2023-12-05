@@ -473,6 +473,7 @@ template<typename U, typename V, typename... Args>
 
 template<typename... Args>
 inline void suspend(luisa::string &&desc, Args &&...args) noexcept {
+    detail::comment(luisa::string{"CoroSplitMark("}.append(desc).append(")"));
     auto rets = suspend_get_var_list(std::forward<Args>(args)...);
     auto coro_token = detail::FunctionBuilder::current()->suspend_(desc);
     for (auto &ret : rets) {

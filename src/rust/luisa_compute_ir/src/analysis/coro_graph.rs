@@ -211,7 +211,7 @@ impl CoroPreliminaryGraph {
                 for instr_ref in $body.iter() {
                     Self::find_terminators(instructions, instr_ref, known);
                 }
-                $body.iter().any(|instr_ref| known.contains_key(instr_ref))
+                $body.iter().any(|instr_ref| *known.get(instr_ref).unwrap())
             }};
         }
         let result = match instr {
@@ -921,14 +921,14 @@ impl CoroGraph {
         // add the instructions in the outermost scope
         let outermost = stack[0];
         let outermost_parent_branch = preliminary.get_parent_branch(outermost);
-        for i in outermost_parent_branch
+        for &i in outermost_parent_branch
             .iter()
             .skip(outermost.index_in_parent_branch + 1)
         {
             subscope
                 .instructions
-                .push(Self::clone_instruction(graph, preliminary, *i));
-            if preliminary.is_terminator(*i) {
+                .push(Self::clone_instruction(graph, preliminary, i));
+            if preliminary.is_terminator(i) {
                 break;
             }
         }

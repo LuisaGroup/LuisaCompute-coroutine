@@ -935,10 +935,8 @@ impl CoroGraph {
                 }
                 CoroInstruction::Switch { cases, default, .. } => {
                     let mut cases_terminated = true;
-                    for case in cases.iter() {
-                        let p_case = &mut *(case as *const CoroSwitchCase as *mut CoroSwitchCase);
-                        let terminated =
-                            Self::remove_unreachable_from_block(graph, &mut p_case.body);
+                    for case in cases.iter_mut() {
+                        let terminated = Self::remove_unreachable_from_block(graph, &mut case.body);
                         cases_terminated = cases_terminated && terminated;
                     }
                     let default_terminated = Self::remove_unreachable_from_block(graph, default);

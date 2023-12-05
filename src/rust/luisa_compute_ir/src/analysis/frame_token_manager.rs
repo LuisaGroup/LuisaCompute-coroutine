@@ -40,4 +40,10 @@ impl FrameTokenManager {
             p.as_mut().unwrap()
         }
     }
+
+    pub(crate) fn reset() {
+        let ftm = Self::get_instance();
+        ftm.frame_token_counter = 0;
+        ftm.frame_token_occupied.clear();
+    }
 }

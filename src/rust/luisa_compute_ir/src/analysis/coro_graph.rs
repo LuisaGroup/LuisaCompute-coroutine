@@ -9,10 +9,10 @@ use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct CoroInstrRef(usize);
+pub(crate) struct CoroInstrRef(pub usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct CoroScopeRef(usize);
+pub(crate) struct CoroScopeRef(pub usize);
 
 impl CoroInstrRef {
     fn invalid() -> Self {
@@ -36,18 +36,18 @@ pub(crate) struct ConditionStackItem {
     pub value: i32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct CoroSwitchCase {
     pub value: i32,
     pub body: Vec<CoroInstrRef>, // indices into the graph nodes
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum CoroInstruction {
-    // entry
+    // entry, won't exist after this analysis
     Entry,
 
-    // entry scope
+    // entry scope, won't exist after this analysis
     EntryScope {
         body: Vec<CoroInstrRef>, // indices into the graph nodes
     },

@@ -9,28 +9,7 @@ use crate::ir::{BasicBlock, CallableModule, Func, Instruction, INVALID_REF, Node
 use crate::{CArc, CBoxedSlice, Pool, Pooled};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
-
-// Singleton pattern for DisplayIR
-struct LazyDisplayIR {
-    inner: Option<DisplayIR>,
-}
-
-impl LazyDisplayIR {
-    const fn new() -> Self {
-        Self { inner: None }
-    }
-}
-
-impl LazyDisplayIR {
-    fn get(&mut self) -> &mut DisplayIR {
-        if self.inner.is_none() {
-            self.inner = Some(DisplayIR::new());
-        }
-        self.inner.as_mut().unwrap()
-    }
-}
-
-static mut DISPLAY_IR_DEBUG: LazyDisplayIR = LazyDisplayIR::new();  // for DEBUG
+use crate::analysis::utility::{display_node_map2set, display_node_set, display_node_map, DISPLAY_IR_DEBUG};
 
 #[derive(Debug)]
 pub(crate) struct Continuation {
@@ -161,38 +140,6 @@ pub(crate) struct SplitPossibility {
     pub(crate) definitely: bool,
 }
 
-fn display_node_map2set(target: &HashMap<NodeRef, HashSet<i32>>) -> String {
-    let output: Vec<_> = target.iter().map(|(node_ref, number)| unsafe {
-        let node = DISPLAY_IR_DEBUG.get().var_str(node_ref);
-        let number = BTreeSet::from_iter(number.iter().cloned());
-        let number = format!("{:?}", number);
-        let output = format!("{}: {}", node, number);
-        (node, output)
-    }).collect();
-    let output = BTreeMap::from_iter(output);
-    let output: Vec<_> = output.iter().map(|(_, output)| output.as_str()).collect();
-    let output = output.join(", ");
-    let output = format!("{{{}}}", output);
-    output
-}
-
-fn display_node_map(target: &HashMap<NodeRef, i32>) -> String {
-    let output: Vec<_> = target.iter().map(|(node_ref, number)| unsafe {
-        let node = DISPLAY_IR_DEBUG.get().var_str(node_ref);
-        let output = format!("{}: {}", node, number);
-        (node, output)
-    }).collect();
-    let output = BTreeMap::from_iter(output);
-    let output: Vec<_> = output.iter().map(|(_, output)| output.as_str()).collect();
-    let output = output.join(", ");
-    let output = format!("{{{}}}", output);
-    output
-}
-
-fn display_node_set(target: &HashSet<NodeRef>) -> String {
-    unsafe { DISPLAY_IR_DEBUG.get().vars_str(target) }
-}
-
 #[derive(Clone)]
 struct VarScope {
     defined: HashMap<NodeRef, HashSet<i32>>,
@@ -220,7 +167,7 @@ struct ActiveVar {
     token_next: u32,
 
     var_scopes: Vec<VarScope>,
-    var_scope_exited: Vec<VarScope>,
+    // var_scope_exited: Vec<VarScope>,
 
     defined_count: HashMap<NodeRef, i32>,
     defined: HashMap<NodeRef, HashSet<i32>>,
@@ -256,7 +203,7 @@ impl ActiveVar {
             token_next: INVALID_FRAME_TOKEN_MASK,
 
             var_scopes: vec![],
-            var_scope_exited: vec![],
+            // var_scope_exited: vec![],
 
             defined_count: HashMap::new(),
             defined: HashMap::new(),
@@ -702,7 +649,7 @@ impl CoroFrameAnalyser {
             // create a new frame builder for the next scope
             let mut fb_next = FrameBuilder::new(token_next, None);
             fb_next.active_var.var_scopes.resize_with(fb_before.active_var.var_scopes.len(), || VarScope::new());
-            fb_next.active_var.var_scope_exited.resize_with(fb_before.active_var.var_scope_exited.len(), || VarScope::new());
+            // fb_next.active_var.var_scope_exited.resize_with(fb_before.active_var.var_scope_exited.len(), || VarScope::new());
             vec![fb_before, fb_next]
         }
     }

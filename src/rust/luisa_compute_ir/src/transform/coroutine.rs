@@ -11,6 +11,7 @@ use crate::ir::{
     StructType, SwitchCase, Type, VectorElementType, VectorType, INVALID_REF,
 };
 use crate::{display::DisplayIR, CArc, CBoxedSlice, Pooled};
+use crate::analysis::coro_graph::CoroGraph;
 
 const STATE_INDEX_CORO_ID: usize = 0;
 const STATE_INDEX_FRAME_TOKEN: usize = 1;
@@ -1516,26 +1517,29 @@ impl CoroutineSplitImpl {
         let result = display_ir.display_ir_callable(&callable);
         println!("{}", result);
 
-        let mut coro_frame_analyser = CoroFrameAnalyser::new();
-        coro_frame_analyser.analyse_callable(&callable);
-        println!("{}", coro_frame_analyser.display_coro_frame());
-        println!("{}", coro_frame_analyser.display_continuations());
+        let coro_graph = CoroGraph::from(&callable.module);
+        crate::analysis::coro_frame_v4::CoroFrameAnalyser::analyse(&coro_graph, &callable);
 
-        let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
-        println!("{:-^40}", " After split ");
-        let result = DisplayIR::new().display_ir_callable(&coroutine_entry);
-        println!("{:-^40}\n{}", format!(" CoroScope {} ", 0), result);
-        for (token, coro) in coroutine_entry
-            .subroutine_ids
-            .iter()
-            .zip(coroutine_entry.subroutines.iter())
-        {
-            let result = DisplayIR::new().display_ir_callable(coro.as_ref());
-            println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
-        }
-
-        coroutine_entry
-        // unimplemented!("Coroutine split");
+        // let mut coro_frame_analyser = CoroFrameAnalyser::new();
+        // coro_frame_analyser.analyse_callable(&callable);
+        // println!("{}", coro_frame_analyser.display_coro_frame());
+        // println!("{}", coro_frame_analyser.display_continuations());
+        //
+        // let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
+        // println!("{:-^40}", " After split ");
+        // let result = DisplayIR::new().display_ir_callable(&coroutine_entry);
+        // println!("{:-^40}\n{}", format!(" CoroScope {} ", 0), result);
+        // for (token, coro) in coroutine_entry
+        //     .subroutine_ids
+        //     .iter()
+        //     .zip(coroutine_entry.subroutines.iter())
+        // {
+        //     let result = DisplayIR::new().display_ir_callable(coro.as_ref());
+        //     println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
+        // }
+        //
+        // coroutine_entry
+        unimplemented!("Coroutine split");
     }
 }
 

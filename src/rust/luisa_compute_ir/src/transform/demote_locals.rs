@@ -29,6 +29,7 @@ use crate::ir::{new_node, BasicBlock, Func, Instruction, IrBuilder, Module, Node
 use crate::transform::Transform;
 use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};
+use crate::analysis::utility::is_uniform_value;
 
 pub struct DemoteLocals;
 
@@ -36,32 +37,12 @@ struct InitializationNormalizer;
 
 // Implementation of Step 0: normalize the initialization of local variables.
 impl InitializationNormalizer {
-    fn _is_uniform_initializer(node: &NodeRef) -> bool {
-        match node.get().instruction.as_ref() {
-            Instruction::Uniform => true,
-            Instruction::Argument { by_value } => *by_value,
-            Instruction::Const(_) => true,
-            Instruction::Call(func, _) => match func {
-                Func::ZeroInitializer
-                | Func::DispatchId
-                | Func::ThreadId
-                | Func::BlockId
-                | Func::WarpLaneId
-                | Func::DispatchSize
-                | Func::WarpSize
-                | Func::CoroId
-                | Func::CoroToken => true,
-                _ => false,
-            },
-            _ => false,
-        }
-    }
 
     fn normalize_non_uniform_inits_in_block(module: &Module, block: &BasicBlock) {
         for node in block.iter() {
             match node.get().instruction.as_ref() {
                 Instruction::Local { init } => {
-                    if !Self::_is_uniform_initializer(init) {
+                    if !is_uniform_value(init) {
                         let mut builder = IrBuilder::new(module.pools.clone());
                         // insert a zero initializer before the local variable
                         builder.set_insert_point(node.get().prev);

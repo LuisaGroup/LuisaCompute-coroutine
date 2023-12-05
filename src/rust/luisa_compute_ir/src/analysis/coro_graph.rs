@@ -954,6 +954,13 @@ impl CoroGraph {
             .position(|&instr| Self::remove_unreachable_from_instructions(graph, instr))
         {
             block.truncate(terminated_index + 1);
+            // if the last terminator instruction is a `loop`, then we can just take its body
+            if let Some(CoroInstruction::Loop { body, cond }) =
+                block.last().map(|i| &graph.instructions[i.0])
+            {
+                block.pop();
+                block.extend(body);
+            }
             true
         } else {
             false
@@ -1231,8 +1238,10 @@ impl CoroGraph {
                 print_indent!(indent);
                 print!("If (${}) ", cond.0);
                 print_body!(true_branch, indent);
-                print!(" Else ");
-                print_body!(false_branch, indent);
+                if !false_branch.is_empty() {
+                    print!(" Else ");
+                    print_body!(false_branch, indent);
+                }
                 println!();
             }
             CoroInstruction::Switch {

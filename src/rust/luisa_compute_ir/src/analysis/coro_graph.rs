@@ -287,10 +287,10 @@ impl CoroPreliminaryGraph {
 
 // This struct is the final coroutine graph after splitting the coroutine scopes.
 pub(crate) struct CoroGraph {
-    scopes: Vec<CoroScope>,             // all the scopes in the graph
-    entry: CoroScopeRef,                // the index of the entry scope (the root scope)
-    marks: HashMap<u32, CoroScopeRef>,  // map from split mark token to scope index
-    instructions: Vec<CoroInstruction>, // all the instructions in the graph
+    pub scopes: Vec<CoroScope>,             // all the scopes in the graph
+    pub entry: CoroScopeRef,                // the index of the entry scope (the root scope)
+    pub tokens: HashMap<u32, CoroScopeRef>, // map from split mark token to scope index
+    pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
 }
 
 // Method:
@@ -815,7 +815,7 @@ impl CoroGraph {
             _ => panic!("Unexpected instruction."),
         };
         if let Some(token) = token {
-            if graph.marks.contains_key(&token) {
+            if graph.tokens.contains_key(&token) {
                 // the continuation has been extracted
                 return;
             }
@@ -826,7 +826,7 @@ impl CoroGraph {
         // add the sub-scope to the graph
         let subscope_ref = graph.add_scope(subscope);
         if let Some(token) = token {
-            graph.marks.insert(token, subscope_ref);
+            graph.tokens.insert(token, subscope_ref);
         } else {
             graph.entry = subscope_ref;
         }
@@ -905,7 +905,7 @@ impl CoroGraph {
         let mut graph = CoroGraph {
             scopes: Vec::new(),
             entry: CoroScopeRef::invalid(),
-            marks: HashMap::new(),
+            tokens: HashMap::new(),
             // clone so that the indices are not changed when we add new instructions
             instructions: preliminary_graph.instructions.clone(),
         };

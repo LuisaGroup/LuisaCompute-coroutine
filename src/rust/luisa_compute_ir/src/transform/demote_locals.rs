@@ -24,8 +24,7 @@
 // Note: the `reg2mem` transform should be applied before this transform.
 
 use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
-use crate::ir::debug::dump_ir_human_readable;
-use crate::ir::{new_node, BasicBlock, Func, Instruction, IrBuilder, Module, Node, NodeRef, Type};
+use crate::ir::{BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
 use crate::transform::Transform;
 use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};

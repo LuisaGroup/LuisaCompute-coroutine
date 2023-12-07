@@ -11,8 +11,9 @@ use crate::analysis::{
 };
 use crate::analysis::coro_graph::{CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
-use crate::analysis::utility::{DISPLAY_IR_DEBUG, display_node_map, display_node_map2set, display_node_set, value_copiable};
+use crate::analysis::utility::{DISPLAY_IR_DEBUG, display_node_map, display_node_map2set, display_node_set};
 use crate::{CArc, CBoxedSlice};
+use crate::analysis::replayable_values::ReplayableValueAnalysis;
 use crate::context::{is_type_equal, register_type};
 use crate::display::DisplayIR;
 use crate::ir::{CallableModule, Func, Instruction, NodeRef, Primitive, StructType, Type, VectorElementType, VectorType};
@@ -91,11 +92,11 @@ impl ActiveVar {
         }
     }
 
-    fn record_use(&mut self, node: NodeRef) {
+    fn record_use(&mut self, replayable_value_analysis: &mut ReplayableValueAnalysis, node: NodeRef) {
         // let token = self.token; // for DEBUG
         let defined_index = *self.defined_count.get(&node).unwrap_or(&-1);
         self.used.entry(node).or_default().insert(defined_index);
-        if defined_index < 0 && !value_copiable(&node) {
+        if defined_index < 0 && !replayable_value_analysis.detect(node) {
             self.use_b.insert(node);
         }
     }
@@ -235,6 +236,7 @@ pub(crate) struct CoroFrameAnalyserImpl<'a> {
     coro_frame: CoroFrame,
     frame_type: CArc<Type>,
     frame_fields: Vec<CArc<Type>>,
+    replayable_value_analysis: ReplayableValueAnalysis,
 }
 
 impl<'a> CoroFrameAnalyserImpl<'a> {
@@ -256,6 +258,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
             coro_frame: CoroFrame::default(),
             frame_type: CArc::null(),
             frame_fields: vec![],
+            replayable_value_analysis: ReplayableValueAnalysis::new(false),
         }
     }
 
@@ -383,11 +386,21 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
     }
 
     fn visit_bb(&mut self, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {
+        macro_rules! record_use {
+            ($node: expr) => {
+                frame_builder.active_var.record_use(&mut self.replayable_value_analysis, *$node);
+            };
+        }
+        macro_rules! record_def {
+            ($node: expr) => {
+                frame_builder.active_var.record_def(*$node);
+            };
+        }
         macro_rules! record_cond {
             ($cond: expr, $instr_str: expr) => {
                 let cond = self.coro_graph.instructions.get($cond.0).unwrap();
                 if let CoroInstruction::Simple(cond) = cond {
-                    frame_builder.active_var.record_use(*cond);
+                    record_use!(cond);
                 } else {
                     panic!("{} condition should be CoroInstruction::Simple", $instr_str)
                 }
@@ -404,34 +417,33 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                     match instruction {
                         // possible copiable value source
                         Instruction::Local { init } => {
-                            frame_builder.active_var.record_use(*init);
-                            frame_builder.active_var.record_def(*node_ref);
+                            record_use!(init);
+                            record_def!(node_ref);
                         }
                         Instruction::Const(..) => {
-                            frame_builder.active_var.record_def(*node_ref);
+                            record_def!(node_ref);
                         }
                         Instruction::Call(func, args) => {
                             for arg in args.iter() {
                                 // FIXME: arg can Read/Write, we only consider Read here (fixe later)
-                                frame_builder.active_var.record_use(*arg);
+                                record_use!(arg);
                             }
                             if !is_type_equal(type_, &Type::void()) {
-                                frame_builder.active_var.record_def(*node_ref);
+                                record_def!(node_ref);
                             }
                         }
 
                         Instruction::Update { var, value } => {
-                            // TODO: do not consider now
-                            frame_builder.active_var.record_use(*value);
-                            frame_builder.active_var.record_def(*var);
+                            record_use!(value);
+                            record_def!(var);
                         }
                         // end
 
                         Instruction::Phi(phi) => {
                             for phi in phi.as_ref() {
-                                frame_builder.active_var.record_use(phi.value);
+                                record_use!(&phi.value);
                             }
-                            frame_builder.active_var.record_def(*node_ref);
+                            record_def!(node_ref);
                         }
 
                         Instruction::Invalid => {
@@ -489,7 +501,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
 
                 CoroInstruction::ConditionStackReplay { items } => {
                     for item in items.iter() {
-                        frame_builder.active_var.record_def(item.node);
+                        record_def!(&item.node);
                     }
                 }
 

@@ -6,6 +6,7 @@ use half::f16;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::any::{Any, TypeId};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
@@ -174,7 +175,7 @@ impl std::fmt::Display for ArrayType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[repr(C)]
 pub enum Type {
     Void,
@@ -185,6 +186,18 @@ pub enum Type {
     Struct(StructType),
     Array(ArrayType),
     Opaque(CBoxedSlice<u8>),
+}
+
+impl Ord for Type {
+    fn cmp(&self, other: &Self) -> Ordering {
+        format!("{:?}", self).cmp(&format!("{:?}", other))
+    }
+}
+
+impl PartialOrd for Type {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(format!("{:?}", self).cmp(&format!("{:?}", other)))
+    }
 }
 
 impl std::fmt::Display for Type {
@@ -948,11 +961,13 @@ pub enum Func {
     Unknown0,
     Unknown1,
 }
+
 impl Func {
     pub fn discriminant(&self) -> u32 {
         unsafe { *<*const _>::from(self).cast::<u32>() }
     }
 }
+
 #[derive(Clone, Debug, Serialize)]
 #[repr(C)]
 pub enum Const {
@@ -1544,6 +1559,7 @@ pub struct BasicBlock {
     pub(crate) first: NodeRef,
     pub(crate) last: NodeRef,
 }
+
 impl BasicBlock {
     pub fn first(&self) -> NodeRef {
         self.first
@@ -3013,7 +3029,7 @@ pub extern "C" fn luisa_compute_ir_node_usage(kernel: &KernelModule) -> CBoxedSl
                         "Requested resource {} not exist in usage map",
                         captured.node.0
                     )
-                    .as_str(),
+                        .as_str(),
                 )
                 .to_u8(),
         );

@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
+use std::process::exit;
 use crate::analysis::{
     coro_graph::CoroGraph,
     frame_token_manager::{FrameTokenManager},
@@ -11,9 +12,10 @@ use crate::analysis::{
 use crate::analysis::coro_graph::{CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
 use crate::analysis::utility::{DISPLAY_IR_DEBUG, display_node_map, display_node_map2set, display_node_set, value_copiable};
-use crate::context::is_type_equal;
+use crate::{CArc, CBoxedSlice};
+use crate::context::{is_type_equal, register_type};
 use crate::display::DisplayIR;
-use crate::ir::{CallableModule, Func, Instruction, NodeRef, Type};
+use crate::ir::{CallableModule, Func, Instruction, NodeRef, Primitive, StructType, Type, VectorElementType, VectorType};
 
 
 // CoroFrame analysis
@@ -150,6 +152,73 @@ impl FrameBuilder {
     }
 }
 
+#[derive(Default, Clone)]
+struct CoroFrame {
+    input: BTreeMap<u32, HashSet<NodeRef>>,
+    output: BTreeMap<(u32, u32), HashSet<NodeRef>>,
+    index: BTreeMap<u32, HashMap<NodeRef, usize>>,
+}
+
+impl Debug for CoroFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let input: Vec<_> = self.input.iter().map(|(token, nodes)| {
+            let token = format!("{:?}", token);
+            let nodes = display_node_set(nodes);
+            format!("{}: {}", token, nodes)
+        }).collect();
+        let input = input.join(", ");
+        let input = format!("{{{}}}", input);
+        let output: Vec<_> = self.output.iter().map(|((token, token_next), nodes)| {
+            let token = format!("{:?}", token);
+            let token_next = format!("{:?}", token_next);
+            let nodes = display_node_set(nodes);
+            format!("({}, {}): {}", token, token_next, nodes)
+        }).collect();
+        let output = output.join(", ");
+        let output = format!("{{{}}}", output);
+        f.debug_struct("CoroFrame")
+            .field("input", &input)
+            .field("output", &output)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Continuation {
+    pub(crate) token: u32,
+    pub(crate) prev: BTreeSet<u32>,
+    pub(crate) next: BTreeSet<u32>,
+}
+
+impl Eq for Continuation {}
+
+impl Ord for Continuation {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.token.cmp(&other.token)
+    }
+}
+
+impl PartialEq<Self> for Continuation {
+    fn eq(&self, other: &Self) -> bool {
+        self.token == other.token
+    }
+}
+
+impl PartialOrd<Self> for Continuation {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.token.cmp(&other.token))
+    }
+}
+
+impl Continuation {
+    pub(crate) fn new(token: u32) -> Self {
+        Self {
+            token,
+            prev: BTreeSet::new(),
+            next: BTreeSet::new(),
+        }
+    }
+}
 
 pub(crate) struct CoroFrameAnalyserImpl<'a> {
     coro_graph: &'a CoroGraph,
@@ -160,6 +229,12 @@ pub(crate) struct CoroFrameAnalyserImpl<'a> {
     active_vars: Vec<ActiveVar>,
     active_var_by_token: BTreeMap<u32, BTreeSet<usize>>,
     active_var_by_token_next: BTreeMap<u32, BTreeSet<usize>>,
+
+    continuations: BTreeMap<u32, Continuation>,
+
+    coro_frame: CoroFrame,
+    frame_type: CArc<Type>,
+    frame_fields: Vec<CArc<Type>>,
 }
 
 impl<'a> CoroFrameAnalyserImpl<'a> {
@@ -177,6 +252,10 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
             active_vars: vec![],
             active_var_by_token: BTreeMap::new(),
             active_var_by_token_next: BTreeMap::new(),
+            continuations: BTreeMap::new(),
+            coro_frame: CoroFrame::default(),
+            frame_type: CArc::null(),
+            frame_fields: vec![],
         }
     }
 
@@ -190,6 +269,12 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
             let mut frame_builder = FrameBuilder::new(token, Some(&self.defined_default));
             let scope = self.coro_graph.scopes.get(coro_scope_ref.0).unwrap().instructions.clone();
             frame_builder = self.visit_bb(frame_builder, &scope);
+            if self.active_var_by_token.entry(token).or_default().is_empty() {
+                let index = self.active_vars.len();
+                assert_eq!(frame_builder.active_var.token_next, INVALID_FRAME_TOKEN_MASK);
+                self.active_vars.push(frame_builder.active_var.clone());
+                self.active_var_by_token.entry(token).or_default().insert(index);
+            }
         }
     }
 
@@ -200,6 +285,101 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
         for capture in callable.captures.as_ref() {
             assert_eq!(self.defined_default.insert(capture.node), true);
         }
+    }
+
+    fn calculate_frame(&mut self) {
+        let mut changed = true;
+        let token_vec = self
+            .continuations
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        while changed {
+            changed = false;
+            for token in token_vec.iter() {
+                // token -> *
+                // OUT[B] = U IN[S] for all S in next[B]
+                for index in self.active_var_by_token.get(token).unwrap() {
+                    let active_var = self.active_vars.get(*index).unwrap();
+                    let token_next = active_var.token_next;
+                    let input_next = self.coro_frame.input.entry(token_next).or_default();
+                    assert_eq!(*token, active_var.token);
+                    let output = self.coro_frame.output.entry((*token, token_next)).or_default();
+                    if output != input_next {
+                        changed = true;
+                        output.clone_from(input_next);
+                    }
+                }
+
+                // IN[B] = use[B] U (OUT[B] - def[B])
+                let mut input = self.coro_frame.input.entry(*token).or_default().clone();
+                for index in self.active_var_by_token.get(token).unwrap() {
+                    let active_var = self.active_vars.get(*index).unwrap();
+                    let token_next = active_var.token_next;
+                    input.extend(active_var.use_b.iter());
+                    let mut out_minus_def = self.coro_frame.output.get(&(*token, token_next)).unwrap().clone();
+                    out_minus_def.retain(|node_ref| !active_var.def_b.contains(node_ref));
+                    input.extend(out_minus_def);
+                }
+                if input != *self.coro_frame.input.get(token).unwrap() {
+                    changed = true;
+                    self.coro_frame.input.insert(*token, input);
+                }
+            }
+        }
+
+        // calculate frame type
+        // coro id/token for slot 1/2
+        let coro_id_type = Type::Vector(VectorType {
+            element: VectorElementType::Scalar(Primitive::Uint32),
+            length: 3,
+        });
+        let token_type = Type::Primitive(Primitive::Uint32);
+        let mut frame_fields: Vec<CArc<Type>> = vec![CArc::new(coro_id_type), CArc::new(token_type)];
+
+        let mut fields_type: BTreeMap<Type, usize> = BTreeMap::new();
+        for token in token_vec.iter() {
+            let frame_vars: Vec<NodeRef> = self.coro_frame.input.get(token).unwrap()
+                .iter().map(ToOwned::to_owned).collect();
+            let mut fields_type_temp: BTreeMap<Type, usize> = BTreeMap::new();
+            for node_ref in frame_vars.iter() {
+                let type_ = node_ref.type_().as_ref();
+                let count = fields_type_temp.entry(type_.clone()).or_default();
+                 *count += 1;
+            }
+            for (type_, count_temp) in fields_type_temp.iter() {
+                let count = fields_type.entry(type_.clone()).or_default();
+                *count = (*count).max(*count_temp);
+            }
+        }
+
+        let mut free_fields: HashMap<CArc<Type>, Vec<usize>> = HashMap::new();
+        let mut index_counter: usize = frame_fields.len();
+        for (type_, count) in fields_type.iter() {
+            for _ in 0..*count {
+                let index = index_counter;
+                index_counter += 1;
+                let type_ = CArc::new(type_.clone());
+                frame_fields.push(type_.clone());
+                free_fields.entry(type_).or_default().push(index);
+            }
+        }
+
+        let alignment = frame_fields
+            .iter()
+            .map(|type_| type_.alignment())
+            .max()
+            .unwrap();
+        let size = frame_fields.iter().map(|type_| type_.size()).sum();
+        self.frame_fields = frame_fields.clone();
+        self.frame_type = register_type(Type::Struct(StructType {
+            fields: CBoxedSlice::new(frame_fields),
+            alignment,
+            size,
+        }));
+
+        // allocate frame slots
+        todo!()
     }
 
     fn visit_bb(&mut self, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {
@@ -223,7 +403,6 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                     let type_ = node_ref.type_();
                     match instruction {
                         // possible copiable value source
-                        // TODO: if we have done SSA before, we can check value_copiable(node) in record_use(node)
                         Instruction::Local { init } => {
                             frame_builder.active_var.record_use(*init);
                             frame_builder.active_var.record_def(*node_ref);
@@ -233,6 +412,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                         }
                         Instruction::Call(func, args) => {
                             for arg in args.iter() {
+                                // FIXME: arg can Read/Write, we only consider Read here (fixe later)
                                 frame_builder.active_var.record_use(*arg);
                             }
                             if !is_type_equal(type_, &Type::void()) {
@@ -307,10 +487,17 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                     unreachable!("Instruction {:?} unreachable in CoroFrame analysis", instruction);
                 }
 
-                CoroInstruction::ConditionStackReplay { .. } => {}
+                CoroInstruction::ConditionStackReplay { items } => {
+                    for item in items.iter() {
+                        frame_builder.active_var.record_def(item.node);
+                    }
+                }
+
                 CoroInstruction::MakeFirstFlag => {}
-                CoroInstruction::SkipIfFirstFlag { .. } => {}
                 CoroInstruction::ClearFirstFlag(_) => {}
+                CoroInstruction::SkipIfFirstFlag { flag, body } => {
+                    frame_builder = self.visit_bb(frame_builder, body);
+                }
 
                 CoroInstruction::Loop {
                     body,
@@ -318,7 +505,6 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                 } => {
                     record_cond!(cond, "Loop");
                     frame_builder = self.visit_bb(frame_builder, body);
-                    frame_builder = self.visit_bb(frame_builder, body); // twice
                 }
                 CoroInstruction::If {
                     cond,
@@ -342,12 +528,21 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                 }
                 CoroInstruction::Suspend { token: token_next } => {
                     let token = frame_builder.token;
+
+                    // record continuation
+                    let continuation = self.continuations.entry(token).or_insert(Continuation::new(token));
+                    continuation.next.insert(*token_next);
+                    let continuation = self.continuations.entry(*token_next).or_insert(Continuation::new(*token_next));
+                    continuation.prev.insert(token);
+
+                    // record active var
                     frame_builder.active_var.token_next = *token_next;
                     assert_eq!(token, frame_builder.active_var.token);
                     let index = self.active_vars.len();
                     self.active_var_by_token.entry(token).or_default().insert(index);
                     self.active_var_by_token_next.entry(*token_next).or_default().insert(index);
                     self.active_vars.push(frame_builder.active_var.clone());
+                    frame_builder.active_var.token_next = INVALID_FRAME_TOKEN_MASK;
                 }
                 CoroInstruction::Terminate => {}
             }
@@ -367,7 +562,10 @@ impl<'a> CoroFrameAnalyser {
         let mut impl_ = CoroFrameAnalyserImpl::new(coro_graph);
         impl_.register_args_captures(callable);
         impl_.analyse();
-        println!("impl_.active_vars: {:#?}", impl_.active_vars);    // for DEBUG
+        impl_.calculate_frame();
+        println!("CoroFrame Analysis");                             // for DEBUG
+        println!("Active Vars: {:#?}", impl_.active_vars);     // for DEBUG
+        println!("CoroFrame: {:#?}", impl_.coro_frame);
         // todo!()
     }
 }

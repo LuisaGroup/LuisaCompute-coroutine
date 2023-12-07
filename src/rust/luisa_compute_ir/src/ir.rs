@@ -174,7 +174,7 @@ impl std::fmt::Display for ArrayType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Serialize)]
 #[repr(C)]
 pub enum Type {
     Void,

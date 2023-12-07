@@ -74,10 +74,10 @@ int main(int argc, char *argv[]) {
         auto coro_id_ = coro_id().x;
         auto a = def(0u);
         $for (i, 2u) {
-            $suspend("Suspend(1)");
-            x_buffer.write(coro_id_, coro_id_);
+            // $suspend("Suspend(1)");
+            // x_buffer.write(coro_id_, coro_id_);
 
-            a = 234u;
+            auto a = def(234u);
             // $suspend("2");
             //
             // $if (i == 0u) {

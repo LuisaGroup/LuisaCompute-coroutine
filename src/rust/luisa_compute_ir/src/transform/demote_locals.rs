@@ -24,11 +24,11 @@
 // Note: the `reg2mem` transform should be applied before this transform.
 
 use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
+use crate::analysis::uniform_values::UniformValueAnalysis;
 use crate::ir::{BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
 use crate::transform::Transform;
 use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};
-use crate::analysis::utility::is_uniform_value;
 
 pub struct DemoteLocals;
 
@@ -36,12 +36,15 @@ struct InitializationNormalizer;
 
 // Implementation of Step 0: normalize the initialization of local variables.
 impl InitializationNormalizer {
-
-    fn normalize_non_uniform_inits_in_block(module: &Module, block: &BasicBlock) {
+    fn normalize_non_uniform_inits_in_block(
+        module: &Module,
+        block: &BasicBlock,
+        uniform_analysis: &mut UniformValueAnalysis,
+    ) {
         for node in block.iter() {
             match node.get().instruction.as_ref() {
                 Instruction::Local { init } => {
-                    if !is_uniform_value(init) {
+                    if !uniform_analysis.detect(init.clone()) {
                         let mut builder = IrBuilder::new(module.pools.clone());
                         // insert a zero initializer before the local variable
                         builder.set_insert_point(node.get().prev);
@@ -55,7 +58,7 @@ impl InitializationNormalizer {
                     }
                 }
                 Instruction::Loop { body, .. } => {
-                    Self::normalize_non_uniform_inits_in_block(module, body);
+                    Self::normalize_non_uniform_inits_in_block(module, body, uniform_analysis);
                 }
                 Instruction::GenericLoop {
                     prepare,
@@ -63,37 +66,57 @@ impl InitializationNormalizer {
                     update,
                     ..
                 } => {
-                    Self::normalize_non_uniform_inits_in_block(module, prepare);
-                    Self::normalize_non_uniform_inits_in_block(module, body);
-                    Self::normalize_non_uniform_inits_in_block(module, update);
+                    Self::normalize_non_uniform_inits_in_block(module, prepare, uniform_analysis);
+                    Self::normalize_non_uniform_inits_in_block(module, body, uniform_analysis);
+                    Self::normalize_non_uniform_inits_in_block(module, update, uniform_analysis);
                 }
                 Instruction::If {
                     true_branch,
                     false_branch,
                     ..
                 } => {
-                    Self::normalize_non_uniform_inits_in_block(module, true_branch);
-                    Self::normalize_non_uniform_inits_in_block(module, false_branch);
+                    Self::normalize_non_uniform_inits_in_block(
+                        module,
+                        true_branch,
+                        uniform_analysis,
+                    );
+                    Self::normalize_non_uniform_inits_in_block(
+                        module,
+                        false_branch,
+                        uniform_analysis,
+                    );
                 }
                 Instruction::Switch { cases, default, .. } => {
                     for case in cases.iter() {
-                        Self::normalize_non_uniform_inits_in_block(module, &case.block);
+                        Self::normalize_non_uniform_inits_in_block(
+                            module,
+                            &case.block,
+                            uniform_analysis,
+                        );
                     }
-                    Self::normalize_non_uniform_inits_in_block(module, default);
+                    Self::normalize_non_uniform_inits_in_block(module, default, uniform_analysis);
                 }
                 Instruction::AdScope { body, .. } => {
-                    Self::normalize_non_uniform_inits_in_block(module, body);
+                    Self::normalize_non_uniform_inits_in_block(module, body, uniform_analysis);
                 }
                 Instruction::RayQuery {
                     on_triangle_hit,
                     on_procedural_hit,
                     ..
                 } => {
-                    Self::normalize_non_uniform_inits_in_block(module, on_triangle_hit);
-                    Self::normalize_non_uniform_inits_in_block(module, on_procedural_hit);
+                    Self::normalize_non_uniform_inits_in_block(
+                        module,
+                        on_triangle_hit,
+                        uniform_analysis,
+                    );
+                    Self::normalize_non_uniform_inits_in_block(
+                        module,
+                        on_procedural_hit,
+                        uniform_analysis,
+                    );
                 }
                 Instruction::AdDetach(body) => {
-                    Self::normalize_non_uniform_inits_in_block(module, body);
+                    Self::normalize_non_uniform_inits_in_block(module, body, uniform_analysis);
                 }
                 _ => {}
             }
@@ -170,7 +193,8 @@ impl InitializationNormalizer {
     }
 
     fn normalize(module: &Module) {
-        Self::normalize_non_uniform_inits_in_block(module, &module.entry);
+        let mut uniform_analysis = UniformValueAnalysis::new(false);
+        Self::normalize_non_uniform_inits_in_block(module, &module.entry, &mut uniform_analysis);
         let mut uniform_inits = Vec::new();
         Self::collect_const_inits_in_block(&module.entry, &mut uniform_inits);
         // uniquify the initializers
@@ -267,8 +291,10 @@ impl VariablePropagator {
     ) {
         macro_rules! check_not_local {
             ($node: expr) => {
-                assert!(!($node.valid() && $node.is_local()),
-                        "local variable not loaded");
+                assert!(
+                    !($node.valid() && $node.is_local()),
+                    "local variable not loaded"
+                );
             };
         }
         match node.get().instruction.as_ref() {

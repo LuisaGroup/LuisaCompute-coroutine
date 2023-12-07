@@ -2,19 +2,18 @@
 
 // Const/Argument(by_value=true)/
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fmt::Debug;
-use crate::analysis::{
-    coro_graph::CoroGraph,
-    frame_token_manager::{FrameTokenManager},
-};
 use crate::analysis::coro_graph::{CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
-use crate::analysis::utility::{DISPLAY_IR_DEBUG, display_node_map, display_node_map2set, display_node_set, value_copiable};
+use crate::analysis::uniform_values::UniformValueAnalysis;
+use crate::analysis::utility::{
+    display_node_map, display_node_map2set, display_node_set, DISPLAY_IR_DEBUG,
+};
+use crate::analysis::{coro_graph::CoroGraph, frame_token_manager::FrameTokenManager};
 use crate::context::is_type_equal;
 use crate::display::DisplayIR;
 use crate::ir::{CallableModule, Func, Instruction, NodeRef, Type};
-
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Debug;
 
 // CoroFrame analysis
 
@@ -51,6 +50,8 @@ struct ActiveVar {
     used: HashMap<NodeRef, HashSet<i32>>,
     def_b: HashSet<NodeRef>,
     use_b: HashSet<NodeRef>,
+
+    uniform_analysis: UniformValueAnalysis,
 }
 
 impl Debug for ActiveVar {
@@ -86,6 +87,8 @@ impl ActiveVar {
             used: HashMap::new(),
             def_b: HashSet::new(),
             use_b: HashSet::new(),
+
+            uniform_analysis: UniformValueAnalysis::new(true),
         }
     }
 
@@ -93,7 +96,7 @@ impl ActiveVar {
         // let token = self.token; // for DEBUG
         let defined_index = *self.defined_count.get(&node).unwrap_or(&-1);
         self.used.entry(node).or_default().insert(defined_index);
-        if defined_index < 0 && !value_copiable(&node) {
+        if defined_index < 0 && !self.uniform_analysis.detect(node) {
             self.use_b.insert(node);
         }
     }
@@ -102,9 +105,20 @@ impl ActiveVar {
         let defined_index = self.defined_count.entry(node).or_insert(-1);
         *defined_index += 1;
         let def_index = *defined_index;
-        self.var_scopes.last_mut().unwrap().defined.entry(node).or_default().insert(def_index);
+        self.var_scopes
+            .last_mut()
+            .unwrap()
+            .defined
+            .entry(node)
+            .or_default()
+            .insert(def_index);
         self.defined.entry(node).or_default().insert(def_index);
-        if !self.used.get(&node).unwrap_or(&HashSet::new()).contains(&def_index) {
+        if !self
+            .used
+            .get(&node)
+            .unwrap_or(&HashSet::new())
+            .contains(&def_index)
+        {
             self.def_b.insert(node);
         }
     }
@@ -150,7 +164,6 @@ impl FrameBuilder {
     }
 }
 
-
 pub(crate) struct CoroFrameAnalyserImpl<'a> {
     coro_graph: &'a CoroGraph,
 
@@ -188,7 +201,13 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
         coro_scope_ref_vec.insert(self.entry_token, self.coro_graph.entry);
         for (&token, &coro_scope_ref) in coro_scope_ref_vec.iter() {
             let mut frame_builder = FrameBuilder::new(token, Some(&self.defined_default));
-            let scope = self.coro_graph.scopes.get(coro_scope_ref.0).unwrap().instructions.clone();
+            let scope = self
+                .coro_graph
+                .scopes
+                .get(coro_scope_ref.0)
+                .unwrap()
+                .instructions
+                .clone();
             frame_builder = self.visit_bb(frame_builder, &scope);
         }
     }
@@ -202,7 +221,11 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
         }
     }
 
-    fn visit_bb(&mut self, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {
+    fn visit_bb(
+        &mut self,
+        mut frame_builder: FrameBuilder,
+        bb: &Vec<CoroInstrRef>,
+    ) -> FrameBuilder {
         macro_rules! record_cond {
             ($cond: expr, $instr_str: expr) => {
                 let cond = self.coro_graph.instructions.get($cond.0).unwrap();
@@ -246,7 +269,6 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                             frame_builder.active_var.record_def(*var);
                         }
                         // end
-
                         Instruction::Phi(phi) => {
                             for phi in phi.as_ref() {
                                 frame_builder.active_var.record_use(phi.value);
@@ -269,7 +291,10 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                         }
 
                         Instruction::Return(_) => {
-                            unreachable!("Instruction {:?} should be lowered in CoroGraph", instruction);
+                            unreachable!(
+                                "Instruction {:?} should be lowered in CoroGraph",
+                                instruction
+                            );
                         }
                         Instruction::GenericLoop { .. }
                         | Instruction::Break
@@ -280,7 +305,10 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                         Instruction::Loop { .. }
                         | Instruction::If { .. }
                         | Instruction::Switch { .. } => {
-                            unreachable!("Instruction {:?} is not CoroInstruction::Simple", instruction);
+                            unreachable!(
+                                "Instruction {:?} is not CoroInstruction::Simple",
+                                instruction
+                            );
                         }
 
                         Instruction::UserData(_) => {}
@@ -291,20 +319,27 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                         Instruction::Comment(_) => {}
 
                         Instruction::CoroSplitMark { .. } => {
-                            unreachable!("Instruction {:?} is not CoroInstruction::Simple", instruction);
+                            unreachable!(
+                                "Instruction {:?} is not CoroInstruction::Simple",
+                                instruction
+                            );
                         }
-                        Instruction::CoroSuspend { .. }
-                        | Instruction::CoroResume { .. } => {
-                            unreachable!("Instruction {:?} unreachable in CoroFrame analysis", instruction);
+                        Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
+                            unreachable!(
+                                "Instruction {:?} unreachable in CoroFrame analysis",
+                                instruction
+                            );
                         }
                         Instruction::CoroRegister { .. } => {
                             todo!()
                         }
                     }
                 }
-                CoroInstruction::Entry
-                | CoroInstruction::EntryScope { .. } => {
-                    unreachable!("Instruction {:?} unreachable in CoroFrame analysis", instruction);
+                CoroInstruction::Entry | CoroInstruction::EntryScope { .. } => {
+                    unreachable!(
+                        "Instruction {:?} unreachable in CoroFrame analysis",
+                        instruction
+                    );
                 }
 
                 CoroInstruction::ConditionStackReplay { .. } => {}
@@ -312,10 +347,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                 CoroInstruction::SkipIfFirstFlag { .. } => {}
                 CoroInstruction::ClearFirstFlag(_) => {}
 
-                CoroInstruction::Loop {
-                    body,
-                    cond
-                } => {
+                CoroInstruction::Loop { body, cond } => {
                     record_cond!(cond, "Loop");
                     frame_builder = self.visit_bb(frame_builder, body);
                     frame_builder = self.visit_bb(frame_builder, body); // twice
@@ -323,7 +355,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                 CoroInstruction::If {
                     cond,
                     true_branch,
-                    false_branch
+                    false_branch,
                 } => {
                     record_cond!(cond, "If");
                     frame_builder = self.visit_bb(frame_builder, true_branch);
@@ -332,7 +364,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                 CoroInstruction::Switch {
                     cond,
                     cases,
-                    default
+                    default,
                 } => {
                     record_cond!(cond, "Switch");
                     for case in cases.iter() {
@@ -345,8 +377,14 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                     frame_builder.active_var.token_next = *token_next;
                     assert_eq!(token, frame_builder.active_var.token);
                     let index = self.active_vars.len();
-                    self.active_var_by_token.entry(token).or_default().insert(index);
-                    self.active_var_by_token_next.entry(*token_next).or_default().insert(index);
+                    self.active_var_by_token
+                        .entry(token)
+                        .or_default()
+                        .insert(index);
+                    self.active_var_by_token_next
+                        .entry(*token_next)
+                        .or_default()
+                        .insert(index);
                     self.active_vars.push(frame_builder.active_var.clone());
                 }
                 CoroInstruction::Terminate => {}
@@ -361,13 +399,13 @@ pub(crate) struct CoroFrameAnalyser;
 
 impl<'a> CoroFrameAnalyser {
     pub(crate) fn analyse(coro_graph: &'a CoroGraph, callable: &CallableModule) {
-        let callable_string = unsafe { DISPLAY_IR_DEBUG.get().display_ir_callable(callable) };    // for DEBUG
-        println!("Before:\n{}", callable_string);    // for DEBUG
+        let callable_string = unsafe { DISPLAY_IR_DEBUG.get().display_ir_callable(callable) }; // for DEBUG
+        println!("Before:\n{}", callable_string); // for DEBUG
 
         let mut impl_ = CoroFrameAnalyserImpl::new(coro_graph);
         impl_.register_args_captures(callable);
         impl_.analyse();
-        println!("impl_.active_vars: {:#?}", impl_.active_vars);    // for DEBUG
-        // todo!()
+        println!("impl_.active_vars: {:#?}", impl_.active_vars); // for DEBUG
+                                                                 // todo!()
     }
 }

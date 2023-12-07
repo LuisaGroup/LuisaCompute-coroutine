@@ -10,7 +10,7 @@
 //    and move the it to right behind the original `Load` instruction.
 // 3. Re-scan the module and remove all `Load` instructions whose value is not used.
 
-use crate::analysis::utility::is_uniform_value;
+use crate::analysis::uniform_values::UniformValueAnalysis;
 use crate::ir::{BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
 use crate::transform::Transform;
 use std::collections::{HashMap, HashSet};
@@ -25,7 +25,10 @@ struct AggregateLoadExtract {
 }
 
 impl DeferLoadImpl {
-    fn get_extract_root_aggregate(node: NodeRef) -> Option<NodeRef> {
+    fn get_extract_root_aggregate(
+        node: NodeRef,
+        uniform_analysis: &mut UniformValueAnalysis,
+    ) -> Option<NodeRef> {
         if let Instruction::Call(func, args) = node.get().instruction.as_ref() {
             match func {
                 Func::Load => {
@@ -36,8 +39,12 @@ impl DeferLoadImpl {
                     }
                 }
                 Func::ExtractElement => {
-                    if args.iter().skip(1).all(|arg| is_uniform_value(arg)) {
-                        Self::get_extract_root_aggregate(args[0])
+                    if args
+                        .iter()
+                        .skip(1)
+                        .all(|arg| uniform_analysis.detect(arg.clone()))
+                    {
+                        Self::get_extract_root_aggregate(args[0], uniform_analysis)
                     } else {
                         None
                     }
@@ -63,8 +70,12 @@ impl DeferLoadImpl {
         }
     }
 
-    fn include_if_aggregate_load_extract(node: NodeRef, result: &mut AggregateLoadExtract) {
-        if let Some(root) = Self::get_extract_root_aggregate(node) {
+    fn include_if_aggregate_load_extract(
+        node: NodeRef,
+        result: &mut AggregateLoadExtract,
+        uniform_analysis: &mut UniformValueAnalysis,
+    ) {
+        if let Some(root) = Self::get_extract_root_aggregate(node, uniform_analysis) {
             result.map.entry(root).or_insert_with(Vec::new).push(node);
             let mut indices = Vec::new();
             Self::construct_gep_chain_indices(node, &mut indices);
@@ -72,15 +83,21 @@ impl DeferLoadImpl {
         }
     }
 
-    fn glob_aggregate_load_extract_in_block(bb: &BasicBlock, result: &mut AggregateLoadExtract) {
+    fn glob_aggregate_load_extract_in_block(
+        bb: &BasicBlock,
+        result: &mut AggregateLoadExtract,
+        uniform_analysis: &mut UniformValueAnalysis,
+    ) {
         for node in bb.iter() {
             match node.get().instruction.as_ref() {
                 Instruction::Call(func, args) => match func {
-                    Func::ExtractElement => Self::include_if_aggregate_load_extract(node, result),
+                    Func::ExtractElement => {
+                        Self::include_if_aggregate_load_extract(node, result, uniform_analysis)
+                    }
                     _ => {}
                 },
                 Instruction::Loop { body, .. } => {
-                    Self::glob_aggregate_load_extract_in_block(body, result);
+                    Self::glob_aggregate_load_extract_in_block(body, result, uniform_analysis);
                 }
                 Instruction::GenericLoop {
                     prepare,
@@ -88,37 +105,57 @@ impl DeferLoadImpl {
                     update,
                     ..
                 } => {
-                    Self::glob_aggregate_load_extract_in_block(prepare, result);
-                    Self::glob_aggregate_load_extract_in_block(body, result);
-                    Self::glob_aggregate_load_extract_in_block(update, result);
+                    Self::glob_aggregate_load_extract_in_block(prepare, result, uniform_analysis);
+                    Self::glob_aggregate_load_extract_in_block(body, result, uniform_analysis);
+                    Self::glob_aggregate_load_extract_in_block(update, result, uniform_analysis);
                 }
                 Instruction::If {
                     true_branch,
                     false_branch,
                     ..
                 } => {
-                    Self::glob_aggregate_load_extract_in_block(true_branch, result);
-                    Self::glob_aggregate_load_extract_in_block(false_branch, result);
+                    Self::glob_aggregate_load_extract_in_block(
+                        true_branch,
+                        result,
+                        uniform_analysis,
+                    );
+                    Self::glob_aggregate_load_extract_in_block(
+                        false_branch,
+                        result,
+                        uniform_analysis,
+                    );
                 }
                 Instruction::Switch { cases, default, .. } => {
                     for case in cases.iter() {
-                        Self::glob_aggregate_load_extract_in_block(&case.block, result);
+                        Self::glob_aggregate_load_extract_in_block(
+                            &case.block,
+                            result,
+                            uniform_analysis,
+                        );
                     }
-                    Self::glob_aggregate_load_extract_in_block(default, result);
+                    Self::glob_aggregate_load_extract_in_block(default, result, uniform_analysis);
                 }
                 Instruction::AdScope { body, .. } => {
-                    Self::glob_aggregate_load_extract_in_block(body, result);
+                    Self::glob_aggregate_load_extract_in_block(body, result, uniform_analysis);
                 }
                 Instruction::RayQuery {
                     on_triangle_hit,
                     on_procedural_hit,
                     ..
                 } => {
-                    Self::glob_aggregate_load_extract_in_block(on_triangle_hit, result);
-                    Self::glob_aggregate_load_extract_in_block(on_procedural_hit, result);
+                    Self::glob_aggregate_load_extract_in_block(
+                        on_triangle_hit,
+                        result,
+                        uniform_analysis,
+                    );
+                    Self::glob_aggregate_load_extract_in_block(
+                        on_procedural_hit,
+                        result,
+                        uniform_analysis,
+                    );
                 }
                 Instruction::AdDetach(body) => {
-                    Self::glob_aggregate_load_extract_in_block(body, result);
+                    Self::glob_aggregate_load_extract_in_block(body, result, uniform_analysis);
                 }
                 _ => {}
             }
@@ -130,7 +167,12 @@ impl DeferLoadImpl {
             map: HashMap::new(),
             indices: HashMap::new(),
         };
-        Self::glob_aggregate_load_extract_in_block(&module.entry, &mut result);
+        let mut uniform_analysis = UniformValueAnalysis::new(false);
+        Self::glob_aggregate_load_extract_in_block(
+            &module.entry,
+            &mut result,
+            &mut uniform_analysis,
+        );
         result
     }
 

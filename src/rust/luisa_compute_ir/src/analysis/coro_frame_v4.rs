@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
+use std::ops::Index;
 use std::process::exit;
 use crate::analysis::{
     coro_graph::CoroGraph,
@@ -221,6 +222,121 @@ impl Continuation {
     }
 }
 
+// Graph coloring algorithm for frame slot allocation
+struct GraphColoring {
+    // value node in IR
+    vertices: HashSet<NodeRef>,
+    // relationship of transferred together in CoroFrame
+    edges: HashMap<NodeRef, HashSet<NodeRef>>,
+    // record color counter of the same type
+    color_of_type: HashMap<CArc<Type>, HashSet<usize>>,
+    // color counter from 0
+    color_counter: usize,
+    // record color of each node
+    color_of_node: HashMap<NodeRef, usize>,
+}
+
+impl GraphColoring {
+    fn new() -> Self {
+        Self {
+            vertices: HashSet::new(),
+            edges: HashMap::new(),
+            color_of_type: HashMap::new(),
+            color_counter: 0,
+            color_of_node: HashMap::new(),
+        }
+    }
+
+    fn add_edge(&mut self, from: NodeRef, to: NodeRef) {
+        self.edges.entry(from).or_default().insert(to);
+        self.edges.entry(to).or_default().insert(from);
+    }
+    fn add_vertex(&mut self, node: NodeRef) {
+        self.vertices.insert(node);
+    }
+    fn greedy_coloring(&mut self) {
+        // map NodeRef to its order in DisplayIR for stability
+        // Make sure you have used DISPLAY_IR_DEBUG to display the whole module!
+        let vertices: Vec<_> = self.vertices.iter().map(|node| {
+            let node_number = unsafe { DISPLAY_IR_DEBUG.get().get(node) };
+            (*node, node_number)
+        }).collect();
+        let mut vertices_number = BTreeSet::new();
+        let mut vertice_number_to_node = BTreeMap::new();
+        for (node, node_number) in vertices.iter() {
+            vertices_number.insert(*node_number);
+            vertice_number_to_node.insert(*node_number, *node);
+        }
+
+        // assign color to the first node
+        let vertice_first = *vertices_number.first().unwrap();
+        vertices_number.remove(&vertice_first);
+        let vertice_first = vertice_number_to_node.get(&vertice_first).unwrap();
+        let color_first = self.new_color();
+        self.assign_color(*vertice_first, color_first);
+
+        // assign color to remaining nodes greedily
+        for vertice in vertices_number {
+            let vertice = vertice_number_to_node.get(&vertice).unwrap();
+            let mut color_used = HashSet::new();
+            let edges = self.edges.entry(*vertice).or_default();
+            for other in edges.iter() {
+                if let Some(color_other) = self.color_of_node.get(other) {
+                    color_used.insert(*color_other);
+                }
+            }
+            let type_ = vertice.type_();
+            let color_of_type = self.color_of_type.entry(type_.clone()).or_default().clone();
+            let color_unused: Vec<_> = color_of_type.difference(&color_used).cloned().collect();
+            let color_unused = BTreeSet::from_iter(color_unused);
+            let color = if let Some(color) = color_unused.first() {
+                *color
+            } else {
+                self.new_color()
+            };
+            self.assign_color(*vertice, color);
+        }
+
+        // map color counter to the index of frame slots
+        let mut type2index = HashMap::new();
+        let mut index: usize = 2;
+        for (type_, colors) in self.color_of_type.iter_mut() {
+            type2index.insert(type_.clone(), index);
+            let index_next = index + colors.len();
+            colors.clear();
+            for i in index..index_next {
+                colors.insert(i);
+            }
+            index = index_next;
+        }
+        let mut mapped = HashMap::new();
+        for (node, color) in self.color_of_node.iter_mut() {
+            if let Some(color_mapped) = mapped.get(color) {
+                *color = *color_mapped;
+            } else {
+                let type_ = node.type_();
+                let index = type2index.get_mut(&type_).unwrap();
+                mapped.insert(*color, *index);
+                *color = *index;
+                *index += 1;
+            }
+        }
+        // // DEBUG
+        // println!("type2index = {:#?}", type2index);
+        // println!("mapped = {:#?}", mapped);
+    }
+    fn new_color(&mut self) -> usize {
+        let color = self.color_counter;
+        self.color_counter += 1;
+        color
+    }
+    fn assign_color(&mut self, node: NodeRef, color: usize) {
+        let type_ = node.type_();
+        self.color_of_type.entry(type_.clone()).or_default().insert(color);
+        self.color_of_node.insert(node, color);
+    }
+}
+
 pub(crate) struct CoroFrameAnalyserImpl<'a> {
     coro_graph: &'a CoroGraph,
 
@@ -236,6 +352,8 @@ pub(crate) struct CoroFrameAnalyserImpl<'a> {
     coro_frame: CoroFrame,
     frame_type: CArc<Type>,
     frame_fields: Vec<CArc<Type>>,
+    node2frame_slot: HashMap<NodeRef, usize>,
+
     replayable_value_analysis: ReplayableValueAnalysis,
 }
 
@@ -258,6 +376,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
             coro_frame: CoroFrame::default(),
             frame_type: CArc::null(),
             frame_fields: vec![],
+            node2frame_slot: HashMap::new(),
             replayable_value_analysis: ReplayableValueAnalysis::new(false),
         }
     }
@@ -277,8 +396,13 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                 assert_eq!(frame_builder.active_var.token_next, INVALID_FRAME_TOKEN_MASK);
                 self.active_vars.push(frame_builder.active_var.clone());
                 self.active_var_by_token.entry(token).or_default().insert(index);
+                self.active_var_by_token_next.entry(frame_builder.active_var.token_next).or_default().insert(index);
             }
         }
+        let exit_index = self.active_vars.len();
+        self.active_vars.push(ActiveVar::new(INVALID_FRAME_TOKEN_MASK));
+        self.active_var_by_token.entry(INVALID_FRAME_TOKEN_MASK).or_default().insert(exit_index);
+        self.active_var_by_token_next.entry(INVALID_FRAME_TOKEN_MASK).or_default().insert(exit_index);
     }
 
     fn register_args_captures(&mut self, callable: &CallableModule) {
@@ -309,13 +433,12 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                     assert_eq!(*token, active_var.token);
                     let output = self.coro_frame.output.entry((*token, token_next)).or_default();
                     if output != input_next {
-                        changed = true;
                         output.clone_from(input_next);
                     }
                 }
 
                 // IN[B] = use[B] U (OUT[B] - def[B])
-                let mut input = self.coro_frame.input.entry(*token).or_default().clone();
+                let mut input = HashSet::new();
                 for index in self.active_var_by_token.get(token).unwrap() {
                     let active_var = self.active_vars.get(*index).unwrap();
                     let token_next = active_var.token_next;
@@ -324,7 +447,7 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
                     out_minus_def.retain(|node_ref| !active_var.def_b.contains(node_ref));
                     input.extend(out_minus_def);
                 }
-                if input != *self.coro_frame.input.get(token).unwrap() {
+                if input != *self.coro_frame.input.entry(*token).or_default() {
                     changed = true;
                     self.coro_frame.input.insert(*token, input);
                 }
@@ -337,34 +460,40 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
             element: VectorElementType::Scalar(Primitive::Uint32),
             length: 3,
         });
+        let coro_id_type = register_type(coro_id_type);
         let token_type = Type::Primitive(Primitive::Uint32);
-        let mut frame_fields: Vec<CArc<Type>> = vec![CArc::new(coro_id_type), CArc::new(token_type)];
+        let token_type = register_type(token_type);
+        let mut frame_fields: Vec<CArc<Type>> = vec![coro_id_type, token_type];
 
-        let mut fields_type: BTreeMap<Type, usize> = BTreeMap::new();
-        for token in token_vec.iter() {
-            let frame_vars: Vec<NodeRef> = self.coro_frame.input.get(token).unwrap()
-                .iter().map(ToOwned::to_owned).collect();
-            let mut fields_type_temp: BTreeMap<Type, usize> = BTreeMap::new();
-            for node_ref in frame_vars.iter() {
-                let type_ = node_ref.type_().as_ref();
-                let count = fields_type_temp.entry(type_.clone()).or_default();
-                 *count += 1;
+        // other fields
+        let mut graph_coloring = GraphColoring::new();
+        for (token, input) in self.coro_frame.input.iter() {
+            for i in input.iter() {
+                graph_coloring.add_vertex(*i);
             }
-            for (type_, count_temp) in fields_type_temp.iter() {
-                let count = fields_type.entry(type_.clone()).or_default();
-                *count = (*count).max(*count_temp);
+            for i in input.iter() {
+                for j in input.iter() {
+                    if i != j {
+                        graph_coloring.add_edge(*i, *j);
+                    }
+                }
             }
         }
+        graph_coloring.greedy_coloring();
 
-        let mut free_fields: HashMap<CArc<Type>, Vec<usize>> = HashMap::new();
-        let mut index_counter: usize = frame_fields.len();
-        for (type_, count) in fields_type.iter() {
+        // create frame type from fields
+        let mut disc2count = BTreeMap::new();
+        let mut disc2type = HashMap::new();
+        for (type_, index) in graph_coloring.color_of_type.iter() {
+            // TODO: sort strategy may be improved for type alignment & size
+            let disc = (type_.alignment(), format!("{:?}", type_.as_ref()));
+            disc2type.insert(disc.clone(), type_.clone());
+            disc2count.insert(disc, index.len());
+        }
+        for (disc, count) in disc2count.iter() {
+            let type_ = disc2type.get(disc).unwrap();
             for _ in 0..*count {
-                let index = index_counter;
-                index_counter += 1;
-                let type_ = CArc::new(type_.clone());
                 frame_fields.push(type_.clone());
-                free_fields.entry(type_).or_default().push(index);
             }
         }
 
@@ -382,7 +511,10 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
         }));
 
         // allocate frame slots
-        todo!()
+        self.node2frame_slot = graph_coloring.color_of_node.clone();
+
+        println!("node2frame_slot = {:#?}", self.node2frame_slot);
+        println!("frame_type = {:#?}", self.frame_type);
     }
 
     fn visit_bb(&mut self, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {

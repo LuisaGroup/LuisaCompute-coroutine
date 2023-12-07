@@ -188,18 +188,6 @@ pub enum Type {
     Opaque(CBoxedSlice<u8>),
 }
 
-impl Ord for Type {
-    fn cmp(&self, other: &Self) -> Ordering {
-        format!("{:?}", self).cmp(&format!("{:?}", other))
-    }
-}
-
-impl PartialOrd for Type {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(format!("{:?}", self).cmp(&format!("{:?}", other)))
-    }
-}
-
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

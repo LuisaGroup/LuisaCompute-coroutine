@@ -128,7 +128,7 @@ impl DisplayIR {
         }
     }
 
-    fn get(&self, node: &NodeRef) -> usize {
+    pub fn get(&self, node: &NodeRef) -> usize {
         if node.valid() {
             self.map
                 .get(&node.0)

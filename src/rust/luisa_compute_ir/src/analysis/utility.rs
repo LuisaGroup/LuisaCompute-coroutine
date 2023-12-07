@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::display::DisplayIR;
-use crate::ir::{Func, Instruction, NodeRef};
+use crate::ir::{NodeRef};
 
 // Singleton pattern for DisplayIR
 pub(crate) struct LazyDisplayIR {

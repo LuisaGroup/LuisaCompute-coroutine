@@ -1783,7 +1783,7 @@ impl NodeRef {
             _ => false,
         }
     }
-    pub fn is_refernece_argument(&self) -> bool {
+    pub fn is_referenece_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { by_value } => !*by_value,
             _ => false,

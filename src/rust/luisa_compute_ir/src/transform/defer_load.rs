@@ -167,7 +167,7 @@ impl DeferLoadImpl {
             map: HashMap::new(),
             indices: HashMap::new(),
         };
-        let mut uniform_analysis = ReplayableValueAnalysis::new(true);
+        let mut uniform_analysis = ReplayableValueAnalysis::new_with_module(true, module);
         Self::glob_aggregate_load_extract_in_block(
             &module.entry,
             &mut result,

@@ -1,10 +1,12 @@
-use crate::ir::{Func, Instruction, NodeRef};
+use crate::analysis::callable_arg_usages::{CallableArgumentUsageAnalysis, UsageTree};
+use crate::ir::{Func, Instruction, Module, NodeRef};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReplayableValueAnalysis {
     uniform_only: bool,
     known: HashMap<NodeRef, bool>,
+    args: HashMap<NodeRef, bool>,
 }
 
 impl ReplayableValueAnalysis {
@@ -14,7 +16,9 @@ impl ReplayableValueAnalysis {
         }
         let result = match node.get().instruction.as_ref() {
             Instruction::Uniform => true,
-            Instruction::Argument { by_value } => *by_value, // TODO: incorporate ArgumentUsageAnalysis?
+            Instruction::Argument { by_value } => {
+                *by_value || self.args.get(&node).unwrap_or(by_value).clone()
+            }
             Instruction::Const(_) => true,
             Instruction::Call(func, args) => match func {
                 Func::ZeroInitializer
@@ -148,7 +152,25 @@ impl ReplayableValueAnalysis {
         Self {
             uniform_only: uniform_only,
             known: HashMap::new(),
+            args: HashMap::new(),
         }
+    }
+
+    pub fn new_with_module(uniform_only: bool, module: &Module) -> Self {
+        let mut arg_analysis = CallableArgumentUsageAnalysis::new();
+        let usage_tree = arg_analysis.analyze_module(module);
+        let mut this = Self::new(uniform_only);
+        for (node, _) in usage_tree.read_map {
+            if !usage_tree.write_map.contains_key(&node) {
+                match node.get().instruction.as_ref() {
+                    Instruction::Argument { .. } => {
+                        this.args.insert(node, true);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        this
     }
 
     pub fn detect(&mut self, node: NodeRef) -> bool {

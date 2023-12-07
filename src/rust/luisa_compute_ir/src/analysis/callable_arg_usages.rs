@@ -1,9 +1,9 @@
-use crate::ir::{BasicBlock, CallableModule, Func, Instruction, NodeRef, Usage};
+use crate::ir::{BasicBlock, CallableModule, Func, Instruction, Module, NodeRef, Usage};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct UsageTreeNodeRef(pub usize);
+pub(crate) struct UsageTreeNodeRef(pub usize);
 
 impl UsageTreeNodeRef {
     fn invalid() -> Self {
@@ -16,15 +16,15 @@ impl UsageTreeNodeRef {
 }
 
 #[derive(Debug, Clone)]
-struct UsageTreeNode {
-    children: HashMap<usize, UsageTreeNodeRef>, // For aggregate types, records the usage of each field for precise usage tracking.
+pub(crate) struct UsageTreeNode {
+    pub children: HashMap<usize, UsageTreeNodeRef>, // For aggregate types, records the usage of each field for precise usage tracking.
 }
 
 #[derive(Debug, Clone)]
-struct UsageTree {
-    read_map: HashMap<NodeRef, UsageTreeNodeRef>,
-    write_map: HashMap<NodeRef, UsageTreeNodeRef>,
-    nodes: Vec<UsageTreeNode>,
+pub(crate) struct UsageTree {
+    pub read_map: HashMap<NodeRef, UsageTreeNodeRef>,
+    pub write_map: HashMap<NodeRef, UsageTreeNodeRef>,
+    pub nodes: Vec<UsageTreeNode>,
 }
 
 impl UsageTree {
@@ -430,14 +430,20 @@ impl CallableArgumentUsageAnalysis {
         }
     }
 
+    // replayable values analysis needs to know the usage of each argument
+    pub(crate) fn analyze_module(&mut self, module: &Module) -> UsageTree {
+        let mut tree = UsageTree {
+            read_map: HashMap::new(),
+            write_map: HashMap::new(),
+            nodes: Vec::new(),
+        };
+        self.analyze_block(module.entry.as_ref(), &mut tree);
+        tree
+    }
+
     fn analyze_callable(&mut self, callable: &CallableModule) -> Rc<ArgumentUsages> {
         if !self.analyzed.contains_key(&callable.module.entry.as_ptr()) {
-            let mut tree = UsageTree {
-                read_map: HashMap::new(),
-                write_map: HashMap::new(),
-                nodes: Vec::new(),
-            };
-            self.analyze_block(callable.module.entry.as_ref(), &mut tree);
+            let mut tree = self.analyze_module(&callable.module);
             for arg in callable.args.iter() {
                 match arg.get().instruction.as_ref() {
                     Instruction::Argument { by_value } => {

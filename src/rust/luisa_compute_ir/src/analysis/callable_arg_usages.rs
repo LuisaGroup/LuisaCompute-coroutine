@@ -446,7 +446,18 @@ impl CallableArgumentUsageAnalysis {
             analyzed: HashMap::new(),
         }
     }
+
     pub fn analyze(&mut self, module: &CallableModule) -> Rc<ArgumentUsages> {
         self.analyze_callable(module)
+    }
+
+    pub fn get_usage(
+        &mut self,
+        module: &CallableModule,
+        arg_index: usize,
+        access_chain: &[usize],
+    ) -> Usage {
+        let usages = self.analyze(module);
+        usages.usage(arg_index, access_chain)
     }
 }

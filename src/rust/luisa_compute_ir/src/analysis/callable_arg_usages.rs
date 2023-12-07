@@ -156,6 +156,19 @@ impl CallableArgumentUsageAnalysis {
     }
 
     fn mark_access_chain_usage(tree: &mut UsageTree, root: NodeRef, chain: &[usize], usage: Usage) {
+        let usage = match root.get().instruction.as_ref() {
+            Instruction::Argument { by_value } => {
+                if *by_value {
+                    match usage {
+                        Usage::READ | Usage::READ_WRITE => Usage::READ,
+                        Usage::WRITE | Usage::NONE => Usage::NONE,
+                    }
+                } else {
+                    usage
+                }
+            }
+            _ => usage,
+        };
         match root.get().instruction.as_ref() {
             Instruction::Buffer
             | Instruction::Bindless
@@ -425,6 +438,17 @@ impl CallableArgumentUsageAnalysis {
                 nodes: Vec::new(),
             };
             self.analyze_block(callable.module.entry.as_ref(), &mut tree);
+            for arg in callable.args.iter() {
+                match arg.get().instruction.as_ref() {
+                    Instruction::Argument { by_value } => {
+                        if *by_value {
+                            // by-value argument is always read
+                            tree.write_map.remove(arg);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             let usages = ArgumentUsages {
                 tree,
                 args: callable.args.to_vec(),

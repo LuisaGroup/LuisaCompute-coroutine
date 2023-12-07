@@ -161,13 +161,19 @@ impl ReplayableValueAnalysis {
         let usage_tree = arg_analysis.analyze_module(module);
         let mut this = Self::new(uniform_only);
         for (node, _) in usage_tree.read_map {
-            if !usage_tree.write_map.contains_key(&node) {
-                match node.get().instruction.as_ref() {
-                    Instruction::Argument { .. } => {
-                        this.args.insert(node, true);
-                    }
-                    _ => {}
+            match node.get().instruction.as_ref() {
+                Instruction::Argument { .. } => {
+                    this.args.insert(node, true);
                 }
+                _ => {}
+            }
+        }
+        for (node, _) in usage_tree.write_map {
+            match node.get().instruction.as_ref() {
+                Instruction::Argument { by_value } => {
+                    this.args.insert(node, *by_value);
+                }
+                _ => {}
             }
         }
         this

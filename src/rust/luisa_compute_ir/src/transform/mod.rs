@@ -17,6 +17,7 @@ pub mod extract_loop_cond;
 
 pub mod demote_locals;
 
+pub mod defer_load;
 pub mod inliner;
 pub mod split_coro;
 
@@ -132,6 +133,10 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
         }
         "split_coro" => {
             let transform = split_coro::SplitCoro;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "defer_load" => {
+            let transform = defer_load::DeferLoad;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),

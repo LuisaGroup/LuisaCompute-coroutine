@@ -601,14 +601,15 @@ public:
             transform_ir_kernel_module_auto(shader->get());
         }
         // for debugging
-        // Clock clk;
-        // auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
-        // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "canonicalize_control_flow");
-        // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "demote_locals");
+        Clock clk;
+        auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
+        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "canonicalize_control_flow");
+        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "demote_locals");
+        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "defer_load");
         // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "split_coro");
-        // shader->get()->module = ir::luisa_compute_ir_transform_pipeline_transform_module(ppl, shader->get()->module);
-        // ir::luisa_compute_ir_transform_pipeline_destroy(ppl);
-        // LUISA_INFO("Demote locals transform took {} ms.", clk.toc());
+        shader->get()->module = ir::luisa_compute_ir_transform_pipeline_transform_module(ppl, shader->get()->module);
+        ir::luisa_compute_ir_transform_pipeline_destroy(ppl);
+        LUISA_INFO("IR transform took {} ms.", clk.toc());
         return create_shader(option, shader->get());
     }
 
@@ -756,6 +757,12 @@ public:
             LUISA_WARNING_WITH_LOCATION("Unsupported device extension: {}.", name);
             return nullptr;
         }
+    }
+    luisa::string query(luisa::string_view property) noexcept override {
+        const auto ptr = (device.query)(device.device, property.data());
+        luisa::string result(ptr);
+        (lib.free_string)(ptr);
+        return result;
     }
 };
 

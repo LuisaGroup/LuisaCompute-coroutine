@@ -2,50 +2,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::display::DisplayIR;
 use crate::ir::{Func, Instruction, NodeRef};
 
-// check if the node is uniform (can be move to anywhere in the module before it is used)
-pub(crate) fn is_uniform_value(node: &NodeRef) -> bool {
-    match node.get().instruction.as_ref() {
-        Instruction::Uniform => true,
-        Instruction::Argument { by_value } => *by_value,
-        Instruction::Const(_) => true,
-        Instruction::Call(func, _) => match func {
-            Func::ZeroInitializer
-            | Func::DispatchId
-            | Func::ThreadId
-            | Func::BlockId
-            | Func::WarpLaneId
-            | Func::DispatchSize
-            | Func::WarpSize
-            | Func::CoroId => true,
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-// check if the node's value source is copiable
-pub(crate) fn value_copiable(node: &NodeRef) -> bool {
-    match node.get().instruction.as_ref() {
-        Instruction::Uniform => true,
-        Instruction::Argument { by_value } => *by_value,
-        Instruction::Const(_) => true,
-        Instruction::Call(func, _) => match func {
-            Func::ZeroInitializer
-            | Func::DispatchId
-            | Func::ThreadId
-            | Func::BlockId
-            | Func::WarpLaneId
-            | Func::DispatchSize
-            | Func::WarpSize
-            | Func::CoroId
-            | Func::CoroToken => true,
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-
 // Singleton pattern for DisplayIR
 pub(crate) struct LazyDisplayIR {
     inner: Option<DisplayIR>,

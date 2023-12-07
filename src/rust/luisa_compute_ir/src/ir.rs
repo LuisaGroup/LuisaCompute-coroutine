@@ -568,6 +568,13 @@ impl Type {
             _ => false,
         }
     }
+
+    pub fn is_aggregate(&self) -> bool {
+        match self {
+            Type::Struct(_) | Type::Array(_) | Type::Vector(_) | Type::Matrix(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

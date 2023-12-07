@@ -142,9 +142,6 @@ impl CallableArgumentUsageAnalysis {
                     let mut chain = Vec::new();
                     if let Some(root) = Self::probe_access_chain(tree, args[0], &mut chain) {
                         chain.extend(args.iter().skip(1).cloned());
-                        for node in chain.iter() {
-                            Self::mark_usage(tree, node.clone(), Usage::READ);
-                        }
                         let chain = Self::evaluate_constant_indices(&chain);
                         Self::mark_access_chain_usage(tree, root, &chain, usage);
                     }
@@ -345,6 +342,9 @@ impl CallableArgumentUsageAnalysis {
                     }
                     Func::GetElementPtr | Func::ExtractElement | Func::Load => {
                         /* analysis will be deferred until users are analyzed */
+                        for node in args.iter().skip(1) {
+                            Self::mark_usage(tree, node.clone(), Usage::READ);
+                        }
                     }
                     Func::Callable(callable_ref) => {
                         let usages = self.analyze_callable(callable_ref.0.as_ref());

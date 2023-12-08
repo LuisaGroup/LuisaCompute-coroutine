@@ -44,7 +44,7 @@ pub struct ArgumentUsages {
 }
 
 impl ArgumentUsages {
-    pub fn usage(&self, arg_index: usize, access_chain: &[usize]) -> Usage {
+    pub fn any_possible_usage(&self, arg_index: usize, access_chain: &[usize]) -> Usage {
         let has_usage = |map: &HashMap<NodeRef, UsageTreeNodeRef>| -> bool {
             if let Some(node) = self.args.get(arg_index).and_then(|i| map.get(i)) {
                 let mut node_ref = node;
@@ -260,7 +260,7 @@ impl CallableArgumentUsageAnalysis {
                 let mut constant_chain = Self::evaluate_constant_indices(&chain);
                 if chain.is_empty() || constant_chain.len() < chain.len() {
                     // dynamic indices in the chain, be conservative and mark the known chain
-                    let callee_usage = callee_usages.usage(i, &[]);
+                    let callee_usage = callee_usages.any_possible_usage(i, &[]);
                     Self::mark_access_chain_usage(tree, caller_root, &constant_chain, callee_usage);
                 } else {
                     // we may do it precisely
@@ -481,13 +481,13 @@ impl CallableArgumentUsageAnalysis {
         self.analyze_callable(module)
     }
 
-    pub fn get_usage(
+    pub fn get_possible_usage(
         &mut self,
         module: &CallableModule,
         arg_index: usize,
         access_chain: &[usize],
     ) -> Usage {
         let usages = self.analyze(module);
-        usages.usage(arg_index, access_chain)
+        usages.any_possible_usage(arg_index, access_chain)
     }
 }

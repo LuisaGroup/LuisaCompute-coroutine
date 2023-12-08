@@ -1,6 +1,7 @@
 pub mod usage_detect;
 // pub mod coro_frame;
 pub mod callable_arg_usages;
+pub mod coro_def_use;
 pub mod coro_frame_v3;
 pub mod coro_frame_v4;
 pub mod coro_graph;

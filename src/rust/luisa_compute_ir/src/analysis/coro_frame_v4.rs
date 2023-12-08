@@ -321,9 +321,6 @@ impl GraphColoring {
                 *index += 1;
             }
         }
-        // // DEBUG
-        // println!("type2index = {:#?}", type2index);
-        // println!("mapped = {:#?}", mapped);
     }
     fn new_color(&mut self) -> usize {
         let color = self.color_counter;
@@ -512,9 +509,6 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
 
         // allocate frame slots
         self.node2frame_slot = graph_coloring.color_of_node.clone();
-
-        println!("node2frame_slot = {:#?}", self.node2frame_slot);
-        println!("frame_type = {:#?}", self.frame_type);
     }
 
     fn visit_bb(&mut self, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {
@@ -707,8 +701,12 @@ impl<'a> CoroFrameAnalyser {
         impl_.register_args_captures(callable);
         impl_.analyse();
         impl_.calculate_frame();
-        println!("CoroFrame Analysis");                             // for DEBUG
-        println!("Active Vars: {:#?}", impl_.active_vars);     // for DEBUG
+
+        // for DEBUG
+        println!("CoroFrame Analysis");
+        println!("node2frame_slot = {:#?}", impl_.node2frame_slot);
+        println!("frame_type = {:#?}", impl_.frame_type);
+        println!("Active Vars: {:#?}", impl_.active_vars);
         println!("CoroFrame: {:#?}", impl_.coro_frame);
         // todo!()
     }

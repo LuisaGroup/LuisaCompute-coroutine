@@ -1,4 +1,4 @@
-use crate::analysis::coro_frame_v4::CoroFrameAnalyser;
+use crate::analysis::coro_frame_v4::CoroFrameAnalysis;
 // use crate::analysis::coro_graph::CoroPreliminaryGraph;
 use crate::analysis::coro_graph::CoroGraph;
 use crate::ir::{CallableModule, Module};
@@ -11,7 +11,7 @@ impl Transform for SplitCoro {
         println!("SplitCoro::transform_module");
         let graph = CoroGraph::from(&callable.module);
         graph.dump();
-        CoroFrameAnalyser::analyse(&graph, &callable);
+        CoroFrameAnalysis::analyse(&graph, &callable);
         todo!()
     }
 }

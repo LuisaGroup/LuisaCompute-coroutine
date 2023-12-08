@@ -155,10 +155,9 @@ impl FrameBuilder {
 }
 
 #[derive(Default, Clone)]
-struct CoroFrame {
-    input: BTreeMap<u32, HashSet<NodeRef>>,
-    output: BTreeMap<(u32, u32), HashSet<NodeRef>>,
-    index: BTreeMap<u32, HashMap<NodeRef, usize>>,
+pub(crate) struct CoroFrame {
+    pub(crate) input: BTreeMap<u32, HashSet<NodeRef>>,
+    pub(crate) output: BTreeMap<(u32, u32), HashSet<NodeRef>>,
 }
 
 impl Debug for CoroFrame {
@@ -334,7 +333,7 @@ impl GraphColoring {
     }
 }
 
-pub(crate) struct CoroFrameAnalyserImpl<'a> {
+pub(crate) struct CoroFrameAnalyser<'a> {
     coro_graph: &'a CoroGraph,
 
     pub(crate) entry_token: u32,
@@ -354,8 +353,8 @@ pub(crate) struct CoroFrameAnalyserImpl<'a> {
     replayable_value_analysis: ReplayableValueAnalysis,
 }
 
-impl<'a> CoroFrameAnalyserImpl<'a> {
-    pub(crate) fn new(coro_graph: &'a CoroGraph) -> Self {
+impl<'a> CoroFrameAnalyser<'a> {
+    fn new(coro_graph: &'a CoroGraph) -> Self {
         FrameTokenManager::reset();
         for (token, coro_scope_ref) in coro_graph.tokens.iter() {
             unsafe { FrameTokenManager::register_frame_token(*token) }
@@ -376,6 +375,19 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
             node2frame_slot: HashMap::new(),
             replayable_value_analysis: ReplayableValueAnalysis::new(false),
         }
+    }
+
+    pub(crate) fn get_continuations(&self) -> &BTreeMap<u32, Continuation> {
+        &self.continuations
+    }
+    pub(crate) fn get_coro_frame(&self) -> &CoroFrame {
+        &self.coro_frame
+    }
+    pub(crate) fn get_frame_type(&self) -> CArc<Type> {
+        self.frame_type.clone()
+    }
+    pub(crate) fn get_node2frame_slot(&self) -> &HashMap<NodeRef, usize> {
+        &self.node2frame_slot
     }
 
     fn analyse(&mut self) {
@@ -690,24 +702,25 @@ impl<'a> CoroFrameAnalyserImpl<'a> {
     }
 }
 
-pub(crate) struct CoroFrameAnalyser;
+pub(crate) struct CoroFrameAnalysis;
 
-impl<'a> CoroFrameAnalyser {
-    pub(crate) fn analyse(coro_graph: &'a CoroGraph, callable: &CallableModule) {
+impl<'a> CoroFrameAnalysis {
+    pub(crate) fn analyse(coro_graph: &'a CoroGraph, callable: &CallableModule) -> CoroFrameAnalyser<'a> {
         let callable_string = unsafe { DISPLAY_IR_DEBUG.get().display_ir_callable(callable) };    // for DEBUG
         println!("Before:\n{}", callable_string);    // for DEBUG
 
-        let mut impl_ = CoroFrameAnalyserImpl::new(coro_graph);
-        impl_.register_args_captures(callable);
-        impl_.analyse();
-        impl_.calculate_frame();
+        let mut analyser = CoroFrameAnalyser::new(coro_graph);
+        analyser.register_args_captures(callable);
+        analyser.analyse();
+        analyser.calculate_frame();
 
         // for DEBUG
         println!("CoroFrame Analysis");
-        println!("node2frame_slot = {:#?}", impl_.node2frame_slot);
-        println!("frame_type = {:#?}", impl_.frame_type);
-        println!("Active Vars: {:#?}", impl_.active_vars);
-        println!("CoroFrame: {:#?}", impl_.coro_frame);
-        // todo!()
+        println!("node2frame_slot = {:#?}", analyser.node2frame_slot);
+        println!("frame_type = {:#?}", analyser.frame_type);
+        println!("Active Vars: {:#?}", analyser.active_vars);
+        println!("CoroFrame: {:#?}", analyser.coro_frame);
+
+        analyser
     }
 }

@@ -1518,7 +1518,7 @@ impl CoroutineSplitImpl {
         println!("{}", result);
 
         let coro_graph = CoroGraph::from(&callable.module);
-        crate::analysis::coro_frame_v4::CoroFrameAnalyser::analyse(&coro_graph, &callable);
+        crate::analysis::coro_frame_v4::CoroFrameAnalysis::analyse(&coro_graph, &callable);
 
         // let mut coro_frame_analyser = CoroFrameAnalyser::new();
         // coro_frame_analyser.analyse_callable(&callable);

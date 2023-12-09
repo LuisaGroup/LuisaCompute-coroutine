@@ -1783,7 +1783,7 @@ impl NodeRef {
             _ => false,
         }
     }
-    pub fn is_referenece_argument(&self) -> bool {
+    pub fn is_reference_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { by_value } => !*by_value,
             _ => false,
@@ -3017,7 +3017,7 @@ pub extern "C" fn luisa_compute_ir_node_usage(kernel: &KernelModule) -> CBoxedSl
                         "Requested resource {} not exist in usage map",
                         captured.node.0
                     )
-                        .as_str(),
+                    .as_str(),
                 )
                 .to_u8(),
         );

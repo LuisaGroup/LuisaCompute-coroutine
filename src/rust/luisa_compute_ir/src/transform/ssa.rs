@@ -92,7 +92,7 @@ impl ToSSAImpl {
         record: &mut SSABlockRecord,
     ) {
         let value = self.promote(value, builder, record);
-        if var.is_local() || var.is_referenece_argument() {
+        if var.is_local() || var.is_reference_argument() {
             record.phis.insert(var);
 
             if !self.local_defs.contains(&var) {

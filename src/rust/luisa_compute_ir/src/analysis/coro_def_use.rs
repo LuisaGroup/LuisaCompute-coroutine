@@ -8,15 +8,41 @@
 
 use crate::ir::NodeRef;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
-pub(crate) struct AccessNodeRef(pub usize);
-
+#[derive(Debug, Clone)]
 pub(crate) struct AccessNode {
-    node: NodeRef,
-    members: HashMap<usize, AccessNodeRef>,
+    members: HashMap<usize, Rc<AccessNode>>,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct AccessTree {
-    map: HashMap<NodeRef, AccessNodeRef>,
-    nodes: Vec<AccessNode>,
+    nodes: HashMap<NodeRef, Rc<AccessNode>>,
+}
+
+impl AccessTree {
+    fn insert(&mut self, node: NodeRef, access_chain: &[usize]) {
+        todo!()
+    }
+
+    fn all(&self, node: NodeRef, access_chain: &[usize]) -> bool {
+        todo!()
+    }
+
+    fn any(&self, node: NodeRef, access_chain: &[usize]) -> bool {
+        todo!()
+    }
+
+    fn intersect(&self, other: &Self) -> Self {
+        todo!()
+    }
+}
+
+struct CoroScopeDefUse {
+    external_uses: AccessTree,
+    internal_defs: HashMap<u32, AccessTree>, // suspend -> defs
+}
+
+struct CoroDefUseAnalysis {
+    scopes: HashMap<NodeRef, AccessTree>,
 }

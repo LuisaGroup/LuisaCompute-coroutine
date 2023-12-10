@@ -3,7 +3,7 @@
 //
 
 #include <luisa/luisa-compute.h>
-#include<luisa/coro/coro_dispatcher.h>
+#include <luisa/coro/coro_dispatcher.h>
 using namespace luisa;
 using namespace luisa::compute;
 
@@ -35,9 +35,9 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
         auto id = coro_id().x;
         //        x_buffer.write(id, id * 2u);
-        x_buffer.write(id, coro_token() +1000u + 10 * id);
+        x_buffer.write(id, coro_token() + 1000u + 10 * id);
         $suspend("1");
-        x_buffer.write(id, coro_token() +2000u + 20 * id);
+        x_buffer.write(id, coro_token() + 2000u + 20 * id);
         //        $if(id % 2u == 0u) {
         //            $suspend("1");
         //            x_buffer.write(id, 1000u + coro_token() * 2u);
@@ -97,8 +97,17 @@ int main(int argc, char *argv[]) {
         };
         frame_buffer->write(id, frame);
     };
-    coro::PersistentCoroDispatcher dispatcher{&coro,device,stream,64u,32u,1u,false};
-    dispatcher(x_buffer,n,40);
+    coro::SimpleCoroDispatcher Sdispatcher{&coro, device, n};
+    Sdispatcher(x_buffer, n, n);
+    LUISA_INFO("Simple Dispatcher:");
+    stream << Sdispatcher.await_all()
+           << x_buffer.copy_to(x_vec.data())
+           << synchronize();
+    for (auto i = 0u; i < n; ++i) {
+        LUISA_INFO("x[{}] = {}", i, x_vec[i]);
+    }
+    coro::PersistentCoroDispatcher PTdispatcher{&coro, device, stream, 64u, 32u, 1u, false};
+    PTdispatcher(x_buffer, n, n);
     /*for (auto iter = 0u; iter < 6; ++iter) {
         stream << dispatcher.await_step()
                << x_buffer.copy_to(x_vec.data())
@@ -107,22 +116,20 @@ int main(int argc, char *argv[]) {
             LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
         }
     }*/
-    stream<<dispatcher.await_all()
-           <<x_buffer.copy_to(x_vec.data())
-          <<synchronize();
+    stream << PTdispatcher.await_all()
+           << x_buffer.copy_to(x_vec.data())
+           << synchronize();
+    LUISA_INFO("Persistent Thread Dispatcher:");
     for (auto i = 0u; i < n; ++i) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
-    auto resume_shader = device.compile(resume_kernel);
-    stream << shader(x_buffer).dispatch(n)
+    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, 20, {}, false};
+    Wdispatcher(x_buffer, n, n);
+    LUISA_INFO("Wavefront Dispatcher:");
+    stream << Wdispatcher.await_all()
            << x_buffer.copy_to(x_vec.data())
            << synchronize();
-    for (auto iter = 0u; iter < 6; ++iter) {
-        for (auto i = 0u; i < n; ++i) {
-            LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
-        }
-        stream << resume_shader(x_buffer).dispatch(n)
-               << x_buffer.copy_to(x_vec.data())
-               << synchronize();
+    for (auto i = 0u; i < n; ++i) {
+        LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
 }

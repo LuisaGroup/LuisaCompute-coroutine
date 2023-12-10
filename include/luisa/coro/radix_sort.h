@@ -33,11 +33,13 @@ public:
             : bin_buffer{device.create_buffer<uint>(ceil_div(maxn, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * max_digit)},
               launch_count{device.create_buffer<uint>(1u)},
               hist_buffer{device.create_buffer<uint>(32 * max_digit)} {}
+        temp_storage() noexcept = default;
     };
     struct temp_storage_view {
         BufferView<uint> bin_buffer;
         BufferView<uint> launch_count;
         BufferView<uint> hist_buffer;
+        temp_storage_view() noexcept = default;
         temp_storage_view(temp_storage &storage) noexcept
             : bin_buffer{storage.bin_buffer.view()},
               launch_count{storage.launch_count.view()},
@@ -65,6 +67,7 @@ private:
     uint high_bit;
     uint MAXN;
 public:
+    radix_sort() noexcept = default;
     ///initialize radix_sort
     ///@param device: device to initialize
     ///@param maxn: maximum number of elements

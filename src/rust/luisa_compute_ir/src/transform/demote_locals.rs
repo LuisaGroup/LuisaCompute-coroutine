@@ -193,7 +193,7 @@ impl InitializationNormalizer {
     }
 
     fn normalize(module: &Module) {
-        let mut uniform_analysis = ReplayableValueAnalysis::new(true);
+        let mut uniform_analysis = ReplayableValueAnalysis::new_with_module(true, module);
         Self::normalize_non_uniform_inits_in_block(module, &module.entry, &mut uniform_analysis);
         let mut uniform_inits = Vec::new();
         Self::collect_const_inits_in_block(&module.entry, &mut uniform_inits);

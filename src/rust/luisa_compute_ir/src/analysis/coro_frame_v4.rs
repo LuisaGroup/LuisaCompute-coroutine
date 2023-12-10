@@ -20,6 +20,12 @@ use crate::display::DisplayIR;
 use crate::ir::{CallableModule, Func, Instruction, NodeRef, Primitive, StructType, Type, VectorElementType, VectorType};
 
 
+pub(crate) const STATE_INDEX_CORO_ID: usize = 0;
+pub(crate) const STATE_INDEX_FRAME_TOKEN: usize = 1;
+
+pub(crate) const STATE_INDEX_START: usize = 2;  // start slot index for other frame states
+
+
 // CoroFrame analysis
 
 #[derive(Clone)]
@@ -298,7 +304,7 @@ impl GraphColoring {
 
         // map color counter to the index of frame slots
         let mut type2index = HashMap::new();
-        let mut index: usize = 2;
+        let mut index: usize = STATE_INDEX_START;
         for (type_, colors) in self.color_of_type.iter_mut() {
             type2index.insert(type_.clone(), index);
             let index_next = index + colors.len();
@@ -333,9 +339,7 @@ impl GraphColoring {
     }
 }
 
-pub(crate) struct CoroFrameAnalyser<'a> {
-    coro_graph: &'a CoroGraph,
-
+pub(crate) struct CoroFrameAnalyser {
     pub(crate) entry_token: u32,
 
     defined_default: HashSet<NodeRef>,
@@ -343,18 +347,18 @@ pub(crate) struct CoroFrameAnalyser<'a> {
     active_var_by_token: BTreeMap<u32, BTreeSet<usize>>,
     active_var_by_token_next: BTreeMap<u32, BTreeSet<usize>>,
 
-    continuations: BTreeMap<u32, Continuation>,
+    pub(crate) continuations: BTreeMap<u32, Continuation>,
 
-    coro_frame: CoroFrame,
-    frame_type: CArc<Type>,
-    frame_fields: Vec<CArc<Type>>,
-    node2frame_slot: HashMap<NodeRef, usize>,
+    pub(crate) coro_frame: CoroFrame,
+    pub(crate) frame_type: CArc<Type>,
+    pub(crate) frame_fields: Vec<CArc<Type>>,
+    pub(crate) node2frame_slot: HashMap<NodeRef, usize>,
 
     replayable_value_analysis: ReplayableValueAnalysis,
 }
 
-impl<'a> CoroFrameAnalyser<'a> {
-    fn new(coro_graph: &'a CoroGraph) -> Self {
+impl CoroFrameAnalyser {
+    fn new(coro_graph: &CoroGraph) -> Self {
         FrameTokenManager::reset();
         for (token, coro_scope_ref) in coro_graph.tokens.iter() {
             unsafe { FrameTokenManager::register_frame_token(*token) }
@@ -362,7 +366,6 @@ impl<'a> CoroFrameAnalyser<'a> {
         let entry_token = FrameTokenManager::get_new_token();
         assert_eq!(entry_token, 0, "Entry token should be 0");
         Self {
-            coro_graph,
             entry_token,
             defined_default: HashSet::new(),
             active_vars: vec![],
@@ -377,29 +380,16 @@ impl<'a> CoroFrameAnalyser<'a> {
         }
     }
 
-    pub(crate) fn get_continuations(&self) -> &BTreeMap<u32, Continuation> {
-        &self.continuations
-    }
-    pub(crate) fn get_coro_frame(&self) -> &CoroFrame {
-        &self.coro_frame
-    }
-    pub(crate) fn get_frame_type(&self) -> CArc<Type> {
-        self.frame_type.clone()
-    }
-    pub(crate) fn get_node2frame_slot(&self) -> &HashMap<NodeRef, usize> {
-        &self.node2frame_slot
-    }
-
-    fn analyse(&mut self) {
+    fn analyse(&mut self, coro_graph: &CoroGraph) {
         let mut coro_scope_ref_vec = BTreeMap::new();
-        for (token, scope) in self.coro_graph.tokens.iter() {
+        for (token, scope) in coro_graph.tokens.iter() {
             coro_scope_ref_vec.insert(*token, *scope);
         }
-        coro_scope_ref_vec.insert(self.entry_token, self.coro_graph.entry);
+        coro_scope_ref_vec.insert(self.entry_token, coro_graph.entry);
         for (&token, &coro_scope_ref) in coro_scope_ref_vec.iter() {
             let mut frame_builder = FrameBuilder::new(token, Some(&self.defined_default));
-            let scope = self.coro_graph.scopes.get(coro_scope_ref.0).unwrap().instructions.clone();
-            frame_builder = self.visit_bb(frame_builder, &scope);
+            let scope = coro_graph.scopes.get(coro_scope_ref.0).unwrap().instructions.clone();
+            frame_builder = self.visit_bb(coro_graph, frame_builder, &scope);
             if self.active_var_by_token.entry(token).or_default().is_empty() {
                 let index = self.active_vars.len();
                 assert_eq!(frame_builder.active_var.token_next, INVALID_FRAME_TOKEN_MASK);
@@ -412,6 +402,10 @@ impl<'a> CoroFrameAnalyser<'a> {
         self.active_vars.push(ActiveVar::new(INVALID_FRAME_TOKEN_MASK));
         self.active_var_by_token.entry(INVALID_FRAME_TOKEN_MASK).or_default().insert(exit_index);
         self.active_var_by_token_next.entry(INVALID_FRAME_TOKEN_MASK).or_default().insert(exit_index);
+    }
+
+    pub(crate) fn token_vec(&self) -> Vec<u32> {
+        Vec::from_iter(self.continuations.keys().cloned())
     }
 
     fn register_args_captures(&mut self, callable: &CallableModule) {
@@ -523,7 +517,7 @@ impl<'a> CoroFrameAnalyser<'a> {
         self.node2frame_slot = graph_coloring.color_of_node.clone();
     }
 
-    fn visit_bb(&mut self, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {
+    fn visit_bb(&mut self, coro_graph: &CoroGraph, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {
         macro_rules! record_use {
             ($node: expr) => {
                 frame_builder.active_var.record_use(&mut self.replayable_value_analysis, *$node);
@@ -536,7 +530,7 @@ impl<'a> CoroFrameAnalyser<'a> {
         }
         macro_rules! record_cond {
             ($cond: expr, $instr_str: expr) => {
-                let cond = self.coro_graph.instructions.get($cond.0).unwrap();
+                let cond = coro_graph.instructions.get($cond.0).unwrap();
                 if let CoroInstruction::Simple(cond) = cond {
                     record_use!(cond);
                 } else {
@@ -547,7 +541,7 @@ impl<'a> CoroFrameAnalyser<'a> {
 
         frame_builder.active_var.enter_scope();
         for instr_ref in bb.iter() {
-            let instruction = self.coro_graph.instructions.get(instr_ref.0).unwrap();
+            let instruction = coro_graph.instructions.get(instr_ref.0).unwrap();
             match instruction {
                 CoroInstruction::Simple(node_ref) => {
                     let instruction = node_ref.get().instruction.as_ref();
@@ -646,7 +640,7 @@ impl<'a> CoroFrameAnalyser<'a> {
                 CoroInstruction::MakeFirstFlag => {}
                 CoroInstruction::ClearFirstFlag(_) => {}
                 CoroInstruction::SkipIfFirstFlag { flag, body } => {
-                    frame_builder = self.visit_bb(frame_builder, body);
+                    frame_builder = self.visit_bb(coro_graph, frame_builder, body);
                 }
 
                 CoroInstruction::Loop {
@@ -654,7 +648,7 @@ impl<'a> CoroFrameAnalyser<'a> {
                     cond
                 } => {
                     record_cond!(cond, "Loop");
-                    frame_builder = self.visit_bb(frame_builder, body);
+                    frame_builder = self.visit_bb(coro_graph, frame_builder, body);
                 }
                 CoroInstruction::If {
                     cond,
@@ -662,8 +656,8 @@ impl<'a> CoroFrameAnalyser<'a> {
                     false_branch
                 } => {
                     record_cond!(cond, "If");
-                    frame_builder = self.visit_bb(frame_builder, true_branch);
-                    frame_builder = self.visit_bb(frame_builder, false_branch);
+                    frame_builder = self.visit_bb(coro_graph, frame_builder, true_branch);
+                    frame_builder = self.visit_bb(coro_graph, frame_builder, false_branch);
                 }
                 CoroInstruction::Switch {
                     cond,
@@ -672,9 +666,9 @@ impl<'a> CoroFrameAnalyser<'a> {
                 } => {
                     record_cond!(cond, "Switch");
                     for case in cases.iter() {
-                        frame_builder = self.visit_bb(frame_builder, &case.body);
+                        frame_builder = self.visit_bb(coro_graph, frame_builder, &case.body);
                     }
-                    frame_builder = self.visit_bb(frame_builder, default);
+                    frame_builder = self.visit_bb(coro_graph, frame_builder, default);
                 }
                 CoroInstruction::Suspend { token: token_next } => {
                     let token = frame_builder.token;
@@ -704,14 +698,14 @@ impl<'a> CoroFrameAnalyser<'a> {
 
 pub(crate) struct CoroFrameAnalysis;
 
-impl<'a> CoroFrameAnalysis {
-    pub(crate) fn analyse(coro_graph: &'a CoroGraph, callable: &CallableModule) -> CoroFrameAnalyser<'a> {
+impl CoroFrameAnalysis {
+    pub(crate) fn analyse(coro_graph: &CoroGraph, callable: &CallableModule) -> CoroFrameAnalyser {
         let callable_string = unsafe { DISPLAY_IR_DEBUG.get().display_ir_callable(callable) };    // for DEBUG
         println!("Before:\n{}", callable_string);    // for DEBUG
 
         let mut analyser = CoroFrameAnalyser::new(coro_graph);
         analyser.register_args_captures(callable);
-        analyser.analyse();
+        analyser.analyse(coro_graph);
         analyser.calculate_frame();
 
         // for DEBUG

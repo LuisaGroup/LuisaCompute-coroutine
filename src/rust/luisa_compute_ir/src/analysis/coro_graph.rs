@@ -7,7 +7,6 @@
 
 use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::mem::transmute;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct CoroInstrRef(pub usize);

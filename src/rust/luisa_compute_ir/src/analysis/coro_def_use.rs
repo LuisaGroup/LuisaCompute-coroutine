@@ -29,7 +29,53 @@ pub(crate) struct AccessTree {
     _storage: Vec<AccessNode>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AccessTreeNodeRef<'a> {
+    tree: &'a AccessTree,
+    node: AccessNodeRef,
+}
+
+impl<'a> AccessTreeNodeRef<'a> {
+    fn new(tree: &'a AccessTree, node: AccessNodeRef) -> Self {
+        Self { tree, node }
+    }
+
+    fn get(&self) -> &AccessNode {
+        self.tree.get(self.node)
+    }
+
+    fn child(&self, i: usize) -> Option<Self> {
+        self.get()
+            .children
+            .get(&i)
+            .map(|&n| Self::new(self.tree, n))
+    }
+
+    fn has_children(&self) -> bool {
+        !self.get().children.is_empty()
+    }
+
+    fn has_child(&self, i: usize) -> bool {
+        let children = &self.get().children;
+        children.is_empty() || children.contains_key(&i)
+    }
+
+    fn children(&'a self) -> impl Iterator<Item = (usize, Self)> {
+        self.get()
+            .children
+            .iter()
+            .map(move |(&i, &n)| (i, Self::new(self.tree, n)))
+    }
+}
+
 impl AccessTree {
+    fn new() -> Self {
+        Self {
+            nodes: HashMap::new(),
+            _storage: Vec::new(),
+        }
+    }
+
     fn get(&self, node: AccessNodeRef) -> &AccessNode {
         &self._storage[node.0]
     }
@@ -38,58 +84,123 @@ impl AccessTree {
         &mut self._storage[node.0]
     }
 
+    fn add_node(&mut self) -> AccessNodeRef {
+        let index = self._storage.len();
+        self._storage.push(AccessNode {
+            children: HashMap::new(),
+        });
+        AccessNodeRef(index)
+    }
+
+    fn push(&mut self, node: AccessNode) -> AccessNodeRef {
+        let index = self._storage.len();
+        self._storage.push(node);
+        AccessNodeRef(index)
+    }
+
     // insert a new node into the tree
     fn insert(&mut self, node: NodeRef, access_chain: &[usize]) {
         let mut parent_is_new = false;
-        let root = self
-            .nodes
-            .entry(node)
-            .or_insert_with(|| {
-                parent_is_new = true;
-                let index = self._storage.len();
-                self._storage.push(AccessNode {
-                    children: HashMap::new(),
-                });
-                AccessNodeRef(index)
-            })
-            .clone();
+        let root = if let Some(root) = self.nodes.get(&node) {
+            root.clone()
+        } else {
+            let new_node = self.add_node();
+            self.nodes.insert(node, new_node.clone());
+            parent_is_new = true;
+            new_node
+        };
         let mut access_node_ref = root;
         for i in access_chain {
             if self.get(access_node_ref).children.is_empty() && !parent_is_new {
                 // the parent node is an existing leaf node (accessed as a whole), so
                 // we don't need to insert a new node for it any more
                 break;
-            } else if let Some(&child) = self.get(access_node_ref).children.get(i) {
+            }
+            if let Some(child) = self.get(access_node_ref).children.get(i).cloned() {
                 // the child node already exists, so we just need to go into it
                 access_node_ref = child;
+                parent_is_new = false;
             } else {
                 // the child node does not exist, so we need to insert a new node
                 // into it before going into it
-                let new_node = AccessNodeRef(self._storage.len());
-                self._storage.push(AccessNode {
-                    children: HashMap::new(),
-                });
+                let new_node = self.add_node();
                 self.get_mut(access_node_ref)
                     .children
-                    .insert(i, new_node.clone());
+                    .insert(*i, new_node.clone());
+                parent_is_new = true;
                 access_node_ref = new_node;
+            }
+        }
+        // mark that the node is accessed as a whole
+        self.get_mut(access_node_ref).children.clear();
+    }
+
+    // check if a node is accessed with the given access chain
+    fn contains(&self, node: NodeRef, access_chain: &[usize]) -> bool {
+        if let Some(access_node_ref) = self.nodes.get(&node).cloned() {
+            let mut access_node_ref = access_node_ref;
+            for i in access_chain {
+                if self.get(access_node_ref).children.is_empty() {
+                    // The node is accessed as a whole, so any further access to its children is contained.
+                    return true;
+                } else if let Some(child) = self.get(access_node_ref).children.get(i).cloned() {
+                    // go into the child node if it exists
+                    access_node_ref = child;
+                } else {
+                    // the child node does not exist, so the access is not contained
+                    return false;
+                }
+            }
+            self.get(access_node_ref).children.is_empty()
+        } else {
+            false
+        }
+    }
+
+    fn _clone(&mut self, a: AccessTreeNodeRef) -> AccessNodeRef {
+        let new_node = AccessNode {
+            children: a
+                .children()
+                .map(|(i, node)| (i, self._clone(node)))
+                .collect(),
+        };
+        self.push(new_node)
+    }
+
+    fn _merge(&mut self, a: AccessTreeNodeRef, b: AccessTreeNodeRef) -> Option<AccessNodeRef> {
+        if !a.has_children() {
+            // a is accessed as a whole (a is a full set), then the intersection is b
+            Some(self._clone(b))
+        } else if !b.has_children() {
+            // b is accessed as a whole (b is a full set), then the intersection is a
+            Some(self._clone(a))
+        } else {
+            // find the common children as the intersection
+            let children: HashMap<_, _> = a
+                .children()
+                .filter_map(|(i, a)| b.child(i).and_then(|b| self._merge(a, b)).map(|n| (i, n)))
+                .collect();
+            if children.is_empty() {
+                // no common children, so the intersection is empty
+                None
+            } else {
+                Some(self.push(AccessNode { children }))
             }
         }
     }
 
-    // check if a node is accessed as a whole
-    fn all(&self, node: NodeRef, access_chain: &[usize]) -> bool {
-        todo!()
-    }
-
-    // check if a node or any of its children is accessed
-    fn any(&self, node: NodeRef, access_chain: &[usize]) -> bool {
-        todo!()
-    }
-
     // intersect two access trees
     fn intersect(&self, other: &Self) -> Self {
-        todo!()
+        let mut new_tree = Self::new();
+        for common_node in self.nodes.keys().filter(|k| other.nodes.contains_key(k)) {
+            if let Some(merged) = new_tree._merge(
+                AccessTreeNodeRef::new(self, self.nodes[common_node]),
+                AccessTreeNodeRef::new(other, other.nodes[common_node]),
+            ) {
+                new_tree.nodes.insert(common_node.clone(), merged);
+            }
+        }
+        new_tree
     }
 }
 

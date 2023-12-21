@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
         //        };
     };
     auto type = Type::of<CoroFrame>();
-    auto frame_buffer = device.create_buffer<CoroFrame>(n);
+    auto frame_buffer = device.create_soa<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_id();
         auto id_x = id.x;
@@ -97,7 +97,13 @@ int main(int argc, char *argv[]) {
         };
         frame_buffer->write(id, frame);
     };
+    Kernel1D clear = [&](BufferUInt x_buffer) noexcept {
+        auto id = dispatch_x();
+        x_buffer.write(id, 0u);
+    };
+    auto clear_shader = device.compile(clear);
     coro::SimpleCoroDispatcher Sdispatcher{&coro, device, n};
+    stream << clear_shader(x_buffer).dispatch(n);
     Sdispatcher(x_buffer, n, n);
     LUISA_INFO("Simple Dispatcher:");
     stream << Sdispatcher.await_all()
@@ -107,6 +113,7 @@ int main(int argc, char *argv[]) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
     coro::PersistentCoroDispatcher PTdispatcher{&coro, device, stream, 64u, 32u, 1u, false};
+    stream << clear_shader(x_buffer).dispatch(n);
     PTdispatcher(x_buffer, n, n);
     /*for (auto iter = 0u; iter < 6; ++iter) {
         stream << dispatcher.await_step()
@@ -124,6 +131,8 @@ int main(int argc, char *argv[]) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
     coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, 20, {}, false};
+    stream << clear_shader(x_buffer).dispatch(n);
+
     Wdispatcher(x_buffer, n, n);
     LUISA_INFO("Wavefront Dispatcher:");
     stream << Wdispatcher.await_all()

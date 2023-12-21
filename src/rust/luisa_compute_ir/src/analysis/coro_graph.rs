@@ -1289,11 +1289,11 @@ impl CoroGraph {
         let preliminary_graph = CoroPreliminaryGraph::from(module);
         Self::build(preliminary_graph)
     }
-    
+
     pub fn get_scope(&self, scope: CoroScopeRef) -> &CoroScope {
         &self.scopes[scope.0]
     }
-    
+
     pub fn get_instr(&self, instr: CoroInstrRef) -> &CoroInstruction {
         &self.instructions[instr.0]
     }

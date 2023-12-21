@@ -1805,7 +1805,7 @@ impl NodeRef {
     pub fn is_phi(&self) -> bool {
         self.get().instruction.is_phi()
     }
-    pub fn get<'a>(&'a self) -> &'a Node {
+    pub fn get(&self) -> &Node {
         assert!(self.valid());
         unsafe { &*(self.0 as *const Node) }
     }

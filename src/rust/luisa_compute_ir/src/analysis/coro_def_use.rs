@@ -10,7 +10,7 @@ use crate::analysis::callable_arg_usages::CallableArgumentUsageAnalysis;
 use crate::analysis::const_eval::ConstEval;
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
-use crate::ir::NodeRef;
+use crate::ir::{BasicBlock, Func, Instruction, NodeRef};
 use std::collections::{HashMap, HashSet};
 
 // The access tree records the accessed members of a value, where accessed children are
@@ -362,6 +362,30 @@ impl<'a> CoroDefUseAnalysis<'a> {
         }
     }
 
+    fn analyze_branch_block_in_simple(
+        &self,
+        block: &BasicBlock,
+        parent_defs: &AccessTree,
+        def_use: &mut CoroScopeDefUse,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) -> AccessTree {
+        let mut defs = parent_defs.clone();
+        self.analyze_direct_block_in_simple(block, &mut defs, def_use, helpers);
+        defs
+    }
+
+    fn analyze_direct_block_in_simple(
+        &self,
+        block: &BasicBlock,
+        defs: &mut AccessTree,
+        def_use: &mut CoroScopeDefUse,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) {
+        for node in block.iter() {
+            self.analyze_simple(node, defs, def_use, helpers);
+        }
+    }
+
     fn partially_evaluate_access_chain(
         indices: &[NodeRef],
         helpers: &mut CoroDefUseHelperAnalyses,
@@ -412,6 +436,299 @@ impl<'a> CoroDefUseAnalysis<'a> {
         }
     }
 
+    fn _access_chain_from_gep_chain(
+        gep_or_local: NodeRef,
+        chain: &mut Vec<NodeRef>,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) -> NodeRef /* root */ {
+        if gep_or_local.is_local() {
+            gep_or_local
+        } else if let Instruction::Call(Func::GetElementPtr, args) =
+            gep_or_local.get().instruction.as_ref()
+        {
+            let root = Self::_access_chain_from_gep_chain(args[0], chain, helpers);
+            chain.extend(args.iter().skip(1));
+            root
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn access_chain_from_gep_chain(
+        gep_or_local: NodeRef,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) -> (NodeRef, Vec<NodeRef>) {
+        let mut chain = Vec::new();
+        let root = Self::_access_chain_from_gep_chain(gep_or_local, &mut chain, helpers);
+        (root, chain)
+    }
+
+    fn analyze_load_chain(
+        &self,
+        loaded: NodeRef,
+        defs: &mut AccessTree,
+        result: &mut CoroScopeDefUse,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) {
+        let (root, chain) = Self::access_chain_from_gep_chain(loaded, helpers);
+        self.mark_use(root, &chain, defs, result, helpers);
+    }
+
+    fn analyze_update_chain(
+        &self,
+        updated: NodeRef,
+        defs: &mut AccessTree,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) {
+        let (root, chain) = Self::access_chain_from_gep_chain(updated, helpers);
+        self.mark_def(root, &chain, defs, helpers);
+    }
+
+    fn analyze_call(
+        &self,
+        ret: NodeRef,
+        func: &Func,
+        args: &[NodeRef],
+        defs: &mut AccessTree,
+        result: &mut CoroScopeDefUse,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) {
+        match func {
+            Func::ZeroInitializer => {}
+            Func::Assume => {}
+            Func::Unreachable(_) => {}
+            Func::Assert(_) => {}
+            Func::ThreadId => {}
+            Func::BlockId => {}
+            Func::WarpSize => {}
+            Func::WarpLaneId => {}
+            Func::DispatchId => {}
+            Func::DispatchSize => {}
+            Func::CoroId => {}
+            Func::CoroToken => {}
+            Func::PropagateGrad => {}
+            Func::OutputGrad => {}
+            Func::RequiresGradient => {}
+            Func::Backward => {}
+            Func::Gradient => {}
+            Func::GradientMarker => {}
+            Func::AccGrad => {}
+            Func::Detach => {}
+            Func::RayTracingInstanceTransform => {}
+            Func::RayTracingInstanceVisibilityMask => {}
+            Func::RayTracingInstanceUserId => {}
+            Func::RayTracingSetInstanceTransform => {}
+            Func::RayTracingSetInstanceOpacity => {}
+            Func::RayTracingSetInstanceVisibility => {}
+            Func::RayTracingSetInstanceUserId => {}
+            Func::RayTracingTraceClosest => {}
+            Func::RayTracingTraceAny => {}
+            Func::RayTracingQueryAll => {}
+            Func::RayTracingQueryAny => {}
+            Func::RayQueryWorldSpaceRay => {}
+            Func::RayQueryProceduralCandidateHit => {}
+            Func::RayQueryTriangleCandidateHit => {}
+            Func::RayQueryCommittedHit => {}
+            Func::RayQueryCommitTriangle => {}
+            Func::RayQueryCommitProcedural => {}
+            Func::RayQueryTerminate => {}
+            Func::RasterDiscard => {}
+            Func::IndirectDispatchSetCount => {}
+            Func::IndirectDispatchSetKernel => {}
+            Func::Load => {}
+            Func::AddressOf => {}
+            Func::Cast => {}
+            Func::Bitcast => {}
+            Func::Pack => {}
+            Func::Unpack => {}
+            Func::Add => {}
+            Func::Sub => {}
+            Func::Mul => {}
+            Func::Div => {}
+            Func::Rem => {}
+            Func::BitAnd => {}
+            Func::BitOr => {}
+            Func::BitXor => {}
+            Func::Shl => {}
+            Func::Shr => {}
+            Func::RotRight => {}
+            Func::RotLeft => {}
+            Func::Eq => {}
+            Func::Ne => {}
+            Func::Lt => {}
+            Func::Le => {}
+            Func::Gt => {}
+            Func::Ge => {}
+            Func::MatCompMul => {}
+            Func::Neg => {}
+            Func::Not => {}
+            Func::BitNot => {}
+            Func::All => {}
+            Func::Any => {}
+            Func::Select => {}
+            Func::Clamp => {}
+            Func::Lerp => {}
+            Func::Step => {}
+            Func::SmoothStep => {}
+            Func::Saturate => {}
+            Func::Abs => {}
+            Func::Min => {}
+            Func::Max => {}
+            Func::ReduceSum => {}
+            Func::ReduceProd => {}
+            Func::ReduceMin => {}
+            Func::ReduceMax => {}
+            Func::Clz => {}
+            Func::Ctz => {}
+            Func::PopCount => {}
+            Func::Reverse => {}
+            Func::IsInf => {}
+            Func::IsNan => {}
+            Func::Acos => {}
+            Func::Acosh => {}
+            Func::Asin => {}
+            Func::Asinh => {}
+            Func::Atan => {}
+            Func::Atan2 => {}
+            Func::Atanh => {}
+            Func::Cos => {}
+            Func::Cosh => {}
+            Func::Sin => {}
+            Func::Sinh => {}
+            Func::Tan => {}
+            Func::Tanh => {}
+            Func::Exp => {}
+            Func::Exp2 => {}
+            Func::Exp10 => {}
+            Func::Log => {}
+            Func::Log2 => {}
+            Func::Log10 => {}
+            Func::Powi => {}
+            Func::Powf => {}
+            Func::Sqrt => {}
+            Func::Rsqrt => {}
+            Func::Ceil => {}
+            Func::Floor => {}
+            Func::Fract => {}
+            Func::Trunc => {}
+            Func::Round => {}
+            Func::Fma => {}
+            Func::Copysign => {}
+            Func::Cross => {}
+            Func::Dot => {}
+            Func::OuterProduct => {}
+            Func::Length => {}
+            Func::LengthSquared => {}
+            Func::Normalize => {}
+            Func::Faceforward => {}
+            Func::Distance => {}
+            Func::Reflect => {}
+            Func::Determinant => {}
+            Func::Transpose => {}
+            Func::Inverse => {}
+            Func::WarpIsFirstActiveLane => {}
+            Func::WarpFirstActiveLane => {}
+            Func::WarpActiveAllEqual => {}
+            Func::WarpActiveBitAnd => {}
+            Func::WarpActiveBitOr => {}
+            Func::WarpActiveBitXor => {}
+            Func::WarpActiveCountBits => {}
+            Func::WarpActiveMax => {}
+            Func::WarpActiveMin => {}
+            Func::WarpActiveProduct => {}
+            Func::WarpActiveSum => {}
+            Func::WarpActiveAll => {}
+            Func::WarpActiveAny => {}
+            Func::WarpActiveBitMask => {}
+            Func::WarpPrefixCountBits => {}
+            Func::WarpPrefixSum => {}
+            Func::WarpPrefixProduct => {}
+            Func::WarpReadLaneAt => {}
+            Func::WarpReadFirstLane => {}
+            Func::SynchronizeBlock => {}
+            Func::AtomicRef => {}
+            Func::AtomicExchange => {}
+            Func::AtomicCompareExchange => {}
+            Func::AtomicFetchAdd => {}
+            Func::AtomicFetchSub => {}
+            Func::AtomicFetchAnd => {}
+            Func::AtomicFetchOr => {}
+            Func::AtomicFetchXor => {}
+            Func::AtomicFetchMin => {}
+            Func::AtomicFetchMax => {}
+            Func::BufferRead => {}
+            Func::BufferWrite => {}
+            Func::BufferSize => {}
+            Func::BufferAddress => {}
+            Func::ByteBufferRead => {}
+            Func::ByteBufferWrite => {}
+            Func::ByteBufferSize => {}
+            Func::Texture2dRead => {}
+            Func::Texture2dWrite => {}
+            Func::Texture2dSize => {}
+            Func::Texture3dRead => {}
+            Func::Texture3dWrite => {}
+            Func::Texture3dSize => {}
+            Func::BindlessTexture2dSample => {}
+            Func::BindlessTexture2dSampleLevel => {}
+            Func::BindlessTexture2dSampleGrad => {}
+            Func::BindlessTexture2dSampleGradLevel => {}
+            Func::BindlessTexture3dSample => {}
+            Func::BindlessTexture3dSampleLevel => {}
+            Func::BindlessTexture3dSampleGrad => {}
+            Func::BindlessTexture3dSampleGradLevel => {}
+            Func::BindlessTexture2dRead => {}
+            Func::BindlessTexture3dRead => {}
+            Func::BindlessTexture2dReadLevel => {}
+            Func::BindlessTexture3dReadLevel => {}
+            Func::BindlessTexture2dSize => {}
+            Func::BindlessTexture3dSize => {}
+            Func::BindlessTexture2dSizeLevel => {}
+            Func::BindlessTexture3dSizeLevel => {}
+            Func::BindlessBufferRead => {}
+            Func::BindlessBufferWrite => {}
+            Func::BindlessBufferSize => {}
+            Func::BindlessBufferAddress => {}
+            Func::BindlessBufferType => {}
+            Func::BindlessByteBufferRead => {}
+            Func::Vec => {}
+            Func::Vec2 => {}
+            Func::Vec3 => {}
+            Func::Vec4 => {}
+            Func::Permute => {}
+            Func::InsertElement => {}
+            Func::ExtractElement => {}
+            Func::GetElementPtr => {}
+            Func::Struct => {}
+            Func::Array => {}
+            Func::Mat => {}
+            Func::Mat2 => {}
+            Func::Mat3 => {}
+            Func::Mat4 => {}
+            Func::Callable(_) => {}
+            Func::CpuCustomOp(_) => {}
+            Func::ShaderExecutionReorder => {}
+            Func::Unknown0 => {}
+            Func::Unknown1 => {}
+        }
+        todo!()
+    }
+
+    fn mark_use_with_possible_implicit_load(
+        &self,
+        node: NodeRef,
+        defs: &mut AccessTree,
+        result: &mut CoroScopeDefUse,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) {
+        if node.is_local() || node.is_gep() {
+            // implicit load
+            self.analyze_load_chain(node, defs, result, helpers);
+        } else {
+            self.mark_use(node, &[], defs, result, helpers);
+        }
+    }
+
     fn analyze_simple(
         &self,
         node: NodeRef,
@@ -419,7 +736,80 @@ impl<'a> CoroDefUseAnalysis<'a> {
         result: &mut CoroScopeDefUse,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
-        todo!()
+        match node.get().instruction.as_ref() {
+            Instruction::Local { init } => {
+                self.mark_use(*init, &[], defs, result, helpers);
+                self.mark_def(node, &[], defs, helpers);
+            }
+            Instruction::Update { var, value } => {
+                self.mark_use(*value, &[], defs, result, helpers);
+                self.analyze_update_chain(*var, defs, helpers);
+            }
+            Instruction::Call(func, args) => {
+                self.analyze_call(node, func, args.as_ref(), defs, result, helpers);
+            }
+            Instruction::Phi(_) => unreachable!("phis should be lowered"),
+            Instruction::AdScope { .. } | Instruction::AdDetach(_) => todo!(),
+            Instruction::Return(_) | Instruction::Break | Instruction::Continue => {
+                unreachable!("returns, breaks and continues should be lowered")
+            }
+            // can still appear in RayQuery branches
+            Instruction::Loop { body, cond } => {
+                // do-while loop, so the condition is evaluated after the body
+                self.analyze_direct_block_in_simple(body, defs, result, helpers);
+                self.mark_use_with_possible_implicit_load(*cond, defs, result, helpers);
+            }
+            Instruction::GenericLoop { .. } => unreachable!("generic loops should be lowered"),
+            Instruction::If {
+                cond,
+                true_branch,
+                false_branch,
+            } => {
+                self.mark_use_with_possible_implicit_load(*cond, defs, result, helpers);
+                let true_defs =
+                    self.analyze_branch_block_in_simple(true_branch, defs, result, helpers);
+                let false_defs =
+                    self.analyze_branch_block_in_simple(false_branch, defs, result, helpers);
+                *defs = AccessTree::intersect(&true_defs, &false_defs);
+            }
+            Instruction::Switch {
+                value,
+                cases,
+                default,
+            } => {
+                self.mark_use_with_possible_implicit_load(*value, defs, result, helpers);
+                let mut common_defs =
+                    self.analyze_branch_block_in_simple(default, defs, result, helpers);
+                for case in cases.iter() {
+                    let case_defs =
+                        self.analyze_branch_block_in_simple(&case.block, defs, result, helpers);
+                    common_defs = AccessTree::intersect(&common_defs, &case_defs);
+                }
+                *defs = common_defs;
+            }
+            Instruction::RayQuery {
+                ray_query,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                // TODO: this is actually not necessary as we do not allow ray queries to be
+                //   split into multiple coroutine scopes
+                self.mark_use_with_possible_implicit_load(*ray_query, defs, result, helpers);
+                self.analyze_branch_block_in_simple(on_triangle_hit, defs, result, helpers);
+                self.analyze_branch_block_in_simple(on_procedural_hit, defs, result, helpers);
+                // note that we do not propagate defs from ray query branches since
+                // both branches might not be executed
+            }
+            Instruction::Print { fmt, args } => {
+                for arg in args.iter() {
+                    self.mark_use_with_possible_implicit_load(*arg, defs, result, helpers);
+                }
+            }
+            Instruction::CoroRegister { value, .. } => {
+                self.mark_use_with_possible_implicit_load(*value, defs, result, helpers);
+            }
+            _ => {}
+        }
     }
 
     fn analyze_instr(
@@ -430,25 +820,33 @@ impl<'a> CoroDefUseAnalysis<'a> {
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         match instr {
-            CoroInstruction::Entry | CoroInstruction::EntryScope { .. } => unreachable!(),
+            CoroInstruction::Entry | CoroInstruction::EntryScope { .. } => {
+                unreachable!("entry scopes are only allowed in preliminary coroutine graphs")
+            }
             CoroInstruction::Simple(node) => {
                 self.analyze_simple(*node, defs, result, helpers);
             }
             CoroInstruction::ConditionStackReplay { items } => {
                 for item in items {
-                    self.mark_def(item.node, &[], defs, helpers);
+                    if item.node.is_local() {
+                        self.analyze_update_chain(item.node, defs, helpers);
+                    } else {
+                        self.mark_def(item.node, &[], defs, helpers);
+                    }
                 }
             }
             CoroInstruction::MakeFirstFlag | CoroInstruction::ClearFirstFlag(_) => {
                 // nothing to do as the first flag is always defined locally
             }
             CoroInstruction::SkipIfFirstFlag { body, .. } => {
+                // note that we can not propagate defs from the body since the body
+                // might not be executed
                 self.analyze_branch_block(body, defs, result, helpers);
             }
             CoroInstruction::Loop { body, cond } => {
                 self.analyze_direct_block(body, defs, result, helpers);
                 if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
-                    self.mark_use(cond.clone(), &[], defs, result, helpers);
+                    self.mark_use_with_possible_implicit_load(cond.clone(), defs, result, helpers);
                 } else {
                     unreachable!()
                 }
@@ -459,7 +857,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
                 false_branch,
             } => {
                 if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
-                    self.mark_use(cond.clone(), &[], defs, result, helpers);
+                    self.mark_use_with_possible_implicit_load(cond.clone(), defs, result, helpers);
                 } else {
                     unreachable!()
                 }
@@ -473,7 +871,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
                 default,
             } => {
                 if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
-                    self.mark_use(cond.clone(), &[], defs, result, helpers);
+                    self.mark_use_with_possible_implicit_load(cond.clone(), defs, result, helpers);
                 } else {
                     unreachable!()
                 }

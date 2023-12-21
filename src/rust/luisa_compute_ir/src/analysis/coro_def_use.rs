@@ -10,7 +10,7 @@ use crate::analysis::callable_arg_usages::CallableArgumentUsageAnalysis;
 use crate::analysis::const_eval::ConstEval;
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
-use crate::ir::{BasicBlock, CallableModule, Func, Instruction, NodeRef, Usage};
+use crate::ir::{BasicBlock, CallableModule, Func, Instruction, NodeRef, Type, Usage};
 use std::collections::{HashMap, HashSet};
 
 // The access tree records the accessed members of a value, where accessed children are
@@ -281,6 +281,72 @@ impl AccessTree {
         }
         new_tree
     }
+
+    // if all children of a node are accessed as a whole, then we can coalesce them into
+    // a single leaf node (i.e., removing all of its children)
+    fn coalesce_whole_access_chains(&mut self) {
+        let this = unsafe { &mut *(self as *mut Self) };
+        for (&node, &node_ref) in self.nodes.iter() {
+            this._coalesce_whole_access_chains(node_ref, node.type_().as_ref());
+        }
+    }
+
+    fn _coalesce_whole_access_chains(&mut self, node_ref: AccessNodeRef, t: &Type) {
+        let this = unsafe { &mut *(self as *mut Self) };
+        let full_children_count = self
+            .get(node_ref)
+            .children
+            .iter()
+            .filter(|(&i, &n)| {
+                if let AccessChainIndex::Static(i) = i {
+                    this._coalesce_whole_access_chains(n, t.extract(i as usize).as_ref());
+                    this.get(n).children.is_empty()
+                } else {
+                    false
+                }
+            })
+            .count();
+        let dim = match t {
+            Type::Vector(v) => v.length as usize,
+            Type::Matrix(m) => m.dimension as usize,
+            Type::Array(a) => a.length as usize,
+            Type::Struct(s) => s.fields.len(),
+            _ => 0,
+        };
+        if full_children_count == dim {
+            self.get_mut(node_ref).children.clear();
+        }
+    }
+
+    // if a node is accessed with dynamic indices at some level of the access chain, then
+    // we conservatively assume that all of its children are accessed with dynamic indices
+    // and collapse the access chain into a single node (i.e., removing all of its children)
+    fn collapse_dynamic_access_chains(&mut self) {
+        let this = unsafe { &mut *(self as *mut Self) };
+        for (&node, &node_ref) in self.nodes.iter() {
+            this._collapse_dynamic_access_chains(node_ref, node.type_().as_ref());
+        }
+    }
+
+    fn _collapse_dynamic_access_chains(&mut self, node_ref: AccessNodeRef, t: &Type) {
+        let has_dynamic_access = self.get(node_ref).children.iter().any(|(&i, _)| match i {
+            AccessChainIndex::Dynamic(_) => true,
+            _ => false,
+        });
+        if has_dynamic_access {
+            self.get_mut(node_ref).children.clear();
+        } else {
+            let this = unsafe { &mut *(self as *mut Self) };
+            for (&i, &child) in self.get(node_ref).children.iter() {
+                if let AccessChainIndex::Static(index) = i {
+                    let elem = t.extract(index as usize);
+                    this._collapse_dynamic_access_chains(child, &elem);
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+    }
 }
 
 // In the structured IR, an instruction dominates all successive instructions in the
@@ -426,11 +492,15 @@ impl<'a> CoroDefUseAnalysis<'a> {
         // otherwise, check if the value is dominated by defs in the current scope
         let access_chain = Self::partially_evaluate_access_chain(access_chain, helpers);
         if !defs.contains(node_ref, access_chain.as_slice()) {
-            // the value is not dominated by defs in the current scope, so we need to
-            // pass it through the frame
-            result
-                .external_uses
-                .insert(node_ref, access_chain.as_slice());
+            // try coalescing the def tree to reduce the number of external uses
+            defs.coalesce_whole_access_chains();
+            if !defs.contains(node_ref, access_chain.as_slice()) {
+                // the value is not dominated by defs in the current scope, so we need to
+                // pass it through the frame
+                result
+                    .external_uses
+                    .insert(node_ref, access_chain.as_slice());
+            }
         }
     }
 
@@ -945,6 +1015,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
                 if let Some(defs) = result.internal_defs.get_mut(token) {
                     *defs = AccessTree::intersect(defs, defs);
                 } else {
+                    defs.coalesce_whole_access_chains();
                     result.internal_defs.insert(*token, defs.clone());
                 }
             }
@@ -1013,9 +1084,11 @@ impl<'a> CoroDefUseAnalysis<'a> {
                 self.analyze_scope(scope)
             })
             .collect();
-        let union_uses = scopes.iter().fold(AccessTree::new(), |acc, scope| {
+        let mut union_uses = scopes.iter().fold(AccessTree::new(), |acc, scope| {
             acc.union(&scope.external_uses)
         });
+        union_uses.coalesce_whole_access_chains();
+        union_uses.collapse_dynamic_access_chains();
         CoroGraphDefUse { scopes, union_uses }
     }
 

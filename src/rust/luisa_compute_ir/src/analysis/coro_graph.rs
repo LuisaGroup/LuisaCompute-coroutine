@@ -292,10 +292,10 @@ impl CoroPreliminaryGraph {
 // This struct is the final coroutine graph after splitting the coroutine scopes.
 #[derive(Debug)]
 pub(crate) struct CoroGraph {
-    pub scopes: Vec<CoroScope>,              // all the scopes in the graph
-    pub entry: CoroScopeRef,                 // the index of the entry scope (the root scope)
+    pub scopes: Vec<CoroScope>, // all the scopes in the graph including the root scope
+    pub entry: CoroScopeRef,    // the index of the entry scope (the root scope)
     pub tokens: BTreeMap<u32, CoroScopeRef>, // map from split mark token to scope index
-    pub instructions: Vec<CoroInstruction>,  // all the instructions in the graph
+    pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
 }
 
 // Method:

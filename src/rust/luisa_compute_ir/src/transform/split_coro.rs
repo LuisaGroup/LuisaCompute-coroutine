@@ -1,11 +1,14 @@
-use std::collections::HashMap;
 use crate::analysis::coro_frame_v4::{CoroFrameAnalyser, CoroFrameAnalysis};
+use std::collections::HashMap;
 // use crate::analysis::coro_graph::CoroPreliminaryGraph;
+use crate::analysis::coro_def_use::CoroDefUseAnalysis;
 use crate::analysis::coro_graph::CoroGraph;
-use crate::{CArc, CBoxedSlice, Pooled};
-use crate::ir::{BasicBlock, CallableModule, Capture, Instruction, IrBuilder, Module, ModulePools, new_node, Node, NodeRef};
+use crate::ir::{
+    new_node, BasicBlock, CallableModule, Capture, Instruction, IrBuilder, Module, ModulePools,
+    Node, NodeRef,
+};
 use crate::transform::Transform;
-
+use crate::{CArc, CBoxedSlice, Pooled};
 
 struct ScopeBuilder {
     token: u32,
@@ -44,7 +47,6 @@ struct New2OldMap {
     blocks: HashMap<*const BasicBlock, *const BasicBlock>,
 }
 
-
 struct SplitManager {
     callable: CallableModule,
     graph: CoroGraph,
@@ -58,7 +60,11 @@ struct SplitManager {
 }
 
 impl SplitManager {
-    fn split(callable: CallableModule, graph: CoroGraph, frame_analyser: CoroFrameAnalyser) -> CallableModule {
+    fn split(
+        callable: CallableModule,
+        graph: CoroGraph,
+        frame_analyser: CoroFrameAnalyser,
+    ) -> CallableModule {
         let mut manager = Self {
             callable,
             graph,
@@ -133,14 +139,17 @@ impl SplitManager {
             binding: capture.binding.clone(),
         }
     }
-    fn duplicate_captures(&mut self, frame_token: u32, captures: &CBoxedSlice<Capture>) -> Vec<Capture> {
+    fn duplicate_captures(
+        &mut self,
+        frame_token: u32,
+        captures: &CBoxedSlice<Capture>,
+    ) -> Vec<Capture> {
         let dup_captures: Vec<Capture> = captures
             .iter()
             .map(|capture| self.duplicate_capture(frame_token, capture))
             .collect();
         dup_captures
     }
-
 
     fn record_node_mapping(&mut self, frame_token: u32, old: NodeRef, new: NodeRef) {
         let mut old_original = old;
@@ -203,6 +212,9 @@ impl Transform for SplitCoro {
         println!("SplitCoro::transform_module");
         let graph = CoroGraph::from(&callable.module);
         graph.dump();
+        let coro_def_use = CoroDefUseAnalysis::analyze(&graph);
+        coro_def_use.dump();
+        // TODO
         let frame_analyser = CoroFrameAnalysis::analyse(&graph, &callable);
         SplitManager::split(callable, graph, frame_analyser)
     }

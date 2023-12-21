@@ -272,14 +272,12 @@ impl AccessTree {
             new_tree.nodes.insert(common_node.clone(), merged);
         }
         for node in self.nodes.keys().filter(|k| !other.nodes.contains_key(k)) {
-            new_tree
-                .nodes
-                .insert(node.clone(), self.nodes[node].clone());
+            let merged = new_tree.clone_node(AccessTreeNodeRef::new(self, self.nodes[node]));
+            new_tree.nodes.insert(node.clone(), merged);
         }
         for node in other.nodes.keys().filter(|k| !self.nodes.contains_key(k)) {
-            new_tree
-                .nodes
-                .insert(node.clone(), other.nodes[node].clone());
+            let merged = new_tree.clone_node(AccessTreeNodeRef::new(other, other.nodes[node]));
+            new_tree.nodes.insert(node.clone(), merged);
         }
         new_tree
     }
@@ -309,17 +307,17 @@ impl AccessTree {
 //    resulting node of the instruction *defines* the node itself (not the access chain).
 // 4. Other should be simple enough to handle.
 
-struct CoroScopeDefUse {
+pub(crate) struct CoroScopeDefUse {
     // uses that are not dominated by defs in the current scope
-    external_uses: AccessTree,
+    pub external_uses: AccessTree,
     // defs at the suspend point that can be safely localized in the current scope
     // note: the scope might define other values at the suspend point, but they are
     //       unsafe to localize because their defs do not dominate the suspend point
-    internal_defs: HashMap<u32, AccessTree>,
+    pub internal_defs: HashMap<u32, AccessTree>,
 }
 
 impl CoroScopeDefUse {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             external_uses: AccessTree::new(),
             internal_defs: HashMap::new(),
@@ -327,7 +325,7 @@ impl CoroScopeDefUse {
     }
 }
 
-struct CoroDefUseAnalysis<'a> {
+pub(crate) struct CoroDefUseAnalysis<'a> {
     graph: &'a CoroGraph,
 }
 
@@ -394,9 +392,9 @@ impl<'a> CoroDefUseAnalysis<'a> {
             .iter()
             .map(|&i| {
                 if let Some(value) = helpers.const_eval.eval(i).and_then(|v| v.try_get_i32()) {
-                    AccessChainIndex::Static(value)
+                    value.into()
                 } else {
-                    AccessChainIndex::Dynamic(i)
+                    i.into()
                 }
             })
             .collect()
@@ -955,12 +953,44 @@ impl<'a> CoroDefUseAnalysis<'a> {
     }
 }
 
+pub(crate) struct CoroGraphDefUse {
+    pub scopes: Vec<CoroScopeDefUse>,
+    pub union_uses: AccessTree,
+}
+
+impl CoroGraphDefUse {
+    fn dump_access_tree(uses: &AccessTree) {
+        for (i, node) in uses.nodes.keys().enumerate() {
+            let node = node.get();
+            println!("  #{:<3} {:?}", i, node.type_.as_ref());
+            println!("       {:?}", node.instruction.as_ref());
+        }
+    }
+
+    pub fn dump(&self) {
+        println!("===================== CoroGraph Def-Use =====================");
+        for (i, scope) in self.scopes.iter().enumerate() {
+            println!(
+                "=============== Scope #{} External Uses (N = {}) ===============",
+                i,
+                scope.external_uses.nodes.len()
+            );
+            Self::dump_access_tree(&scope.external_uses);
+        }
+        println!(
+            "================ Union of External Uses (N = {}) ================",
+            self.union_uses.nodes.len()
+        );
+        Self::dump_access_tree(&self.union_uses);
+    }
+}
+
 impl<'a> CoroDefUseAnalysis<'a> {
     pub fn new(graph: &'a CoroGraph) -> Self {
         Self { graph }
     }
 
-    pub fn analyze(&self, scope_ref: CoroScopeRef) -> CoroScopeDefUse {
+    pub fn analyze_scope(&self, scope_ref: CoroScopeRef) -> CoroScopeDefUse {
         let mut def_use = CoroScopeDefUse::new();
         let scope = self.graph.get_scope(scope_ref);
         self.analyze_direct_block(
@@ -974,5 +1004,22 @@ impl<'a> CoroDefUseAnalysis<'a> {
             },
         );
         def_use
+    }
+
+    pub fn analyze_graph(&self) -> CoroGraphDefUse {
+        let scopes: Vec<_> = (0..self.graph.scopes.len())
+            .map(|i| {
+                let scope = CoroScopeRef(i);
+                self.analyze_scope(scope)
+            })
+            .collect();
+        let union_uses = scopes.iter().fold(AccessTree::new(), |acc, scope| {
+            acc.union(&scope.external_uses)
+        });
+        CoroGraphDefUse { scopes, union_uses }
+    }
+
+    pub fn analyze(graph: &'a CoroGraph) -> CoroGraphDefUse {
+        Self::new(graph).analyze_graph()
     }
 }

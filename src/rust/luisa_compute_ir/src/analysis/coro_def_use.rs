@@ -1012,8 +1012,9 @@ impl<'a> CoroDefUseAnalysis<'a> {
             }
             CoroInstruction::Suspend { token } => {
                 // record the defs at the suspend point
-                if let Some(defs) = result.internal_defs.get_mut(token) {
-                    *defs = AccessTree::intersect(defs, defs);
+                if let Some(d) = result.internal_defs.get_mut(token) {
+                    *d = AccessTree::intersect(d, defs);
+                    d.coalesce_whole_access_chains();
                 } else {
                     defs.coalesce_whole_access_chains();
                     result.internal_defs.insert(*token, defs.clone());
@@ -1074,6 +1075,8 @@ impl<'a> CoroDefUseAnalysis<'a> {
                 const_eval: ConstEval::new(),
             },
         );
+        def_use.external_uses.coalesce_whole_access_chains();
+        def_use.external_uses.collapse_dynamic_access_chains();
         def_use
     }
 

@@ -10,7 +10,7 @@ use crate::analysis::callable_arg_usages::CallableArgumentUsageAnalysis;
 use crate::analysis::const_eval::ConstEval;
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
-use crate::ir::{BasicBlock, Func, Instruction, NodeRef};
+use crate::ir::{BasicBlock, CallableModule, Func, Instruction, NodeRef, Usage};
 use std::collections::{HashMap, HashSet};
 
 // The access tree records the accessed members of a value, where accessed children are
@@ -484,6 +484,28 @@ impl<'a> CoroDefUseAnalysis<'a> {
         self.mark_def(root, &chain, defs, helpers);
     }
 
+    fn analyze_callable(
+        &self,
+        ret: NodeRef,
+        callable: &CallableModule,
+        args: &[NodeRef],
+        defs: &mut AccessTree,
+        result: &mut CoroScopeDefUse,
+        helpers: &mut CoroDefUseHelperAnalyses,
+    ) {
+        for (i, arg) in args.iter().enumerate() {
+            match helpers.callable_args.get_possible_usage(callable, i, &[]) {
+                Usage::READ | Usage::READ_WRITE => {
+                    self.mark_use_with_possible_implicit_load(*arg, defs, result, helpers)
+                }
+                _ => {}
+            }
+        }
+        if !callable.ret_type.is_void() {
+            self.mark_def(ret, &[], defs, helpers);
+        }
+    }
+
     fn analyze_call(
         &self,
         ret: NodeRef,
@@ -494,224 +516,262 @@ impl<'a> CoroDefUseAnalysis<'a> {
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         match func {
-            Func::ZeroInitializer => {}
-            Func::Assume => {}
-            Func::Unreachable(_) => {}
-            Func::Assert(_) => {}
-            Func::ThreadId => {}
-            Func::BlockId => {}
-            Func::WarpSize => {}
-            Func::WarpLaneId => {}
-            Func::DispatchId => {}
-            Func::DispatchSize => {}
-            Func::CoroId => {}
-            Func::CoroToken => {}
-            Func::PropagateGrad => {}
-            Func::OutputGrad => {}
-            Func::RequiresGradient => {}
-            Func::Backward => {}
-            Func::Gradient => {}
-            Func::GradientMarker => {}
-            Func::AccGrad => {}
-            Func::Detach => {}
-            Func::RayTracingInstanceTransform => {}
-            Func::RayTracingInstanceVisibilityMask => {}
-            Func::RayTracingInstanceUserId => {}
-            Func::RayTracingSetInstanceTransform => {}
-            Func::RayTracingSetInstanceOpacity => {}
-            Func::RayTracingSetInstanceVisibility => {}
-            Func::RayTracingSetInstanceUserId => {}
-            Func::RayTracingTraceClosest => {}
-            Func::RayTracingTraceAny => {}
-            Func::RayTracingQueryAll => {}
-            Func::RayTracingQueryAny => {}
-            Func::RayQueryWorldSpaceRay => {}
-            Func::RayQueryProceduralCandidateHit => {}
-            Func::RayQueryTriangleCandidateHit => {}
-            Func::RayQueryCommittedHit => {}
-            Func::RayQueryCommitTriangle => {}
-            Func::RayQueryCommitProcedural => {}
-            Func::RayQueryTerminate => {}
-            Func::RasterDiscard => {}
-            Func::IndirectDispatchSetCount => {}
-            Func::IndirectDispatchSetKernel => {}
-            Func::Load => {}
-            Func::AddressOf => {}
-            Func::Cast => {}
-            Func::Bitcast => {}
-            Func::Pack => {}
-            Func::Unpack => {}
-            Func::Add => {}
-            Func::Sub => {}
-            Func::Mul => {}
-            Func::Div => {}
-            Func::Rem => {}
-            Func::BitAnd => {}
-            Func::BitOr => {}
-            Func::BitXor => {}
-            Func::Shl => {}
-            Func::Shr => {}
-            Func::RotRight => {}
-            Func::RotLeft => {}
-            Func::Eq => {}
-            Func::Ne => {}
-            Func::Lt => {}
-            Func::Le => {}
-            Func::Gt => {}
-            Func::Ge => {}
-            Func::MatCompMul => {}
-            Func::Neg => {}
-            Func::Not => {}
-            Func::BitNot => {}
-            Func::All => {}
-            Func::Any => {}
-            Func::Select => {}
-            Func::Clamp => {}
-            Func::Lerp => {}
-            Func::Step => {}
-            Func::SmoothStep => {}
-            Func::Saturate => {}
-            Func::Abs => {}
-            Func::Min => {}
-            Func::Max => {}
-            Func::ReduceSum => {}
-            Func::ReduceProd => {}
-            Func::ReduceMin => {}
-            Func::ReduceMax => {}
-            Func::Clz => {}
-            Func::Ctz => {}
-            Func::PopCount => {}
-            Func::Reverse => {}
-            Func::IsInf => {}
-            Func::IsNan => {}
-            Func::Acos => {}
-            Func::Acosh => {}
-            Func::Asin => {}
-            Func::Asinh => {}
-            Func::Atan => {}
-            Func::Atan2 => {}
-            Func::Atanh => {}
-            Func::Cos => {}
-            Func::Cosh => {}
-            Func::Sin => {}
-            Func::Sinh => {}
-            Func::Tan => {}
-            Func::Tanh => {}
-            Func::Exp => {}
-            Func::Exp2 => {}
-            Func::Exp10 => {}
-            Func::Log => {}
-            Func::Log2 => {}
-            Func::Log10 => {}
-            Func::Powi => {}
-            Func::Powf => {}
-            Func::Sqrt => {}
-            Func::Rsqrt => {}
-            Func::Ceil => {}
-            Func::Floor => {}
-            Func::Fract => {}
-            Func::Trunc => {}
-            Func::Round => {}
-            Func::Fma => {}
-            Func::Copysign => {}
-            Func::Cross => {}
-            Func::Dot => {}
-            Func::OuterProduct => {}
-            Func::Length => {}
-            Func::LengthSquared => {}
-            Func::Normalize => {}
-            Func::Faceforward => {}
-            Func::Distance => {}
-            Func::Reflect => {}
-            Func::Determinant => {}
-            Func::Transpose => {}
-            Func::Inverse => {}
-            Func::WarpIsFirstActiveLane => {}
-            Func::WarpFirstActiveLane => {}
-            Func::WarpActiveAllEqual => {}
-            Func::WarpActiveBitAnd => {}
-            Func::WarpActiveBitOr => {}
-            Func::WarpActiveBitXor => {}
-            Func::WarpActiveCountBits => {}
-            Func::WarpActiveMax => {}
-            Func::WarpActiveMin => {}
-            Func::WarpActiveProduct => {}
-            Func::WarpActiveSum => {}
-            Func::WarpActiveAll => {}
-            Func::WarpActiveAny => {}
-            Func::WarpActiveBitMask => {}
-            Func::WarpPrefixCountBits => {}
-            Func::WarpPrefixSum => {}
-            Func::WarpPrefixProduct => {}
-            Func::WarpReadLaneAt => {}
-            Func::WarpReadFirstLane => {}
-            Func::SynchronizeBlock => {}
-            Func::AtomicRef => {}
-            Func::AtomicExchange => {}
-            Func::AtomicCompareExchange => {}
-            Func::AtomicFetchAdd => {}
-            Func::AtomicFetchSub => {}
-            Func::AtomicFetchAnd => {}
-            Func::AtomicFetchOr => {}
-            Func::AtomicFetchXor => {}
-            Func::AtomicFetchMin => {}
-            Func::AtomicFetchMax => {}
-            Func::BufferRead => {}
-            Func::BufferWrite => {}
-            Func::BufferSize => {}
-            Func::BufferAddress => {}
-            Func::ByteBufferRead => {}
-            Func::ByteBufferWrite => {}
-            Func::ByteBufferSize => {}
-            Func::Texture2dRead => {}
-            Func::Texture2dWrite => {}
-            Func::Texture2dSize => {}
-            Func::Texture3dRead => {}
-            Func::Texture3dWrite => {}
-            Func::Texture3dSize => {}
-            Func::BindlessTexture2dSample => {}
-            Func::BindlessTexture2dSampleLevel => {}
-            Func::BindlessTexture2dSampleGrad => {}
-            Func::BindlessTexture2dSampleGradLevel => {}
-            Func::BindlessTexture3dSample => {}
-            Func::BindlessTexture3dSampleLevel => {}
-            Func::BindlessTexture3dSampleGrad => {}
-            Func::BindlessTexture3dSampleGradLevel => {}
-            Func::BindlessTexture2dRead => {}
-            Func::BindlessTexture3dRead => {}
-            Func::BindlessTexture2dReadLevel => {}
-            Func::BindlessTexture3dReadLevel => {}
-            Func::BindlessTexture2dSize => {}
-            Func::BindlessTexture3dSize => {}
-            Func::BindlessTexture2dSizeLevel => {}
-            Func::BindlessTexture3dSizeLevel => {}
-            Func::BindlessBufferRead => {}
-            Func::BindlessBufferWrite => {}
-            Func::BindlessBufferSize => {}
-            Func::BindlessBufferAddress => {}
-            Func::BindlessBufferType => {}
-            Func::BindlessByteBufferRead => {}
-            Func::Vec => {}
-            Func::Vec2 => {}
-            Func::Vec3 => {}
-            Func::Vec4 => {}
-            Func::Permute => {}
-            Func::InsertElement => {}
-            Func::ExtractElement => {}
-            Func::GetElementPtr => {}
-            Func::Struct => {}
-            Func::Array => {}
-            Func::Mat => {}
-            Func::Mat2 => {}
-            Func::Mat3 => {}
-            Func::Mat4 => {}
-            Func::Callable(_) => {}
-            Func::CpuCustomOp(_) => {}
-            Func::ShaderExecutionReorder => {}
-            Func::Unknown0 => {}
-            Func::Unknown1 => {}
+            Func::ZeroInitializer
+            | Func::ThreadId
+            | Func::BlockId
+            | Func::WarpSize
+            | Func::WarpLaneId
+            | Func::DispatchId
+            | Func::DispatchSize
+            | Func::CoroId
+            | Func::CoroToken => {
+                self.mark_def(ret, &[], defs, helpers);
+            }
+            Func::Assume | Func::Assert(_) => {
+                self.mark_use_with_possible_implicit_load(args[0], defs, result, helpers);
+            }
+            Func::Unreachable(_) => {
+                if !ret.type_().is_void() {
+                    self.mark_def(ret, &[], defs, helpers);
+                }
+            }
+            Func::PropagateGrad => todo!(),
+            Func::OutputGrad => todo!(),
+            Func::RequiresGradient => todo!(),
+            Func::Backward => todo!(),
+            Func::Gradient => todo!(),
+            Func::GradientMarker => todo!(),
+            Func::AccGrad => todo!(),
+            Func::Detach => todo!(),
+            Func::RayTracingInstanceTransform
+            | Func::RayTracingInstanceVisibilityMask
+            | Func::RayTracingInstanceUserId
+            | Func::RayTracingTraceClosest
+            | Func::RayTracingTraceAny
+            | Func::RayTracingQueryAll
+            | Func::RayTracingQueryAny
+            | Func::RayQueryWorldSpaceRay
+            | Func::RayQueryProceduralCandidateHit
+            | Func::RayQueryTriangleCandidateHit
+            | Func::RayQueryCommittedHit => {
+                for &arg in args {
+                    self.mark_use_with_possible_implicit_load(arg, defs, result, helpers);
+                }
+                self.mark_def(ret, &[], defs, helpers);
+            }
+            Func::RayTracingSetInstanceTransform
+            | Func::RayTracingSetInstanceOpacity
+            | Func::RayTracingSetInstanceVisibility
+            | Func::RayTracingSetInstanceUserId
+            | Func::RayQueryCommitTriangle
+            | Func::RayQueryCommitProcedural
+            | Func::RayQueryTerminate => {
+                for &arg in args {
+                    self.mark_use_with_possible_implicit_load(arg, defs, result, helpers);
+                }
+            }
+            Func::RasterDiscard | Func::SynchronizeBlock => {}
+            Func::IndirectDispatchSetCount | Func::IndirectDispatchSetKernel => {
+                for &arg in args {
+                    self.mark_use_with_possible_implicit_load(arg, defs, result, helpers);
+                }
+            }
+            Func::Load => {
+                self.analyze_load_chain(args[0], defs, result, helpers);
+                self.mark_def(ret, &[], defs, helpers);
+            }
+            Func::GetElementPtr => {
+                for &arg in args.iter().skip(1) {
+                    self.mark_use_with_possible_implicit_load(arg, defs, result, helpers);
+                }
+                // the parent node args[0] will be analyzed at the use site, e.g., when updated/loaded
+            }
+            // (args...) -> ret, simply use the args and define the ret
+            Func::AddressOf
+            | Func::Cast
+            | Func::Bitcast
+            | Func::Pack
+            | Func::Unpack
+            | Func::Add
+            | Func::Sub
+            | Func::Mul
+            | Func::Div
+            | Func::Rem
+            | Func::BitAnd
+            | Func::BitOr
+            | Func::BitXor
+            | Func::Shl
+            | Func::Shr
+            | Func::RotRight
+            | Func::RotLeft
+            | Func::Eq
+            | Func::Ne
+            | Func::Lt
+            | Func::Le
+            | Func::Gt
+            | Func::Ge
+            | Func::MatCompMul
+            | Func::Neg
+            | Func::Not
+            | Func::BitNot
+            | Func::All
+            | Func::Any
+            | Func::Select
+            | Func::Clamp
+            | Func::Lerp
+            | Func::Step
+            | Func::SmoothStep
+            | Func::Saturate
+            | Func::Abs
+            | Func::Min
+            | Func::Max
+            | Func::ReduceSum
+            | Func::ReduceProd
+            | Func::ReduceMin
+            | Func::ReduceMax
+            | Func::Clz
+            | Func::Ctz
+            | Func::PopCount
+            | Func::Reverse
+            | Func::IsInf
+            | Func::IsNan
+            | Func::Acos
+            | Func::Acosh
+            | Func::Asin
+            | Func::Asinh
+            | Func::Atan
+            | Func::Atan2
+            | Func::Atanh
+            | Func::Cos
+            | Func::Cosh
+            | Func::Sin
+            | Func::Sinh
+            | Func::Tan
+            | Func::Tanh
+            | Func::Exp
+            | Func::Exp2
+            | Func::Exp10
+            | Func::Log
+            | Func::Log2
+            | Func::Log10
+            | Func::Powi
+            | Func::Powf
+            | Func::Sqrt
+            | Func::Rsqrt
+            | Func::Ceil
+            | Func::Floor
+            | Func::Fract
+            | Func::Trunc
+            | Func::Round
+            | Func::Fma
+            | Func::Copysign
+            | Func::Cross
+            | Func::Dot
+            | Func::OuterProduct
+            | Func::Length
+            | Func::LengthSquared
+            | Func::Normalize
+            | Func::Faceforward
+            | Func::Distance
+            | Func::Reflect
+            | Func::Determinant
+            | Func::Transpose
+            | Func::Inverse
+            | Func::Vec
+            | Func::Vec2
+            | Func::Vec3
+            | Func::Vec4
+            | Func::Permute
+            | Func::InsertElement
+            | Func::ExtractElement
+            | Func::Struct
+            | Func::Array
+            | Func::Mat
+            | Func::Mat2
+            | Func::Mat3
+            | Func::Mat4
+            | Func::WarpIsFirstActiveLane
+            | Func::WarpFirstActiveLane
+            | Func::WarpActiveAllEqual
+            | Func::WarpActiveBitAnd
+            | Func::WarpActiveBitOr
+            | Func::WarpActiveBitXor
+            | Func::WarpActiveCountBits
+            | Func::WarpActiveMax
+            | Func::WarpActiveMin
+            | Func::WarpActiveProduct
+            | Func::WarpActiveSum
+            | Func::WarpActiveAll
+            | Func::WarpActiveAny
+            | Func::WarpActiveBitMask
+            | Func::WarpPrefixCountBits
+            | Func::WarpPrefixSum
+            | Func::WarpPrefixProduct
+            | Func::WarpReadLaneAt
+            | Func::WarpReadFirstLane
+            | Func::AtomicExchange
+            | Func::AtomicCompareExchange
+            | Func::AtomicFetchAdd
+            | Func::AtomicFetchSub
+            | Func::AtomicFetchAnd
+            | Func::AtomicFetchOr
+            | Func::AtomicFetchXor
+            | Func::AtomicFetchMin
+            | Func::AtomicFetchMax
+            | Func::BufferRead
+            | Func::BufferSize
+            | Func::BufferAddress
+            | Func::ByteBufferRead
+            | Func::ByteBufferSize
+            | Func::Texture2dRead
+            | Func::Texture2dSize
+            | Func::Texture3dRead
+            | Func::Texture3dSize
+            | Func::BindlessTexture2dSample
+            | Func::BindlessTexture2dSampleLevel
+            | Func::BindlessTexture2dSampleGrad
+            | Func::BindlessTexture2dSampleGradLevel
+            | Func::BindlessTexture3dSample
+            | Func::BindlessTexture3dSampleLevel
+            | Func::BindlessTexture3dSampleGrad
+            | Func::BindlessTexture3dSampleGradLevel
+            | Func::BindlessTexture2dRead
+            | Func::BindlessTexture3dRead
+            | Func::BindlessTexture2dReadLevel
+            | Func::BindlessTexture3dReadLevel
+            | Func::BindlessTexture2dSize
+            | Func::BindlessTexture3dSize
+            | Func::BindlessTexture2dSizeLevel
+            | Func::BindlessTexture3dSizeLevel
+            | Func::BindlessBufferRead
+            | Func::BindlessBufferSize
+            | Func::BindlessBufferAddress
+            | Func::BindlessBufferType
+            | Func::BindlessByteBufferRead => {
+                for &arg in args {
+                    self.mark_use_with_possible_implicit_load(arg, defs, result, helpers);
+                }
+                self.mark_def(ret, &[], defs, helpers);
+            }
+            Func::AtomicRef => unreachable!("atomic ref should be lowered"),
+            // void return, defines nothing
+            Func::BufferWrite
+            | Func::ByteBufferWrite
+            | Func::Texture2dWrite
+            | Func::Texture3dWrite
+            | Func::BindlessBufferWrite
+            | Func::ShaderExecutionReorder => {
+                for &arg in args {
+                    self.mark_use_with_possible_implicit_load(arg, defs, result, helpers);
+                }
+            }
+            Func::CpuCustomOp(_) => todo!(),
+            Func::Unknown0 => todo!(),
+            Func::Unknown1 => todo!(),
+            Func::Callable(callable) => {
+                self.analyze_callable(ret, callable.0.as_ref(), args, defs, result, helpers);
+            }
         }
-        todo!()
     }
 
     fn mark_use_with_possible_implicit_load(

@@ -10,3 +10,4 @@ pub mod replayable_values;
 pub mod scope_tree;
 pub mod usedef;
 pub mod utility;
+mod const_eval;

@@ -150,7 +150,7 @@ impl ReplayableValueAnalysis {
 impl ReplayableValueAnalysis {
     pub fn new(uniform_only: bool) -> Self {
         Self {
-            uniform_only: uniform_only,
+            uniform_only,
             known: HashMap::new(),
             args: HashMap::new(),
         }

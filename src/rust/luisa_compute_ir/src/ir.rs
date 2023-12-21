@@ -999,77 +999,84 @@ impl std::fmt::Display for Const {
 }
 
 impl Const {
-    pub fn get_i32(&self) -> i32 {
+    pub fn try_get_i32(&self) -> Option<i32> {
         match self {
-            Const::Int8(v) => *v as i32,
-            Const::Uint8(v) => *v as i32,
-            Const::Int16(v) => *v as i32,
-            Const::Uint16(v) => *v as i32,
-            Const::Int32(v) => *v,
-            Const::Uint32(v) => *v as i32,
-            Const::Int64(v) => *v as i32,
-            Const::Uint64(v) => *v as i32,
+            Const::Int8(v) => Some(*v as i32),
+            Const::Uint8(v) => Some(*v as i32),
+            Const::Int16(v) => Some(*v as i32),
+            Const::Uint16(v) => Some(*v as i32),
+            Const::Int32(v) => Some(*v as i32),
+            Const::Uint32(v) => Some(*v as i32),
+            Const::Int64(v) => Some(*v as i32),
+            Const::Uint64(v) => Some(*v as i32),
             Const::One(t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                1
+                if t.is_primitive() && t.is_int() {
+                    Some(1)
+                } else {
+                    None
+                }
             }
             Const::Zero(t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                0
+                if t.is_primitive() && t.is_int() {
+                    Some(0)
+                } else {
+                    None
+                }
             }
             Const::Generic(slice, t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                assert_eq!(slice.len(), 4, "invalid slice length for i32");
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(slice);
-                i32::from_le_bytes(buf)
+                if t.is_primitive() && t.is_int() {
+                    let slice = slice.as_ref();
+                    match slice.len() {
+                        1 => Some(slice[0] as i32),
+                        2 => Some(i16::from_le_bytes(slice.try_into().unwrap()) as i32),
+                        4 => Some(i32::from_le_bytes(slice.try_into().unwrap())),
+                        8 => Some(i64::from_le_bytes(slice.try_into().unwrap()) as i32),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
             }
             _ => panic!("cannot convert to i32"),
         }
     }
-    pub fn get_bool(&self) -> bool {
+
+    pub fn get_i32(&self) -> i32 {
+        self.try_get_i32().unwrap()
+    }
+
+    pub fn try_get_bool(&self) -> Option<bool> {
         match self {
-            Const::Bool(v) => *v,
+            Const::Bool(v) => Some(*v),
             Const::One(t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                true
+                if t.is_primitive() && t.is_bool() {
+                    Some(true)
+                } else {
+                    None
+                }
             }
             Const::Zero(t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                false
+                if t.is_primitive() && t.is_bool() {
+                    Some(false)
+                } else {
+                    None
+                }
             }
             Const::Generic(slice, t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                assert_eq!(slice.len(), 1, "invalid slice length for bool");
-                slice[0] != 0
+                if t.is_primitive() && t.is_bool() {
+                    Some(slice[0] != 0)
+                } else {
+                    None
+                }
             }
             _ => panic!("cannot convert to bool"),
         }
     }
+
+    pub fn get_bool(&self) -> bool {
+        self.try_get_bool().unwrap()
+    }
+
     pub fn type_(&self) -> CArc<Type> {
         match self {
             Const::Zero(ty) => ty.clone(),

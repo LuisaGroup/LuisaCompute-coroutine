@@ -88,6 +88,14 @@ impl<'a> AccessTreeNodeRef<'a> {
     }
 }
 
+macro_rules! safe {
+    ($($x:tt)*) => {
+        unsafe {
+            $($x)*
+        }
+    };
+}
+
 impl AccessTree {
     fn new() -> Self {
         Self {
@@ -285,14 +293,14 @@ impl AccessTree {
     // if all children of a node are accessed as a whole, then we can coalesce them into
     // a single leaf node (i.e., removing all of its children)
     fn coalesce_whole_access_chains(&mut self) {
-        let this = unsafe { &mut *(self as *mut Self) };
+        let this = safe! { &mut *(self as *mut Self) };
         for (&node, &node_ref) in self.nodes.iter() {
             this._coalesce_whole_access_chains(node_ref, node.type_().as_ref());
         }
     }
 
     fn _coalesce_whole_access_chains(&mut self, node_ref: AccessNodeRef, t: &Type) {
-        let this = unsafe { &mut *(self as *mut Self) };
+        let this = safe! { &mut *(self as *mut Self) };
         let full_children_count = self
             .get(node_ref)
             .children
@@ -309,7 +317,7 @@ impl AccessTree {
         let dim = match t {
             Type::Vector(v) => v.length as usize,
             Type::Matrix(m) => m.dimension as usize,
-            Type::Array(a) => a.length as usize,
+            Type::Array(a) => a.length,
             Type::Struct(s) => s.fields.len(),
             _ => 0,
         };
@@ -322,7 +330,7 @@ impl AccessTree {
     // we conservatively assume that all of its children are accessed with dynamic indices
     // and collapse the access chain into a single node (i.e., removing all of its children)
     fn collapse_dynamic_access_chains(&mut self) {
-        let this = unsafe { &mut *(self as *mut Self) };
+        let this = safe! { &mut *(self as *mut Self) };
         for (&node, &node_ref) in self.nodes.iter() {
             this._collapse_dynamic_access_chains(node_ref, node.type_().as_ref());
         }
@@ -336,7 +344,7 @@ impl AccessTree {
         if has_dynamic_access {
             self.get_mut(node_ref).children.clear();
         } else {
-            let this = unsafe { &mut *(self as *mut Self) };
+            let this = safe! { &mut *(self as *mut Self) };
             for (&i, &child) in self.get(node_ref).children.iter() {
                 if let AccessChainIndex::Static(index) = i {
                     let elem = t.extract(index as usize);

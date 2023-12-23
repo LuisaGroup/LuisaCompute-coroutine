@@ -169,7 +169,7 @@ impl AccessTree {
             let mut access_node_ref = access_node_ref;
             for i in access_chain {
                 if self.get(access_node_ref).children.is_empty() {
-                    // The node is accessed as a whole, so any further access to its children is contained.
+                    // The node is accessed as a whole, so any further access to its children is contained
                     return true;
                 } else if let Some(child) = self.get(access_node_ref).children.get(i).cloned() {
                     // go into the child node if it exists
@@ -180,6 +180,29 @@ impl AccessTree {
                 }
             }
             self.get(access_node_ref).children.is_empty()
+        } else {
+            false
+        }
+    }
+
+    // check if a node overlaps with the given access chain
+    fn overlaps(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
+        if let Some(access_node_ref) = self.nodes.get(&node).cloned() {
+            let mut access_node_ref = access_node_ref;
+            for i in access_chain {
+                if self.get(access_node_ref).children.is_empty() {
+                    // The node is accessed as a whole, so any further access to its children is contained
+                    return true;
+                } else if let Some(child) = self.get(access_node_ref).children.get(i).cloned() {
+                    // go into the child node if it exists
+                    access_node_ref = child;
+                } else {
+                    // the child node does not exist, so the chains do not overlap
+                    return false;
+                }
+            }
+            // the access chain is a prefix of the node's access chain, so they overlap
+            true
         } else {
             false
         }

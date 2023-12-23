@@ -1039,12 +1039,46 @@ pub(crate) struct CoroGraphDefUse {
 }
 
 impl CoroGraphDefUse {
-    fn dump_access_tree(uses: &AccessTree) {
-        for (i, node) in uses.nodes.keys().enumerate() {
-            let node = node.get();
-            println!("  #{:<3} {:?}", i, node.type_.as_ref());
-            println!("       {:?}", node.instruction.as_ref());
+    fn packed_aggregate_size(t: &Type) -> usize {
+        match t {
+            Type::Vector(v) => v.element().size() * v.length as usize,
+            Type::Matrix(m) => m.element().size() * m.dimension as usize * m.dimension as usize,
+            Type::Struct(s) => s
+                .fields
+                .iter()
+                .map(|f| Self::packed_aggregate_size(f.as_ref()))
+                .sum(),
+            _ => t.size(),
         }
+    }
+    fn compute_memory_footprint(uses: &AccessTree, node: AccessNodeRef, t: &Type) -> usize {
+        let node = uses.get(node);
+        if node.children.is_empty() {
+            Self::packed_aggregate_size(t)
+        } else {
+            node.children
+                .iter()
+                .map(|(&i, &child)| match i {
+                    AccessChainIndex::Static(i) => {
+                        Self::compute_memory_footprint(uses, child, t.extract(i as usize).as_ref())
+                    }
+                    _ => unreachable!("access chain should be truncated at dynamic indices"),
+                })
+                .sum()
+        }
+    }
+
+    fn dump_access_tree(uses: &AccessTree) {
+        let mut total_size = 0usize;
+        for (i, (node, access_node)) in uses.nodes.iter().enumerate() {
+            let node = node.get();
+            let t = node.type_.clone();
+            let size = Self::compute_memory_footprint(uses, *access_node, &t);
+            println!("  #{:<3} {:?} (size = {})", i, node.type_.as_ref(), size);
+            println!("       {:?}", node.instruction.as_ref());
+            total_size += size;
+        }
+        println!("  Total Frame Size = {}", total_size);
     }
 
     pub fn dump(&self) {

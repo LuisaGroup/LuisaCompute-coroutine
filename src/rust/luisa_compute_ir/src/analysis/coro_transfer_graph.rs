@@ -10,16 +10,16 @@ use std::collections::HashMap;
 struct CoroTransferEdge {
     // the target of the transfer (another subscope)
     target: CoroScopeRef,
-    // the alive states at the suspension point, i.e. the states that will be read
+    // the live states at the suspension point, i.e. the states that will be read
     // from reachable subscopes and should thus be saved in the coroutine frame
-    alive_states: AccessTree,
+    live_states: AccessTree,
 }
 
 // A subscope of the coroutine
 struct CoroTransferNode {
     scope: CoroScopeRef,
     outlets: Vec<CoroTransferEdge>,
-    union_alive_states: AccessTree,
+    union_live_states: AccessTree,
 }
 
 pub(crate) struct CoroTransferGraph {
@@ -39,10 +39,10 @@ impl CoroTransferGraph {
             );
             for edge in node.outlets.iter() {
                 println!("- Target: {} -", edge.target.0);
-                edge.alive_states.dump();
+                edge.live_states.dump();
             }
-            println!("- Union Alive States -");
-            node.union_alive_states.dump();
+            println!("- Union Live States -");
+            node.union_live_states.dump();
         }
     }
 }
@@ -111,11 +111,11 @@ impl<'a> CoroTransferGraphBuilder<'a> {
                         let target = self.graph.tokens[t];
                         CoroTransferEdge {
                             target,
-                            alive_states: self.use_def.scopes[&target].external_uses.clone(),
+                            live_states: self.use_def.scopes[&target].external_uses.clone(),
                         }
                     })
                     .collect(),
-                union_alive_states: AccessTree::new(),
+                union_live_states: AccessTree::new(),
             };
             // insert the node into the graph
             g.nodes.insert(scope_ref, node);
@@ -123,6 +123,8 @@ impl<'a> CoroTransferGraphBuilder<'a> {
     }
 
     fn compute_alive_states(&self, g: &mut CoroTransferGraph) {
+        // TODO: currently we do not consider the reaching definitions of the states
+        //  that are killed (overwritten by the internal defs) in the subscope.
         let mut any_change = true;
         while any_change {
             any_change = false;
@@ -133,22 +135,20 @@ impl<'a> CoroTransferGraphBuilder<'a> {
                     let new_alive_states = gg.nodes[&edge.target]
                         .outlets
                         .iter()
-                        .fold(edge.alive_states.clone(), |acc, e| {
-                            acc.union(&e.alive_states)
-                        });
-                    if new_alive_states != edge.alive_states {
+                        .fold(edge.live_states.clone(), |acc, e| acc.union(&e.live_states));
+                    if new_alive_states != edge.live_states {
                         any_change = true;
-                        edge.alive_states = new_alive_states;
+                        edge.live_states = new_alive_states;
                     }
                 }
             }
         }
         for node in g.nodes.values_mut() {
             // compute the union of the alive states at all the suspension points
-            node.union_alive_states = node
+            node.union_live_states = node
                 .outlets
                 .iter()
-                .fold(AccessTree::new(), |acc, e| acc.union(&e.alive_states));
+                .fold(AccessTree::new(), |acc, e| acc.union(&e.live_states));
         }
     }
 

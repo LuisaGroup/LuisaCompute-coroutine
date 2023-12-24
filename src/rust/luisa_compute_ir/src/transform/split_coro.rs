@@ -3,6 +3,7 @@ use std::collections::HashMap;
 // use crate::analysis::coro_graph::CoroPreliminaryGraph;
 use crate::analysis::coro_def_use::CoroDefUseAnalysis;
 use crate::analysis::coro_graph::CoroGraph;
+use crate::analysis::coro_transfer_graph::CoroTransferGraph;
 use crate::ir::{
     new_node, BasicBlock, CallableModule, Capture, Instruction, IrBuilder, Module, ModulePools,
     Node, NodeRef,
@@ -214,6 +215,8 @@ impl Transform for SplitCoro {
         graph.dump();
         let coro_def_use = CoroDefUseAnalysis::analyze(&graph);
         coro_def_use.dump();
+        let transfer_graph = CoroTransferGraph::build(&graph, &coro_def_use);
+        transfer_graph.dump();
         // TODO
         let frame_analyser = CoroFrameAnalysis::analyse(&graph, &callable);
         SplitManager::split(callable, graph, frame_analyser)

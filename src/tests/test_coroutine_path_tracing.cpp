@@ -197,6 +197,7 @@ int main(int argc, char *argv[]) {
         auto ry = lcg(state);
         auto pixel = (make_float2(coord) + make_float2(rx, ry)) / frame_size * 2.0f - 1.0f;
         auto radiance = def(make_float3(0.0f));
+        $suspend("before tracing");
         $for (i, spp_per_dispatch) {
             auto ray = generate_ray(pixel * make_float2(1.0f, -1.0f));
             auto beta = def(make_float3(1.0f));
@@ -284,6 +285,7 @@ int main(int argc, char *argv[]) {
                 beta *= 1.0f / q;
             };
         };
+        $suspend("write to image");
         radiance /= static_cast<float>(spp_per_dispatch);
         seed_image.write(coord, make_uint4(state));
         $if (any(dsl::isnan(radiance))) { radiance = make_float3(0.0f); };

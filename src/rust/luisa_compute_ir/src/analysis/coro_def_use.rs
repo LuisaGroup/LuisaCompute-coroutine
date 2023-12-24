@@ -8,9 +8,12 @@
 
 use crate::analysis::callable_arg_usages::CallableArgumentUsageAnalysis;
 use crate::analysis::const_eval::ConstEval;
-use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
+use crate::analysis::coro_graph::{
+    CoroGraph, CoroInstrRef, CoroInstruction, CoroScope, CoroScopeRef,
+};
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
 use crate::ir::{BasicBlock, CallableModule, Func, Instruction, NodeRef, Type, Usage};
+use crate::transform::autodiff::grad_type_of;
 use std::collections::{HashMap, HashSet};
 
 // The access tree records the accessed members of a value, where accessed children are
@@ -48,6 +51,34 @@ pub(crate) struct AccessTree {
     nodes: HashMap<NodeRef, AccessNodeRef>,
     _storage: Vec<AccessNode>,
 }
+
+fn identical_access_tree_nodes(a: AccessTreeNodeRef, b: AccessTreeNodeRef) -> bool {
+    let a_children = &a.get().children;
+    let b_children = &b.get().children;
+    a_children.len() == b_children.len()
+        && a_children.keys().all(|k| b_children.contains_key(k))
+        && a_children.iter().all(|(i, &a_node)| {
+            let b_node = b_children[i];
+            let a = AccessTreeNodeRef::new(a.tree, a_node);
+            let b = AccessTreeNodeRef::new(b.tree, b_node);
+            identical_access_tree_nodes(a, b)
+        })
+}
+
+impl PartialEq for AccessTree {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes.len() == other.nodes.len()
+            && self.nodes.keys().all(|k| other.nodes.contains_key(k))
+            && self.nodes.iter().all(|(node, &a)| {
+                let b = other.nodes[node];
+                let a = AccessTreeNodeRef::new(self, a);
+                let b = AccessTreeNodeRef::new(other, b);
+                identical_access_tree_nodes(a, b)
+            })
+    }
+}
+
+impl Eq for AccessTree {}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AccessTreeNodeRef<'a> {
@@ -104,11 +135,11 @@ impl AccessTree {
         }
     }
 
-    fn get(&self, node: AccessNodeRef) -> &AccessNode {
+    pub fn get(&self, node: AccessNodeRef) -> &AccessNode {
         &self._storage[node.0]
     }
 
-    fn get_mut(&mut self, node: AccessNodeRef) -> &mut AccessNode {
+    pub fn get_mut(&mut self, node: AccessNodeRef) -> &mut AccessNode {
         &mut self._storage[node.0]
     }
 
@@ -164,7 +195,7 @@ impl AccessTree {
     }
 
     // check if a node is accessed with the given access chain
-    fn contains(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
+    pub fn contains(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
         if let Some(access_node_ref) = self.nodes.get(&node).cloned() {
             let mut access_node_ref = access_node_ref;
             for i in access_chain {
@@ -186,7 +217,7 @@ impl AccessTree {
     }
 
     // check if a node overlaps with the given access chain
-    fn overlaps(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
+    pub fn overlaps(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
         if let Some(access_node_ref) = self.nodes.get(&node).cloned() {
             let mut access_node_ref = access_node_ref;
             for i in access_chain {
@@ -249,7 +280,7 @@ impl AccessTree {
     }
 
     // intersect two access trees
-    fn intersect(&self, other: &Self) -> Self {
+    pub fn intersect(&self, other: &Self) -> Self {
         let mut new_tree = Self::new();
         for common_node in self.nodes.keys().filter(|k| other.nodes.contains_key(k)) {
             if let Some(merged) = new_tree.intersect_nodes(
@@ -293,7 +324,7 @@ impl AccessTree {
         }
     }
 
-    fn union(&self, other: &Self) -> Self {
+    pub fn union(&self, other: &Self) -> Self {
         let mut new_tree = Self::new();
         for common_node in self.nodes.keys().filter(|k| other.nodes.contains_key(k)) {
             let merged = new_tree.union_nodes(
@@ -1057,11 +1088,11 @@ impl<'a> CoroDefUseAnalysis<'a> {
 }
 
 pub(crate) struct CoroGraphDefUse {
-    pub scopes: Vec<CoroScopeDefUse>,
+    pub scopes: HashMap<CoroScopeRef, CoroScopeDefUse>,
     pub union_uses: AccessTree,
 }
 
-impl CoroGraphDefUse {
+impl AccessTree {
     fn packed_aggregate_size(t: &Type) -> usize {
         match t {
             Type::Vector(v) => v.element().size() * v.length as usize,
@@ -1090,35 +1121,37 @@ impl CoroGraphDefUse {
                 .sum()
         }
     }
-
-    fn dump_access_tree(uses: &AccessTree) {
+    pub fn dump(&self) {
         let mut total_size = 0usize;
-        for (i, (node, access_node)) in uses.nodes.iter().enumerate() {
+        for (i, (node, access_node)) in self.nodes.iter().enumerate() {
             let node = node.get();
             let t = node.type_.clone();
-            let size = Self::compute_memory_footprint(uses, *access_node, &t);
+            let size = Self::compute_memory_footprint(self, *access_node, &t);
             println!("  #{:<3} {:?} (size = {})", i, node.type_.as_ref(), size);
             println!("       {:?}", node.instruction.as_ref());
             total_size += size;
         }
         println!("  Total Frame Size = {}", total_size);
     }
+}
 
+impl CoroGraphDefUse {
     pub fn dump(&self) {
         println!("===================== CoroGraph Def-Use =====================");
-        for (i, scope) in self.scopes.iter().enumerate() {
+        for i in 0..self.scopes.len() {
+            let scope = &self.scopes[&CoroScopeRef(i)];
             println!(
                 "=============== Scope #{} External Uses (N = {}) ===============",
                 i,
                 scope.external_uses.nodes.len()
             );
-            Self::dump_access_tree(&scope.external_uses);
+            scope.external_uses.dump();
         }
         println!(
             "================ Union of External Uses (N = {}) ================",
             self.union_uses.nodes.len()
         );
-        Self::dump_access_tree(&self.union_uses);
+        self.union_uses.dump();
     }
 }
 
@@ -1127,9 +1160,8 @@ impl<'a> CoroDefUseAnalysis<'a> {
         Self { graph }
     }
 
-    pub fn analyze_scope(&self, scope_ref: CoroScopeRef) -> CoroScopeDefUse {
+    pub fn analyze_scope(&self, scope: &CoroScope) -> CoroScopeDefUse {
         let mut def_use = CoroScopeDefUse::new();
-        let scope = self.graph.get_scope(scope_ref);
         self.analyze_direct_block(
             &scope.instructions,
             &mut AccessTree::new(),
@@ -1146,15 +1178,18 @@ impl<'a> CoroDefUseAnalysis<'a> {
     }
 
     pub fn analyze_graph(&self) -> CoroGraphDefUse {
-        let scopes: Vec<_> = (0..self.graph.scopes.len())
-            .map(|i| {
-                let scope = CoroScopeRef(i);
-                self.analyze_scope(scope)
-            })
+        let scopes: HashMap<_, _> = self
+            .graph
+            .scopes
+            .iter()
+            .enumerate()
+            .map(|(i, scope)| (CoroScopeRef(i), self.analyze_scope(scope)))
             .collect();
-        let mut union_uses = scopes.iter().fold(AccessTree::new(), |acc, scope| {
-            acc.union(&scope.external_uses)
-        });
+        let mut union_uses = scopes
+            .iter()
+            .fold(AccessTree::new(), |acc, (_, scope_def_use)| {
+                acc.union(&scope_def_use.external_uses)
+            });
         union_uses.coalesce_whole_access_chains();
         union_uses.collapse_dynamic_access_chains();
         CoroGraphDefUse { scopes, union_uses }

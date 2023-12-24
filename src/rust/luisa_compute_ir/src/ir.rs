@@ -2121,6 +2121,17 @@ impl NodeCollector {
                     self.visit_block(*block);
                 }
             }
+            Instruction::AdDetach(body) => {
+                self.visit_block(*body);
+            }
+            Instruction::RayQuery {
+                ray_query: _,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                self.visit_block(*on_triangle_hit);
+                self.visit_block(*on_procedural_hit);
+            }
             _ => {}
         }
     }

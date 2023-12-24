@@ -4,7 +4,7 @@
 // the frontend to help the scheduler to optimize the coroutine execution.
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
-use crate::analysis::coro_use_def::{AccessTree, CoroGraphDefUse};
+use crate::analysis::coro_use_def::{AccessTree, CoroGraphUseDef};
 use std::collections::HashMap;
 
 struct CoroTransferEdge {
@@ -49,11 +49,11 @@ impl CoroTransferGraph {
 
 struct CoroTransferGraphBuilder<'a> {
     graph: &'a CoroGraph,
-    use_def: &'a CoroGraphDefUse,
+    use_def: &'a CoroGraphUseDef,
 }
 
 impl<'a> CoroTransferGraphBuilder<'a> {
-    fn new(graph: &'a CoroGraph, use_def: &'a CoroGraphDefUse) -> Self {
+    fn new(graph: &'a CoroGraph, use_def: &'a CoroGraphUseDef) -> Self {
         Self { graph, use_def }
     }
 
@@ -123,8 +123,6 @@ impl<'a> CoroTransferGraphBuilder<'a> {
     }
 
     fn compute_alive_states(&self, g: &mut CoroTransferGraph) {
-        // TODO: currently we do not consider the reaching definitions of the states
-        //  that are killed (overwritten by the internal defs) in the subscope.
         let mut any_change = true;
         while any_change {
             any_change = false;
@@ -132,10 +130,15 @@ impl<'a> CoroTransferGraphBuilder<'a> {
             for node in g.nodes.values_mut() {
                 for edge in node.outlets.iter_mut() {
                     // propagate the alive states from the target subscopes
-                    let new_alive_states = gg.nodes[&edge.target]
-                        .outlets
-                        .iter()
-                        .fold(edge.live_states.clone(), |acc, e| acc.union(&e.live_states));
+                    let target_use_def = &self.use_def.scopes[&edge.target];
+                    let target_outlets = &gg.nodes[&edge.target].outlets;
+                    let new_alive_states =
+                        target_outlets
+                            .iter()
+                            .fold(edge.live_states.clone(), |acc, e| {
+                                let killed = &target_use_def.internal_kills[&e.target];
+                                acc.union(&e.live_states.subtract(killed))
+                            });
                     if new_alive_states != edge.live_states {
                         any_change = true;
                         edge.live_states = new_alive_states;
@@ -163,7 +166,7 @@ impl<'a> CoroTransferGraphBuilder<'a> {
 }
 
 impl CoroTransferGraph {
-    pub fn build(graph: &CoroGraph, use_def: &CoroGraphDefUse) -> Self {
+    pub fn build(graph: &CoroGraph, use_def: &CoroGraphUseDef) -> Self {
         CoroTransferGraphBuilder::new(graph, use_def).build()
     }
 }

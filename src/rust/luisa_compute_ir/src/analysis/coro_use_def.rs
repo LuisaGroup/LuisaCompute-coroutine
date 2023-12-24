@@ -344,6 +344,58 @@ impl AccessTree {
         new_tree
     }
 
+    fn _enumerate_chains_for_subtraction(
+        &self,
+        node: NodeRef,
+        access_node: &AccessNode,
+        access_chain: &mut Vec<AccessChainIndex>,
+        other: &Self,
+        result: &mut Self,
+    ) {
+        if access_node.children.is_empty() {
+            // leaf node
+            if !other.contains(node, access_chain) {
+                result.insert(node, access_chain);
+            }
+        } else {
+            // non-leaf node
+            for (i, access_node) in access_node.children.iter() {
+                match i {
+                    AccessChainIndex::Static(_) => {
+                        access_chain.push(*i);
+                        self._enumerate_chains_for_subtraction(
+                            node,
+                            self.get(*access_node),
+                            access_chain,
+                            other,
+                            result,
+                        );
+                        access_chain.pop();
+                    }
+                    AccessChainIndex::Dynamic(_) => unimplemented!("dynamic access chains"),
+                }
+            }
+        }
+    }
+
+    // subtract two access trees (a - b)
+    pub fn subtract(&self, other: &Self) -> Self {
+        // enumerate all paths in the tree and insert them if not contained in other
+        let mut new_tree = Self::new();
+        let mut access_chain = Vec::new();
+        for (node, &node_ref) in self.nodes.iter() {
+            access_chain.clear();
+            self._enumerate_chains_for_subtraction(
+                *node,
+                self.get(node_ref),
+                &mut access_chain,
+                other,
+                &mut new_tree,
+            );
+        }
+        new_tree
+    }
+
     // if all children of a node are accessed as a whole, then we can coalesce them into
     // a single leaf node (i.e., removing all of its children)
     fn coalesce_whole_access_chains(&mut self) {
@@ -438,17 +490,18 @@ impl AccessTree {
 pub(crate) struct CoroScopeUseDef {
     // uses that are not dominated by defs in the current scope
     pub external_uses: AccessTree,
-    // defs at the suspend point that can be safely localized in the current scope
+    // defs at the suspend point that can be safely localized in the current scope as
+    // they kill the possible definitions that are passed in through the frame
     // note: the scope might define other values at the suspend point, but they are
     //       unsafe to localize because their defs do not dominate the suspend point
-    pub internal_defs: HashMap<u32, AccessTree>,
+    pub internal_kills: HashMap<CoroScopeRef, AccessTree>,
 }
 
 impl CoroScopeUseDef {
     pub fn new() -> Self {
         Self {
             external_uses: AccessTree::new(),
-            internal_defs: HashMap::new(),
+            internal_kills: HashMap::new(),
         }
     }
 }
@@ -1074,12 +1127,13 @@ impl<'a> CoroUseDefAnalysis<'a> {
             }
             CoroInstruction::Suspend { token } => {
                 // record the defs at the suspend point
-                if let Some(d) = result.internal_defs.get_mut(token) {
+                let scope_ref = self.graph.tokens[token];
+                if let Some(d) = result.internal_kills.get_mut(&scope_ref) {
                     *d = AccessTree::intersect(d, defs);
                     d.coalesce_whole_access_chains();
                 } else {
                     defs.coalesce_whole_access_chains();
-                    result.internal_defs.insert(*token, defs.clone());
+                    result.internal_kills.insert(scope_ref, defs.clone());
                 }
             }
             CoroInstruction::Terminate => {}
@@ -1087,7 +1141,7 @@ impl<'a> CoroUseDefAnalysis<'a> {
     }
 }
 
-pub(crate) struct CoroGraphDefUse {
+pub(crate) struct CoroGraphUseDef {
     pub scopes: HashMap<CoroScopeRef, CoroScopeUseDef>,
     pub union_uses: AccessTree,
 }
@@ -1135,7 +1189,7 @@ impl AccessTree {
     }
 }
 
-impl CoroGraphDefUse {
+impl CoroGraphUseDef {
     pub fn dump(&self) {
         println!("===================== CoroGraph Use-Def =====================");
         for i in 0..self.scopes.len() {
@@ -1177,7 +1231,7 @@ impl<'a> CoroUseDefAnalysis<'a> {
         use_def
     }
 
-    pub fn analyze_graph(&self) -> CoroGraphDefUse {
+    pub fn analyze_graph(&self) -> CoroGraphUseDef {
         let scopes: HashMap<_, _> = self
             .graph
             .scopes
@@ -1192,10 +1246,10 @@ impl<'a> CoroUseDefAnalysis<'a> {
             });
         union_uses.coalesce_whole_access_chains();
         union_uses.collapse_dynamic_access_chains();
-        CoroGraphDefUse { scopes, union_uses }
+        CoroGraphUseDef { scopes, union_uses }
     }
 
-    pub fn analyze(graph: &'a CoroGraph) -> CoroGraphDefUse {
+    pub fn analyze(graph: &'a CoroGraph) -> CoroGraphUseDef {
         Self::new(graph).analyze_graph()
     }
 }

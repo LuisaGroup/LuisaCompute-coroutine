@@ -1,12 +1,12 @@
 // This file implements the coroutine frame analysis, which uses the result of the
-// coroutine definition-use analysis to determine the layout of the coroutine frame,
-// i.e. the memory layout of the state structure that is passed around between the
-// subroutines of the coroutine.
+// coroutine use-def analysis to determine the layout of the coroutine frame, i.e.,
+// the memory layout of the state structure passed around between the subroutines
+// of the coroutine.
 //
 // Current implementation handles the task in the following steps:
 // 1. Walk the original module to obtain the order of all the IR nodes.
-// 2. Use the `external_uses` from the coroutine definition-use analysis to determine
-//    the set of coroutine arguments that *must* be passed through the coroutine frame.
+// 2. Use the `external_uses` from the coroutine use-def analysis to determine the set
+//    of coroutine arguments that should be passed through the coroutine state frame.
 //    At present, we simply take the union of the external uses of all the subroutines.
 //    In the future, we might use, e.g., liveness analysis and register allocation to
 //    reduce the number of arguments that need to be passed through the frame. We also

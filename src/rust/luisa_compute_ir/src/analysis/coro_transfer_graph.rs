@@ -3,10 +3,8 @@
 // The result is used in the coroutine frame layout analysis and will be passed to
 // the frontend to help the scheduler to optimize the coroutine execution.
 
-use crate::analysis::coro_def_use::{AccessTree, CoroGraphDefUse};
-use crate::analysis::coro_graph::{
-    CoroGraph, CoroInstrRef, CoroInstruction, CoroScope, CoroScopeRef,
-};
+use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
+use crate::analysis::coro_use_def::{AccessTree, CoroGraphDefUse};
 use std::collections::HashMap;
 
 struct CoroTransferEdge {
@@ -21,6 +19,7 @@ struct CoroTransferEdge {
 struct CoroTransferNode {
     scope: CoroScopeRef,
     outlets: Vec<CoroTransferEdge>,
+    union_alive_states: AccessTree,
 }
 
 pub(crate) struct CoroTransferGraph {
@@ -42,18 +41,20 @@ impl CoroTransferGraph {
                 println!("- Target: {} -", edge.target.0);
                 edge.alive_states.dump();
             }
+            println!("- Union Alive States -");
+            node.union_alive_states.dump();
         }
     }
 }
 
 struct CoroTransferGraphBuilder<'a> {
     graph: &'a CoroGraph,
-    def_use: &'a CoroGraphDefUse,
+    use_def: &'a CoroGraphDefUse,
 }
 
 impl<'a> CoroTransferGraphBuilder<'a> {
-    fn new(graph: &'a CoroGraph, def_use: &'a CoroGraphDefUse) -> Self {
-        Self { graph, def_use }
+    fn new(graph: &'a CoroGraph, use_def: &'a CoroGraphDefUse) -> Self {
+        Self { graph, use_def }
     }
 
     fn probe_suspend_tokens(&self, block: &Vec<CoroInstrRef>, sp: &mut Vec<u32>) {
@@ -110,10 +111,11 @@ impl<'a> CoroTransferGraphBuilder<'a> {
                         let target = self.graph.tokens[t];
                         CoroTransferEdge {
                             target,
-                            alive_states: self.def_use.scopes[&target].external_uses.clone(),
+                            alive_states: self.use_def.scopes[&target].external_uses.clone(),
                         }
                     })
                     .collect(),
+                union_alive_states: AccessTree::new(),
             };
             // insert the node into the graph
             g.nodes.insert(scope_ref, node);
@@ -141,6 +143,13 @@ impl<'a> CoroTransferGraphBuilder<'a> {
                 }
             }
         }
+        for node in g.nodes.values_mut() {
+            // compute the union of the alive states at all the suspension points
+            node.union_alive_states = node
+                .outlets
+                .iter()
+                .fold(AccessTree::new(), |acc, e| acc.union(&e.alive_states));
+        }
     }
 
     fn build(&self) -> CoroTransferGraph {
@@ -154,7 +163,7 @@ impl<'a> CoroTransferGraphBuilder<'a> {
 }
 
 impl CoroTransferGraph {
-    pub fn build(graph: &CoroGraph, def_use: &CoroGraphDefUse) -> Self {
-        CoroTransferGraphBuilder::new(graph, def_use).build()
+    pub fn build(graph: &CoroGraph, use_def: &CoroGraphDefUse) -> Self {
+        CoroTransferGraphBuilder::new(graph, use_def).build()
     }
 }

@@ -1,4 +1,4 @@
-// This file implement def-use analysis for coroutine scopes.
+// This file implement use-def analysis for coroutine scopes.
 // For each coroutine scope, at each instruction, the analysis will record the set of
 // definitions that are alive at that instruction. If the instruction uses some value
 // that is not alive at that instruction, then the value must be defined other places
@@ -128,7 +128,7 @@ macro_rules! safe {
 }
 
 impl AccessTree {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             nodes: HashMap::new(),
             _storage: Vec::new(),
@@ -412,7 +412,7 @@ impl AccessTree {
 }
 
 // In the structured IR, an instruction dominates all successive instructions in the
-// same basic block. So the def-use analysis can be performed in a single pass:
+// same basic block. So the use-def analysis can be performed in a single pass:
 // 1. For simple instructions, just propagate the defs and uses.
 // 2. For branch instructions (e.g. `if` and `switch`), each branch is a new basic
 //    block. We copy the defs and uses from the current basic block to the new basic
@@ -435,7 +435,7 @@ impl AccessTree {
 //    resulting node of the instruction *defines* the node itself (not the access chain).
 // 4. Other should be simple enough to handle.
 
-pub(crate) struct CoroScopeDefUse {
+pub(crate) struct CoroScopeUseDef {
     // uses that are not dominated by defs in the current scope
     pub external_uses: AccessTree,
     // defs at the suspend point that can be safely localized in the current scope
@@ -444,7 +444,7 @@ pub(crate) struct CoroScopeDefUse {
     pub internal_defs: HashMap<u32, AccessTree>,
 }
 
-impl CoroScopeDefUse {
+impl CoroScopeUseDef {
     pub fn new() -> Self {
         Self {
             external_uses: AccessTree::new(),
@@ -453,7 +453,7 @@ impl CoroScopeDefUse {
     }
 }
 
-pub(crate) struct CoroDefUseAnalysis<'a> {
+pub(crate) struct CoroUseDefAnalysis<'a> {
     graph: &'a CoroGraph,
 }
 
@@ -463,16 +463,16 @@ struct CoroDefUseHelperAnalyses {
     const_eval: ConstEval,
 }
 
-impl<'a> CoroDefUseAnalysis<'a> {
+impl<'a> CoroUseDefAnalysis<'a> {
     fn analyze_branch_block(
         &self,
         block: &Vec<CoroInstrRef>,
         parent_defs: &AccessTree,
-        def_use: &mut CoroScopeDefUse,
+        use_def: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) -> AccessTree {
         let mut defs = parent_defs.clone();
-        self.analyze_direct_block(block, &mut defs, def_use, helpers);
+        self.analyze_direct_block(block, &mut defs, use_def, helpers);
         defs
     }
 
@@ -480,11 +480,11 @@ impl<'a> CoroDefUseAnalysis<'a> {
         &self,
         block: &Vec<CoroInstrRef>,
         defs: &mut AccessTree,
-        def_use: &mut CoroScopeDefUse,
+        use_def: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         for &instr in block.iter() {
-            self.analyze_instr(self.graph.get_instr(instr), defs, def_use, helpers);
+            self.analyze_instr(self.graph.get_instr(instr), defs, use_def, helpers);
         }
     }
 
@@ -492,11 +492,11 @@ impl<'a> CoroDefUseAnalysis<'a> {
         &self,
         block: &BasicBlock,
         parent_defs: &AccessTree,
-        def_use: &mut CoroScopeDefUse,
+        use_def: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) -> AccessTree {
         let mut defs = parent_defs.clone();
-        self.analyze_direct_block_in_simple(block, &mut defs, def_use, helpers);
+        self.analyze_direct_block_in_simple(block, &mut defs, use_def, helpers);
         defs
     }
 
@@ -504,11 +504,11 @@ impl<'a> CoroDefUseAnalysis<'a> {
         &self,
         block: &BasicBlock,
         defs: &mut AccessTree,
-        def_use: &mut CoroScopeDefUse,
+        use_def: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         for node in block.iter() {
-            self.analyze_simple(node, defs, def_use, helpers);
+            self.analyze_simple(node, defs, use_def, helpers);
         }
     }
 
@@ -544,7 +544,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
         node_ref: NodeRef,
         access_chain: &[NodeRef],
         defs: &mut AccessTree,
-        result: &mut CoroScopeDefUse,
+        result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         if helpers.replayable.detect(node_ref) {
@@ -597,7 +597,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
         &self,
         loaded: NodeRef,
         defs: &mut AccessTree,
-        result: &mut CoroScopeDefUse,
+        result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         let (root, chain) = Self::access_chain_from_gep_chain(loaded, helpers);
@@ -620,7 +620,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
         callable: &CallableModule,
         args: &[NodeRef],
         defs: &mut AccessTree,
-        result: &mut CoroScopeDefUse,
+        result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         for (i, arg) in args.iter().enumerate() {
@@ -642,7 +642,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
         func: &Func,
         args: &[NodeRef],
         defs: &mut AccessTree,
-        result: &mut CoroScopeDefUse,
+        result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         match func {
@@ -908,7 +908,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
         &self,
         node: NodeRef,
         defs: &mut AccessTree,
-        result: &mut CoroScopeDefUse,
+        result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         if node.is_local() || node.is_gep() {
@@ -923,7 +923,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
         &self,
         node: NodeRef,
         defs: &mut AccessTree,
-        result: &mut CoroScopeDefUse,
+        result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         match node.get().instruction.as_ref() {
@@ -1006,7 +1006,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
         &self,
         instr: &CoroInstruction,
         defs: &mut AccessTree,
-        result: &mut CoroScopeDefUse,
+        result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         match instr {
@@ -1088,7 +1088,7 @@ impl<'a> CoroDefUseAnalysis<'a> {
 }
 
 pub(crate) struct CoroGraphDefUse {
-    pub scopes: HashMap<CoroScopeRef, CoroScopeDefUse>,
+    pub scopes: HashMap<CoroScopeRef, CoroScopeUseDef>,
     pub union_uses: AccessTree,
 }
 
@@ -1137,7 +1137,7 @@ impl AccessTree {
 
 impl CoroGraphDefUse {
     pub fn dump(&self) {
-        println!("===================== CoroGraph Def-Use =====================");
+        println!("===================== CoroGraph Use-Def =====================");
         for i in 0..self.scopes.len() {
             let scope = &self.scopes[&CoroScopeRef(i)];
             println!(
@@ -1155,26 +1155,26 @@ impl CoroGraphDefUse {
     }
 }
 
-impl<'a> CoroDefUseAnalysis<'a> {
+impl<'a> CoroUseDefAnalysis<'a> {
     pub fn new(graph: &'a CoroGraph) -> Self {
         Self { graph }
     }
 
-    pub fn analyze_scope(&self, scope: &CoroScope) -> CoroScopeDefUse {
-        let mut def_use = CoroScopeDefUse::new();
+    pub fn analyze_scope(&self, scope: &CoroScope) -> CoroScopeUseDef {
+        let mut use_def = CoroScopeUseDef::new();
         self.analyze_direct_block(
             &scope.instructions,
             &mut AccessTree::new(),
-            &mut def_use,
+            &mut use_def,
             &mut CoroDefUseHelperAnalyses {
                 replayable: ReplayableValueAnalysis::new(false),
                 callable_args: CallableArgumentUsageAnalysis::new(),
                 const_eval: ConstEval::new(),
             },
         );
-        def_use.external_uses.coalesce_whole_access_chains();
-        def_use.external_uses.collapse_dynamic_access_chains();
-        def_use
+        use_def.external_uses.coalesce_whole_access_chains();
+        use_def.external_uses.collapse_dynamic_access_chains();
+        use_def
     }
 
     pub fn analyze_graph(&self) -> CoroGraphDefUse {
@@ -1187,8 +1187,8 @@ impl<'a> CoroDefUseAnalysis<'a> {
             .collect();
         let mut union_uses = scopes
             .iter()
-            .fold(AccessTree::new(), |acc, (_, scope_def_use)| {
-                acc.union(&scope_def_use.external_uses)
+            .fold(AccessTree::new(), |acc, (_, scope_use_def)| {
+                acc.union(&scope_use_def.external_uses)
             });
         union_uses.coalesce_whole_access_chains();
         union_uses.collapse_dynamic_access_chains();

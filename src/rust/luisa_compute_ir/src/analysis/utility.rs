@@ -284,8 +284,18 @@ impl AccessTree {
                 } else if let Some(child) = self.get(access_node_ref).children.get(i).cloned() {
                     // go into the child node if it exists
                     access_node_ref = child;
+                } else if matches!(i, AccessChainIndex::Dynamic(_))
+                    || self
+                        .get(access_node_ref)
+                        .children
+                        .iter()
+                        .any(|(&i, _)| matches!(i, AccessChainIndex::Dynamic(_)))
+                {
+                    // the child node does not exist, but the access chains are dynamic, so we cannot
+                    // determine if the chains overlap, so we conservatively assume that they do
+                    return true;
                 } else {
-                    // the child node does not exist, so the chains do not overlap
+                    // the child node does not exist, so the chains are static and do not overlap
                     return false;
                 }
             }

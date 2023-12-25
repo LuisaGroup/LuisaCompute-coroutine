@@ -2,7 +2,7 @@
 //
 // This transform pass extends the GEP chain and defers the load of variables to
 // the latest possible point, so we can reduce the number of visited members and
-// simplify the following usage analysis.
+// later simplify the usage analysis.
 // The pass is done in the following steps:
 // 1. Glob all `Load` instructions for aggregates and find all `Extract` nodes on
 //    the loaded value with *uniform* indices.
@@ -11,8 +11,10 @@
 // 3. Re-scan the module and remove all `Load` instructions whose value is not used.
 
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
-use crate::ir::{BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
+use crate::analysis::utility::AccessTree;
+use crate::ir::{collect_nodes, BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
 use crate::transform::Transform;
+use crate::{CArc, CBoxedSlice};
 use std::collections::{HashMap, HashSet};
 
 pub struct DeferLoad;
@@ -348,10 +350,32 @@ impl DeferLoadImpl {
         }
     }
 
+    // flatten nested GEP chains
+    fn legalize_gep_chains(module: &Module) {
+        let nodes = collect_nodes(module.entry);
+        for node in nodes {
+            if let Instruction::Call(func, args) = node.get().instruction.as_ref() {
+                if func == &Func::GetElementPtr && args[0].is_gep() {
+                    let (root, indices) = AccessTree::access_chain_from_gep_chain(args[0]);
+                    let mut new_args = Vec::new();
+                    new_args.push(root);
+                    new_args.extend(indices);
+                    new_args.extend(args.iter().skip(1));
+                    // update the instruction
+                    node.get_mut().instruction = CArc::new(Instruction::Call(
+                        Func::GetElementPtr,
+                        CBoxedSlice::new(new_args),
+                    ));
+                }
+            }
+        }
+    }
+
     fn transform(module: Module) -> Module {
         let aggregate_load_extract = Self::glob_aggregate_load_extract(&module);
         Self::replace_aggregate_load_extract(&module, &aggregate_load_extract);
         Self::remove_unused(&module);
+        Self::legalize_gep_chains(&module);
         module
     }
 }

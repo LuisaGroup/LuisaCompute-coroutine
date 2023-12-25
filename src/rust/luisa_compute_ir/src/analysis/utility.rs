@@ -535,24 +535,15 @@ impl AccessTree {
             .collect()
     }
 
-    fn _access_chain_from_gep_chain(gep_or_local: NodeRef, chain: &mut Vec<NodeRef>) -> NodeRef /* root */
-    {
-        if gep_or_local.is_local() {
-            gep_or_local
-        } else if let Instruction::Call(Func::GetElementPtr, args) =
+    pub fn access_chain_from_gep_chain(gep_or_local: NodeRef) -> (NodeRef, Vec<NodeRef>) {
+        if let Instruction::Call(Func::GetElementPtr, args) =
             gep_or_local.get().instruction.as_ref()
         {
-            let root = Self::_access_chain_from_gep_chain(args[0], chain);
-            chain.extend(args.iter().skip(1));
-            root
+            assert!(!args[0].is_gep(), "nested GEP is not supported");
+            (args[0], args.iter().skip(1).cloned().collect())
         } else {
-            unreachable!()
+            assert!(gep_or_local.is_local(), "expected local or GEP");
+            (gep_or_local, Vec::new())
         }
-    }
-
-    pub fn access_chain_from_gep_chain(gep_or_local: NodeRef) -> (NodeRef, Vec<NodeRef>) {
-        let mut chain = Vec::new();
-        let root = Self::_access_chain_from_gep_chain(gep_or_local, &mut chain);
-        (root, chain)
     }
 }

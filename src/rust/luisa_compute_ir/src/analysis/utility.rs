@@ -274,7 +274,7 @@ impl AccessTree {
     }
 
     // check if a node overlaps with the given access chain
-    pub fn overlaps(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
+    pub fn maybe_overlaps(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
         if let Some(access_node_ref) = self.nodes.get(&node).cloned() {
             let mut access_node_ref = access_node_ref;
             for i in access_chain {
@@ -552,7 +552,6 @@ impl AccessTree {
             assert!(!args[0].is_gep(), "nested GEP is not supported");
             (args[0], args.iter().skip(1).cloned().collect())
         } else {
-            assert!(gep_or_local.is_local(), "expected local or GEP");
             (gep_or_local, Vec::new())
         }
     }

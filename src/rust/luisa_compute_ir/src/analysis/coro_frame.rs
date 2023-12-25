@@ -1,24 +1,22 @@
 use crate::analysis::const_eval::ConstEval;
-use crate::analysis::coro_graph::{
-    CoroGraph, CoroInstrRef, CoroInstruction, CoroScope, CoroScopeRef,
-};
+use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transfer_graph::CoroTransferGraph;
 use crate::analysis::utility::AccessTree;
-use crate::ir::{collect_nodes, BasicBlock, Instruction, Node, NodeRef};
+use crate::ir::{BasicBlock, Instruction, NodeRef};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub(crate) struct CoroFrame {}
 
 struct CoroScopeFootprints {
     pub locals: HashSet<NodeRef>,
-    pub refs: AccessTree,
+    pub live_refs: AccessTree,
 }
 
 impl CoroScopeFootprints {
     fn new() -> CoroScopeFootprints {
         CoroScopeFootprints {
             locals: HashSet::new(),
-            refs: AccessTree::new(),
+            live_refs: AccessTree::new(),
         }
     }
 }
@@ -28,12 +26,13 @@ struct CoroFrameBuilder<'a> {
     transfer_graph: &'a CoroTransferGraph,
     node_stable_indices: HashMap<NodeRef, u32>,
     scope_footprints: HashMap<CoroScopeRef, CoroScopeFootprints>,
+    current_scope: Option<CoroScopeRef>,
 }
 
 fn check_is_btree_map<K, V>(_: &BTreeMap<K, V>) {}
 
 impl<'a> CoroFrameBuilder<'a> {
-    fn compute_node_stable_indices(&self) -> HashMap<NodeRef, u32> {
+    fn compute_node_stable_indices(&mut self) -> HashMap<NodeRef, u32> {
         let mut nodes = HashMap::new();
         self._collect_nodes_in_scope(self.graph.entry, &mut nodes);
         check_is_btree_map(&self.graph.tokens);
@@ -43,9 +42,12 @@ impl<'a> CoroFrameBuilder<'a> {
         nodes
     }
 
-    fn _collect_nodes_in_scope(&self, scope: CoroScopeRef, nodes: &mut HashMap<NodeRef, u32>) {
+    fn _collect_nodes_in_scope(&mut self, scope: CoroScopeRef, nodes: &mut HashMap<NodeRef, u32>) {
+        assert_eq!(self.current_scope, None);
+        self.current_scope = Some(scope);
         let scope = &self.graph.get_scope(scope);
         self._collect_nodes_in_block(&scope.instructions, nodes);
+        self.current_scope = None;
     }
 
     fn _collect_nodes_in_block(
@@ -207,7 +209,7 @@ impl<'a> CoroFrameBuilder<'a> {
         }
     }
 
-    fn compute_scope_footprints(&self) -> HashMap<CoroScopeRef, CoroScopeFootprints> {
+    fn compute_scope_footprints(&mut self) -> HashMap<CoroScopeRef, CoroScopeFootprints> {
         let mut result = HashMap::new();
         let mut const_eval = ConstEval::new();
         result.insert(
@@ -224,13 +226,16 @@ impl<'a> CoroFrameBuilder<'a> {
     }
 
     fn _collect_footprints_in_scope(
-        &self,
+        &mut self,
         scope: CoroScopeRef,
         const_eval: &mut ConstEval,
     ) -> CoroScopeFootprints {
-        let scope = &self.graph.get_scope(scope);
+        assert_eq!(self.current_scope, None);
+        self.current_scope = Some(scope);
+        let scope = self.graph.get_scope(scope);
         let mut footprints = CoroScopeFootprints::new();
         self._collect_footprints_in_block(&scope.instructions, &mut footprints, const_eval);
+        self.current_scope = None;
         footprints
     }
 
@@ -248,9 +253,7 @@ impl<'a> CoroFrameBuilder<'a> {
                 }
                 CoroInstruction::ConditionStackReplay { items } => {
                     for item in items.iter() {
-                        footprints
-                            .refs
-                            .insert_unrolled(item.node.clone(), const_eval);
+                        self._collect_footprint(&item.node, footprints, const_eval);
                     }
                 }
                 CoroInstruction::MakeFirstFlag | CoroInstruction::ClearFirstFlag(_) => {}
@@ -259,7 +262,7 @@ impl<'a> CoroFrameBuilder<'a> {
                 }
                 CoroInstruction::Loop { cond, body } => {
                     if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
-                        footprints.refs.insert_unrolled(cond.clone(), const_eval);
+                        self._collect_footprint(cond, footprints, const_eval);
                     } else {
                         unreachable!("unexpected loop condition");
                     }
@@ -271,7 +274,7 @@ impl<'a> CoroFrameBuilder<'a> {
                     false_branch,
                 } => {
                     if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
-                        footprints.refs.insert_unrolled(cond.clone(), const_eval);
+                        self._collect_footprint(cond, footprints, const_eval);
                     } else {
                         unreachable!("unexpected if condition");
                     }
@@ -284,7 +287,7 @@ impl<'a> CoroFrameBuilder<'a> {
                     cases,
                 } => {
                     if let CoroInstruction::Simple(value) = self.graph.get_instr(*cond) {
-                        footprints.refs.insert_unrolled(value.clone(), const_eval);
+                        self._collect_footprint(value, footprints, const_eval);
                     } else {
                         unreachable!("unexpected switch condition");
                     }
@@ -311,39 +314,55 @@ impl<'a> CoroFrameBuilder<'a> {
         }
     }
 
+    fn _collect_footprint(
+        &self,
+        node: &NodeRef,
+        footprints: &mut CoroScopeFootprints,
+        const_eval: &mut ConstEval,
+    ) {
+        let (root, chain) = AccessTree::access_chain_from_gep_chain(node.clone());
+        let chain = AccessTree::partially_evaluate_access_chain(chain.as_slice(), const_eval);
+        let current_scope = self.current_scope.unwrap();
+        let live_states = &self.transfer_graph.nodes[&current_scope].union_live_states;
+        if live_states.maybe_overlaps(root, chain.as_slice()) {
+            footprints.live_refs.insert(root, chain.as_slice());
+        }
+    }
+
     fn _collect_footprints_in_simple(
         &self,
         simple: &NodeRef,
         footprints: &mut CoroScopeFootprints,
         const_eval: &mut ConstEval,
     ) {
+        self._collect_footprint(simple, footprints, const_eval);
         match simple.get().instruction.as_ref() {
             Instruction::Local { init } => {
                 footprints.locals.insert(simple.clone());
-                footprints.refs.insert_unrolled(init.clone(), const_eval);
+                self._collect_footprint(init, footprints, const_eval);
             }
             Instruction::Update { var, value } => {
-                footprints.refs.insert_unrolled(var.clone(), const_eval);
-                footprints.refs.insert_unrolled(value.clone(), const_eval);
+                self._collect_footprint(var, footprints, const_eval);
+                self._collect_footprint(value, footprints, const_eval);
             }
-            Instruction::Call(_, _) => {}
+            Instruction::Call(_, args) => {
+                for arg in args.iter() {
+                    self._collect_footprint(arg, footprints, const_eval);
+                }
+            }
             Instruction::Phi(incomings) => {
                 for incoming in incomings.iter() {
-                    if incoming.value.valid() {
-                        footprints
-                            .refs
-                            .insert_unrolled(incoming.value.clone(), const_eval);
-                    }
+                    self._collect_footprint(&incoming.value, footprints, const_eval);
                 }
             }
             Instruction::Return(value) => {
                 if value.valid() {
-                    footprints.refs.insert_unrolled(value.clone(), const_eval);
+                    self._collect_footprint(value, footprints, const_eval);
                 }
             }
             Instruction::Loop { body, cond } => {
                 self._collect_footprints_in_basic_block(body, footprints, const_eval);
-                footprints.refs.insert_unrolled(cond.clone(), const_eval);
+                self._collect_footprint(cond, footprints, const_eval);
             }
             Instruction::GenericLoop {
                 prepare,
@@ -354,14 +373,14 @@ impl<'a> CoroFrameBuilder<'a> {
                 self._collect_footprints_in_basic_block(prepare, footprints, const_eval);
                 self._collect_footprints_in_basic_block(body, footprints, const_eval);
                 self._collect_footprints_in_basic_block(update, footprints, const_eval);
-                footprints.refs.insert_unrolled(cond.clone(), const_eval);
+                self._collect_footprint(cond, footprints, const_eval);
             }
             Instruction::If {
                 cond,
                 true_branch,
                 false_branch,
             } => {
-                footprints.refs.insert_unrolled(cond.clone(), const_eval);
+                self._collect_footprint(cond, footprints, const_eval);
                 self._collect_footprints_in_basic_block(true_branch, footprints, const_eval);
                 self._collect_footprints_in_basic_block(false_branch, footprints, const_eval);
             }
@@ -370,7 +389,7 @@ impl<'a> CoroFrameBuilder<'a> {
                 default,
                 cases,
             } => {
-                footprints.refs.insert_unrolled(value.clone(), const_eval);
+                self._collect_footprint(value, footprints, const_eval);
                 self._collect_footprints_in_basic_block(default, footprints, const_eval);
                 for case in cases.iter() {
                     self._collect_footprints_in_basic_block(&case.block, footprints, const_eval);
@@ -384,22 +403,20 @@ impl<'a> CoroFrameBuilder<'a> {
                 on_triangle_hit,
                 on_procedural_hit,
             } => {
-                footprints
-                    .refs
-                    .insert_unrolled(ray_query.clone(), const_eval);
+                self._collect_footprint(ray_query, footprints, const_eval);
                 self._collect_footprints_in_basic_block(on_triangle_hit, footprints, const_eval);
                 self._collect_footprints_in_basic_block(on_procedural_hit, footprints, const_eval);
             }
             Instruction::Print { args, .. } => {
                 for arg in args.iter() {
-                    footprints.refs.insert_unrolled(arg.clone(), const_eval);
+                    self._collect_footprint(arg, footprints, const_eval);
                 }
             }
             Instruction::AdDetach(body) => {
                 self._collect_footprints_in_basic_block(body, footprints, const_eval);
             }
             Instruction::CoroRegister { value, .. } => {
-                footprints.refs.insert_unrolled(value.clone(), const_eval);
+                self._collect_footprint(value, footprints, const_eval);
             }
             _ => {}
         }
@@ -413,6 +430,7 @@ impl<'a> CoroFrameBuilder<'a> {
             transfer_graph,
             node_stable_indices: HashMap::new(),
             scope_footprints: HashMap::new(),
+            current_scope: None,
         };
         graph.node_stable_indices = graph.compute_node_stable_indices();
         graph.scope_footprints = graph.compute_scope_footprints();

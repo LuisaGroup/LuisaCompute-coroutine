@@ -1,5 +1,6 @@
+use crate::analysis::const_eval::ConstEval;
 use crate::display::DisplayIR;
-use crate::ir::{NodeRef, Type};
+use crate::ir::{Func, Instruction, NodeRef, Type};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 // Singleton pattern for DisplayIR
@@ -148,7 +149,7 @@ impl<'a> AccessTreeNodeRef<'a> {
             .map(|&n| Self::new(self.tree, n))
     }
 
-    fn has_children(&self) -> bool {
+    fn has_any_child(&self) -> bool {
         !self.get().children.is_empty()
     }
 
@@ -240,6 +241,16 @@ impl AccessTree {
         self.get_mut(access_node_ref).children.clear();
     }
 
+    pub fn insert_unrolled(&mut self, node: NodeRef, const_eval: &mut ConstEval) {
+        if node.is_local() || node.is_gep() {
+            let (root, chain) = Self::access_chain_from_gep_chain(node);
+            let chain = Self::partially_evaluate_access_chain(&chain, const_eval);
+            self.insert(root, &chain);
+        } else {
+            self.insert(node, &[]);
+        }
+    }
+
     // check if a node is accessed with the given access chain
     pub fn contains(&self, node: NodeRef, access_chain: &[AccessChainIndex]) -> bool {
         if let Some(access_node_ref) = self.nodes.get(&node).cloned() {
@@ -300,10 +311,10 @@ impl AccessTree {
         a: AccessTreeNodeRef,
         b: AccessTreeNodeRef,
     ) -> Option<AccessNodeRef> {
-        if !a.has_children() {
+        if !a.has_any_child() {
             // a is accessed as a whole (a is a full set), then the intersection is b
             Some(self.clone_node(b))
-        } else if !b.has_children() {
+        } else if !b.has_any_child() {
             // b is accessed as a whole (b is a full set), then the intersection is a
             Some(self.clone_node(a))
         } else {
@@ -340,10 +351,10 @@ impl AccessTree {
     }
 
     pub fn union_nodes(&mut self, a: AccessTreeNodeRef, b: AccessTreeNodeRef) -> AccessNodeRef {
-        if !a.has_children() {
+        if !a.has_any_child() {
             // a is accessed as a whole (a is a full set), then the union is a
             self.clone_node(a)
-        } else if !b.has_children() {
+        } else if !b.has_any_child() {
             // b is accessed as a whole (b is a full set), then the union is b
             self.clone_node(b)
         } else {
@@ -506,5 +517,42 @@ impl AccessTree {
                 }
             }
         }
+    }
+
+    pub fn partially_evaluate_access_chain(
+        indices: &[NodeRef],
+        const_eval: &mut ConstEval,
+    ) -> Vec<AccessChainIndex> {
+        indices
+            .iter()
+            .map(|&i| {
+                if let Some(value) = const_eval.eval(i).and_then(|v| v.try_get_i32()) {
+                    value.into()
+                } else {
+                    i.into()
+                }
+            })
+            .collect()
+    }
+
+    fn _access_chain_from_gep_chain(gep_or_local: NodeRef, chain: &mut Vec<NodeRef>) -> NodeRef /* root */
+    {
+        if gep_or_local.is_local() {
+            gep_or_local
+        } else if let Instruction::Call(Func::GetElementPtr, args) =
+            gep_or_local.get().instruction.as_ref()
+        {
+            let root = Self::_access_chain_from_gep_chain(args[0], chain);
+            chain.extend(args.iter().skip(1));
+            root
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub fn access_chain_from_gep_chain(gep_or_local: NodeRef) -> (NodeRef, Vec<NodeRef>) {
+        let mut chain = Vec::new();
+        let root = Self::_access_chain_from_gep_chain(gep_or_local, &mut chain);
+        (root, chain)
     }
 }

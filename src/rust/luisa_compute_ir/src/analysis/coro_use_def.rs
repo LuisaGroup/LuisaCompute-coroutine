@@ -118,22 +118,6 @@ impl<'a> CoroUseDefAnalysis<'a> {
         }
     }
 
-    fn partially_evaluate_access_chain(
-        indices: &[NodeRef],
-        helpers: &mut CoroDefUseHelperAnalyses,
-    ) -> Vec<AccessChainIndex> {
-        indices
-            .iter()
-            .map(|&i| {
-                if let Some(value) = helpers.const_eval.eval(i).and_then(|v| v.try_get_i32()) {
-                    value.into()
-                } else {
-                    i.into()
-                }
-            })
-            .collect()
-    }
-
     fn mark_def(
         &self,
         node_ref: NodeRef,
@@ -141,7 +125,8 @@ impl<'a> CoroUseDefAnalysis<'a> {
         defs: &mut AccessTree,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
-        let access_chain = Self::partially_evaluate_access_chain(access_chain, helpers);
+        let access_chain =
+            AccessTree::partially_evaluate_access_chain(access_chain, &mut helpers.const_eval);
         defs.insert(node_ref, access_chain.as_slice());
     }
 
@@ -158,7 +143,8 @@ impl<'a> CoroUseDefAnalysis<'a> {
             return;
         }
         // otherwise, check if the value is dominated by defs in the current scope
-        let access_chain = Self::partially_evaluate_access_chain(access_chain, helpers);
+        let access_chain =
+            AccessTree::partially_evaluate_access_chain(access_chain, &mut helpers.const_eval);
         if !defs.contains(node_ref, access_chain.as_slice()) {
             // try coalescing the def tree to reduce the number of external uses
             defs.coalesce_whole_access_chains();
@@ -172,33 +158,6 @@ impl<'a> CoroUseDefAnalysis<'a> {
         }
     }
 
-    fn _access_chain_from_gep_chain(
-        gep_or_local: NodeRef,
-        chain: &mut Vec<NodeRef>,
-        helpers: &mut CoroDefUseHelperAnalyses,
-    ) -> NodeRef /* root */ {
-        if gep_or_local.is_local() {
-            gep_or_local
-        } else if let Instruction::Call(Func::GetElementPtr, args) =
-            gep_or_local.get().instruction.as_ref()
-        {
-            let root = Self::_access_chain_from_gep_chain(args[0], chain, helpers);
-            chain.extend(args.iter().skip(1));
-            root
-        } else {
-            unreachable!()
-        }
-    }
-
-    fn access_chain_from_gep_chain(
-        gep_or_local: NodeRef,
-        helpers: &mut CoroDefUseHelperAnalyses,
-    ) -> (NodeRef, Vec<NodeRef>) {
-        let mut chain = Vec::new();
-        let root = Self::_access_chain_from_gep_chain(gep_or_local, &mut chain, helpers);
-        (root, chain)
-    }
-
     fn analyze_load_chain(
         &self,
         loaded: NodeRef,
@@ -206,7 +165,7 @@ impl<'a> CoroUseDefAnalysis<'a> {
         result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
-        let (root, chain) = Self::access_chain_from_gep_chain(loaded, helpers);
+        let (root, chain) = AccessTree::access_chain_from_gep_chain(loaded);
         self.mark_use(root, &chain, defs, result, helpers);
     }
 
@@ -216,7 +175,7 @@ impl<'a> CoroUseDefAnalysis<'a> {
         defs: &mut AccessTree,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
-        let (root, chain) = Self::access_chain_from_gep_chain(updated, helpers);
+        let (root, chain) = AccessTree::access_chain_from_gep_chain(updated);
         self.mark_def(root, &chain, defs, helpers);
     }
 

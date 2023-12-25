@@ -8,23 +8,23 @@ use crate::analysis::coro_use_def::CoroGraphUseDef;
 use crate::analysis::utility::AccessTree;
 use std::collections::HashMap;
 
-struct CoroTransferEdge {
+pub(crate) struct CoroTransferEdge {
     // the target of the transfer (another subscope)
-    target: CoroScopeRef,
+    pub target: CoroScopeRef,
     // the live states at the suspension point, i.e. the states that will be read
     // from reachable subscopes and should thus be saved in the coroutine frame
-    live_states: AccessTree,
+    pub live_states: AccessTree,
 }
 
 // A subscope of the coroutine
-struct CoroTransferNode {
-    scope: CoroScopeRef,
-    outlets: Vec<CoroTransferEdge>,
-    union_live_states: AccessTree,
+pub(crate) struct CoroTransferNode {
+    pub scope: CoroScopeRef,
+    pub outlets: Vec<CoroTransferEdge>,
+    pub union_live_states: AccessTree,
 }
 
 pub(crate) struct CoroTransferGraph {
-    nodes: HashMap<CoroScopeRef, CoroTransferNode>,
+    pub nodes: HashMap<CoroScopeRef, CoroTransferNode>,
 }
 
 impl CoroTransferGraph {

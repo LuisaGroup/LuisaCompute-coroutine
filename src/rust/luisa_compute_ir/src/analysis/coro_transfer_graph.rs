@@ -4,7 +4,8 @@
 // the frontend to help the scheduler to optimize the coroutine execution.
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
-use crate::analysis::coro_use_def::{AccessTree, CoroGraphUseDef};
+use crate::analysis::coro_use_def::CoroGraphUseDef;
+use crate::analysis::utility::AccessTree;
 use std::collections::HashMap;
 
 struct CoroTransferEdge {

@@ -219,7 +219,7 @@ impl Transform for SplitCoro {
         coro_use_def.dump();
         let transfer_graph = CoroTransferGraph::build(&graph, &coro_use_def);
         transfer_graph.dump();
-        let coro_frame = CoroFrame::analyze(&graph, &transfer_graph);
+        let coro_frame = CoroFrame::build(&graph, &transfer_graph);
         // TODO
         let frame_analyser = CoroFrameAnalysis::analyse(&graph, &callable);
         SplitManager::split(callable, graph, frame_analyser)

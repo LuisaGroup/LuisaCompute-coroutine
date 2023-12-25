@@ -236,6 +236,7 @@ impl<'a> CoroFrameBuilder<'a> {
         let mut footprints = CoroScopeFootprints::new();
         self._collect_footprints_in_block(&scope.instructions, &mut footprints, const_eval);
         self.current_scope = None;
+        footprints.live_refs.trim_dynamic_access_chains();
         footprints
     }
 
@@ -424,7 +425,7 @@ impl<'a> CoroFrameBuilder<'a> {
 }
 
 impl<'a> CoroFrameBuilder<'a> {
-    fn new(graph: &'a CoroGraph, transfer_graph: &'a CoroTransferGraph) -> CoroFrameBuilder<'a> {
+    fn build(graph: &'a CoroGraph, transfer_graph: &'a CoroTransferGraph) -> CoroFrame {
         let mut graph = CoroFrameBuilder {
             graph,
             transfer_graph,
@@ -434,13 +435,12 @@ impl<'a> CoroFrameBuilder<'a> {
         };
         graph.node_stable_indices = graph.compute_node_stable_indices();
         graph.scope_footprints = graph.compute_scope_footprints();
-        graph
+        todo!("layout coroutine frame")
     }
 }
 
 impl CoroFrame {
-    pub fn analyze(graph: &CoroGraph, transfer_graph: &CoroTransferGraph) -> CoroFrame {
-        let builder = CoroFrameBuilder::new(graph, transfer_graph);
-        todo!()
+    pub fn build(graph: &CoroGraph, transfer_graph: &CoroTransferGraph) -> CoroFrame {
+        CoroFrameBuilder::build(graph, transfer_graph)
     }
 }

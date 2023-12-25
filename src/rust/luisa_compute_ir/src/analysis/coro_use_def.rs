@@ -739,7 +739,7 @@ impl<'a> CoroUseDefAnalysis<'a> {
             },
         );
         use_def.external_uses.coalesce_whole_access_chains();
-        use_def.external_uses.collapse_dynamic_access_chains();
+        use_def.external_uses.trim_dynamic_access_chains();
         use_def
     }
 
@@ -757,7 +757,7 @@ impl<'a> CoroUseDefAnalysis<'a> {
                 acc.union(&scope_use_def.external_uses)
             });
         union_uses.coalesce_whole_access_chains();
-        union_uses.collapse_dynamic_access_chains();
+        union_uses.trim_dynamic_access_chains();
         CoroGraphUseDef { scopes, union_uses }
     }
 

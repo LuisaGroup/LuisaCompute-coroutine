@@ -502,7 +502,7 @@ impl AccessTree {
     // if a node is accessed with dynamic indices at some level of the access chain, then
     // we conservatively assume that all of its children are accessed with dynamic indices
     // and collapse the access chain into a single node (i.e., removing all of its children)
-    pub fn collapse_dynamic_access_chains(&mut self) {
+    pub fn trim_dynamic_access_chains(&mut self) {
         let this = safe! { &mut *(self as *mut Self) };
         for (&node, &node_ref) in self.nodes.iter() {
             this._collapse_dynamic_access_chains(node_ref, node.type_().as_ref());

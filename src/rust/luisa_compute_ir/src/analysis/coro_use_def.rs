@@ -5,6 +5,12 @@
 // so we would have to pass the value through the coroutine frame.
 // The analysis tries to perform member-wise analysis, so the values that have to be
 // passed through the coroutine frame are minimized.
+// Specifically, the analysis computes the following sets for each coroutine scope:
+// - ExternalUse: nodes used inside the scope but defined outside the scope
+// - InternalTouch: nodes touched (possibly overwritten) in the scope
+// - InternalKill: nodes killed (definitely overwritten) at each suspend point
+
+// TODO: compute the touch set per suspend point
 
 use crate::analysis::callable_arg_usages::CallableArgumentUsageAnalysis;
 use crate::analysis::const_eval::ConstEval;
@@ -12,8 +18,8 @@ use crate::analysis::coro_graph::{
     CoroGraph, CoroInstrRef, CoroInstruction, CoroScope, CoroScopeRef,
 };
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
-use crate::analysis::utility::{AccessChainIndex, AccessNodeRef, AccessTree};
-use crate::ir::{BasicBlock, CallableModule, Func, Instruction, NodeRef, Type, Usage};
+use crate::analysis::utility::AccessTree;
+use crate::ir::{BasicBlock, CallableModule, Func, Instruction, NodeRef, Usage};
 use std::collections::HashMap;
 
 // In the structured IR, an instruction dominates all successive instructions in the

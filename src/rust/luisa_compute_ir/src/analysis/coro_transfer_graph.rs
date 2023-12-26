@@ -2,6 +2,14 @@
 // topology of a coroutine and computes the alive states at each suspension point.
 // The result is used in the coroutine frame layout analysis and will be passed to
 // the frontend to help the scheduler to optimize the coroutine execution.
+// The analysis computes the following auxiliary sets for each subscope (`&` denotes
+// set intersection, `+` for union and `-` for subtraction):z
+// - Live: the set of nodes that are live at each suspension point
+//   (computed by graph-level liveness analysis)
+// - Load: the set of nodes that are loaded at the beginning of the subroutine
+//   (computed as [((Live - InternalKill) & InternalTouch) + ExternalUse])
+// - Save: the set of nodes that are saved to the frame at each suspension point (from CoroTransferGraph)
+//   (computed as [Live & Touch])
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_use_def::CoroGraphUseDef;
@@ -14,6 +22,8 @@ pub(crate) struct CoroTransferEdge {
     // the live states at the suspension point, i.e. the states that will be read
     // from reachable subscopes and should thus be saved in the coroutine frame
     pub live_states: AccessTree,
+    pub states_to_load: AccessTree,
+    pub states_to_save: AccessTree,
 }
 
 // A subscope of the coroutine
@@ -21,6 +31,8 @@ pub(crate) struct CoroTransferNode {
     pub scope: CoroScopeRef,
     pub outlets: Vec<CoroTransferEdge>,
     pub union_live_states: AccessTree,
+    pub union_states_to_load: AccessTree,
+    pub union_states_to_save: AccessTree,
 }
 
 pub(crate) struct CoroTransferGraph {
@@ -39,11 +51,15 @@ impl CoroTransferGraph {
                 node.outlets.len()
             );
             for edge in node.outlets.iter() {
-                println!("- Target: {} -", edge.target.0);
+                println!("- Target {} Live States -", edge.target.0);
                 edge.live_states.dump();
             }
             println!("- Union Live States -");
             node.union_live_states.dump();
+            println!("- States to Load -");
+            node.union_states_to_load.dump();
+            println!("- States to Save -");
+            node.union_states_to_save.dump();
         }
     }
 }
@@ -113,17 +129,21 @@ impl<'a> CoroTransferGraphBuilder<'a> {
                         CoroTransferEdge {
                             target,
                             live_states: self.use_def.scopes[&target].external_uses.clone(),
+                            states_to_load: AccessTree::new(),
+                            states_to_save: AccessTree::new(),
                         }
                     })
                     .collect(),
                 union_live_states: AccessTree::new(),
+                union_states_to_load: AccessTree::new(),
+                union_states_to_save: AccessTree::new(),
             };
             // insert the node into the graph
             g.nodes.insert(scope_ref, node);
         }
     }
 
-    fn compute_alive_states(&self, g: &mut CoroTransferGraph) {
+    fn compute_live_states(&self, g: &mut CoroTransferGraph) {
         let mut any_change = true;
         while any_change {
             any_change = false;
@@ -153,6 +173,28 @@ impl<'a> CoroTransferGraphBuilder<'a> {
                 .outlets
                 .iter()
                 .fold(AccessTree::new(), |acc, e| acc.union(&e.live_states));
+            let external_use = &self.use_def.scopes[&node.scope].external_uses;
+            for edge in node.outlets.iter_mut() {
+                let live = &edge.live_states;
+                // TODO: use per-target touch sets
+                let touch = &self.use_def.scopes[&node.scope].internal_touches;
+                let internal_kill = &self.use_def.scopes[&node.scope].internal_kills[&edge.target];
+                // Load = ((Live - InternalKill) & Touch) + ExternalUses
+                edge.states_to_load = AccessTree::union(
+                    &AccessTree::intersect(&AccessTree::subtract(live, internal_kill), touch),
+                    external_use,
+                );
+                // Save = Live & Touch
+                edge.states_to_save = AccessTree::intersect(live, touch);
+            }
+            node.union_states_to_load = node
+                .outlets
+                .iter()
+                .fold(external_use.clone(), |acc, e| acc.union(&e.states_to_load));
+            node.union_states_to_save = node
+                .outlets
+                .iter()
+                .fold(AccessTree::new(), |acc, e| acc.union(&e.states_to_save));
         }
     }
 
@@ -161,7 +203,7 @@ impl<'a> CoroTransferGraphBuilder<'a> {
             nodes: HashMap::new(),
         };
         self.build_transfer_topology(&mut g);
-        self.compute_alive_states(&mut g);
+        self.compute_live_states(&mut g);
         g
     }
 }

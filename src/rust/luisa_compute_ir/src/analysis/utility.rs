@@ -594,6 +594,6 @@ impl AccessTree {
             println!("       {:?}", node.instruction.as_ref());
             total_size += size;
         }
-        println!("  Total Frame Size = {}", total_size);
+        println!("  Total Size = {}", total_size);
     }
 }

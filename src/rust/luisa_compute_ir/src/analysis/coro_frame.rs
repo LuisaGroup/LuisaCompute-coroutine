@@ -2,14 +2,11 @@
 // and determine which fields should be loaded and saved for each subroutine.
 // We start by computing some auxiliary sets for each subroutine:
 // - ExternalUse: the set of nodes that are used inside the subroutine but defined outside (from CoroUseDef)
-// - LiveOut: the set of nodes that are live at each suspension point (from CoroTransferGraph)
 // - Kill: the set of nodes that are killed (definitely overwritten) at each suspension point (from CoroUseDef)
 // - Touch: the set of nodes that are touched (possibly overwritten) at each suspension point (from CoroUseDef)
-// - Load: the set of nodes that are loaded at the beginning of the subroutine (computed as detailed below)
-// - Save: the set of nodes that are saved to the frame at each suspension point (computed as detailed below)
-// To compute Load and Save (& denotes set intersection, `+` for union and `-` for subtraction):
-// - Load = ((LiveOut - Kill) & Touch) + ExternalUse
-// - Save = LiveOut & Touch (note: Kill is a subset of Touch)
+// - Live: the set of nodes that are live at each suspension point (from CoroTransferGraph)
+// - Load: the set of nodes that are loaded at the beginning of the subroutine (from CoroTransferGraph)
+// - Save: the set of nodes that are saved to the frame at each suspension point (from CoroTransferGraph)
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transfer_graph::CoroTransferGraph;

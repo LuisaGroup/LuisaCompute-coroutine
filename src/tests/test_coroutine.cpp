@@ -37,7 +37,9 @@ int main(int argc, char *argv[]) {
         auto id = cid[0u];
         //        x_buffer.write(id, id * 2u);
         x_buffer.write(id, coro_token() + 1000u + 10 * id);
+        auto ray = make_ray(make_float3(), make_float3());
         $suspend("1");
+        device_log("{}", ray.compressed_origin[def(0)]);
         x_buffer.write(cid.y, coro_token() + 2000u + 20 * cid.x);
         //        $if(id % 2u == 0u) {
         //            $suspend("1");

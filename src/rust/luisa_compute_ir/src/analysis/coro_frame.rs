@@ -119,7 +119,7 @@ impl CoroFrame {
                     Primitive::Bool => 1,
                     _ => field.type_.size() * 8,
                 };
-                (node_index, field_size)
+                (node_index, usize::MAX - field_size)
             });
         } else {
             desc.fields.sort_by_key(|field| {

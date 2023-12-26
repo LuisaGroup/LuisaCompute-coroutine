@@ -422,11 +422,6 @@ impl AccessTree {
         result: &mut Self,
     ) {
         match type_ {
-            Type::Primitive(_) => {
-                if !other.contains(node, access_chain) {
-                    result.insert(node, access_chain);
-                }
-            }
             Type::Vector(v) => {
                 let elem = v.element().to_type();
                 for i in 0..v.length {
@@ -482,7 +477,11 @@ impl AccessTree {
                     access_chain.pop();
                 }
             }
-            _ => unreachable!("unexpected type"),
+            _ => {
+                if !other.contains(node, access_chain) {
+                    result.insert(node, access_chain);
+                }
+            }
         }
     }
 

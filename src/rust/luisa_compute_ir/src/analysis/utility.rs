@@ -421,60 +421,43 @@ impl AccessTree {
         other: &Self,
         result: &mut Self,
     ) {
+        macro_rules! process_child {
+            ($i: expr, $child_type: expr) => {
+                let i = AccessChainIndex::Static($i as i32);
+                access_chain.push(i);
+                self._enumerate_all_child_chains_for_subtraction(
+                    node,
+                    $child_type.as_ref(),
+                    access_chain,
+                    other,
+                    result,
+                );
+                let popped = access_chain.pop();
+                assert_eq!(popped, Some(i));
+            };
+        }
         match type_ {
             Type::Vector(v) => {
                 let elem = v.element().to_type();
                 for i in 0..v.length {
-                    access_chain.push(AccessChainIndex::Static(i as i32));
-                    self._enumerate_all_child_chains_for_subtraction(
-                        node,
-                        elem.as_ref(),
-                        access_chain,
-                        other,
-                        result,
-                    );
-                    access_chain.pop();
+                    process_child!(i, elem);
                 }
             }
             Type::Matrix(m) => {
                 let column = m.column();
                 for i in 0..m.dimension {
-                    access_chain.push(AccessChainIndex::Static(i as i32));
-                    self._enumerate_all_child_chains_for_subtraction(
-                        node,
-                        column.as_ref(),
-                        access_chain,
-                        other,
-                        result,
-                    );
-                    access_chain.pop();
+                    process_child!(i, column);
                 }
             }
             Type::Struct(s) => {
                 for (i, field) in s.fields.iter().enumerate() {
-                    access_chain.push(AccessChainIndex::Static(i as i32));
-                    self._enumerate_all_child_chains_for_subtraction(
-                        node,
-                        field.as_ref(),
-                        access_chain,
-                        other,
-                        result,
-                    );
-                    access_chain.pop();
+                    process_child!(i, field);
                 }
             }
             Type::Array(a) => {
                 let elem = &a.element;
                 for i in 0..a.length {
-                    access_chain.push(AccessChainIndex::Static(i as i32));
-                    self._enumerate_all_child_chains_for_subtraction(
-                        node,
-                        elem.as_ref(),
-                        access_chain,
-                        other,
-                        result,
-                    );
-                    access_chain.pop();
+                    process_child!(i, elem);
                 }
             }
             _ => {

@@ -357,6 +357,7 @@ impl AccessTree {
                 new_tree.nodes.insert(common_node.clone(), merged);
             }
         }
+        new_tree.coalesce_whole_access_chains();
         new_tree
     }
 
@@ -408,12 +409,87 @@ impl AccessTree {
             let merged = new_tree.clone_node(AccessTreeNodeRef::new(other, other.nodes[node]));
             new_tree.nodes.insert(node.clone(), merged);
         }
+        new_tree.coalesce_whole_access_chains();
         new_tree
+    }
+
+    fn _enumerate_all_child_chains_for_subtraction(
+        &self,
+        node: NodeRef,
+        type_: &Type,
+        access_chain: &mut Vec<AccessChainIndex>,
+        other: &Self,
+        result: &mut Self,
+    ) {
+        match type_ {
+            Type::Primitive(_) => {
+                if !other.contains(node, access_chain) {
+                    result.insert(node, access_chain);
+                }
+            }
+            Type::Vector(v) => {
+                let elem = v.element().to_type();
+                for i in 0..v.length {
+                    access_chain.push(AccessChainIndex::Static(i as i32));
+                    self._enumerate_all_child_chains_for_subtraction(
+                        node,
+                        elem.as_ref(),
+                        access_chain,
+                        other,
+                        result,
+                    );
+                    access_chain.pop();
+                }
+            }
+            Type::Matrix(m) => {
+                let column = m.column();
+                for i in 0..m.dimension {
+                    access_chain.push(AccessChainIndex::Static(i as i32));
+                    self._enumerate_all_child_chains_for_subtraction(
+                        node,
+                        column.as_ref(),
+                        access_chain,
+                        other,
+                        result,
+                    );
+                    access_chain.pop();
+                }
+            }
+            Type::Struct(s) => {
+                for (i, field) in s.fields.iter().enumerate() {
+                    access_chain.push(AccessChainIndex::Static(i as i32));
+                    self._enumerate_all_child_chains_for_subtraction(
+                        node,
+                        field.as_ref(),
+                        access_chain,
+                        other,
+                        result,
+                    );
+                    access_chain.pop();
+                }
+            }
+            Type::Array(a) => {
+                let elem = &a.element;
+                for i in 0..a.length {
+                    access_chain.push(AccessChainIndex::Static(i as i32));
+                    self._enumerate_all_child_chains_for_subtraction(
+                        node,
+                        elem.as_ref(),
+                        access_chain,
+                        other,
+                        result,
+                    );
+                    access_chain.pop();
+                }
+            }
+            _ => unreachable!("unexpected type"),
+        }
     }
 
     fn _enumerate_chains_for_subtraction(
         &self,
         node: NodeRef,
+        type_: &Type,
         access_node: &AccessNode,
         access_chain: &mut Vec<AccessChainIndex>,
         other: &Self,
@@ -421,17 +497,22 @@ impl AccessTree {
     ) {
         if access_node.children.is_empty() {
             // leaf node
-            if !other.contains(node, access_chain) {
-                result.insert(node, access_chain);
-            }
+            self._enumerate_all_child_chains_for_subtraction(
+                node,
+                type_,
+                access_chain,
+                other,
+                result,
+            );
         } else {
             // non-leaf node
             for (i, access_node) in access_node.children.iter() {
                 match i {
-                    AccessChainIndex::Static(_) => {
+                    AccessChainIndex::Static(index) => {
                         access_chain.push(*i);
                         self._enumerate_chains_for_subtraction(
                             node,
+                            type_.extract(*index as usize).as_ref(),
                             self.get(*access_node),
                             access_chain,
                             other,
@@ -454,12 +535,14 @@ impl AccessTree {
             access_chain.clear();
             self._enumerate_chains_for_subtraction(
                 *node,
+                node.type_().as_ref(),
                 self.get(node_ref),
                 &mut access_chain,
                 other,
                 &mut new_tree,
             );
         }
+        new_tree.coalesce_whole_access_chains();
         new_tree
     }
 

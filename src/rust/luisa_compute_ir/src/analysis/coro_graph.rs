@@ -6,6 +6,7 @@
 // Note: this analysis only works on a single module without recurse into its callees.
 
 use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
+use crate::safe;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -905,7 +906,7 @@ impl CoroGraph {
 
     fn remove_unreachable_from_instructions(graph: &mut CoroGraph, instr: CoroInstrRef) -> bool /* whether the block is terminated */
     {
-        unsafe {
+        safe! {
             // Sorry, Rust, but this is really safe.
             let p_graph = &mut *(graph as *mut CoroGraph);
             match p_graph.instr_mut(instr) {

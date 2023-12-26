@@ -3,6 +3,15 @@ use crate::display::DisplayIR;
 use crate::ir::{Func, Instruction, NodeRef, Type};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+#[macro_export]
+macro_rules! safe {
+    ($($x:tt)*) => {
+        unsafe {
+            $($x)*
+        }
+    };
+}
+
 // Singleton pattern for DisplayIR
 pub(crate) struct LazyDisplayIR {
     inner: Option<DisplayIR>,
@@ -28,12 +37,14 @@ pub(crate) static mut DISPLAY_IR_DEBUG: LazyDisplayIR = LazyDisplayIR::new(); //
 pub(crate) fn display_node_map2set(target: &HashMap<NodeRef, HashSet<i32>>) -> String {
     let output: Vec<_> = target
         .iter()
-        .map(|(node_ref, number)| unsafe {
-            let node = DISPLAY_IR_DEBUG.get().var_str(node_ref);
-            let number = BTreeSet::from_iter(number.iter().cloned());
-            let number = format!("{:?}", number);
-            let output = format!("{}: {}", node, number);
-            (node, output)
+        .map(|(node_ref, number)| {
+            safe! {
+                let node = DISPLAY_IR_DEBUG.get().var_str(node_ref);
+                let number = BTreeSet::from_iter(number.iter().cloned());
+                let number = format!("{:?}", number);
+                let output = format!("{}: {}", node, number);
+                (node, output)
+            }
         })
         .collect();
     let output = BTreeMap::from_iter(output);
@@ -46,10 +57,12 @@ pub(crate) fn display_node_map2set(target: &HashMap<NodeRef, HashSet<i32>>) -> S
 pub(crate) fn display_node_map(target: &HashMap<NodeRef, i32>) -> String {
     let output: Vec<_> = target
         .iter()
-        .map(|(node_ref, number)| unsafe {
-            let node = DISPLAY_IR_DEBUG.get().var_str(node_ref);
-            let output = format!("{}: {}", node, number);
-            (node, output)
+        .map(|(node_ref, number)| {
+            safe! {
+                let node = DISPLAY_IR_DEBUG.get().var_str(node_ref);
+                let output = format!("{}: {}", node, number);
+                (node, output)
+            }
         })
         .collect();
     let output = BTreeMap::from_iter(output);
@@ -60,7 +73,7 @@ pub(crate) fn display_node_map(target: &HashMap<NodeRef, i32>) -> String {
 }
 
 pub(crate) fn display_node_set(target: &HashSet<NodeRef>) -> String {
-    unsafe { DISPLAY_IR_DEBUG.get().vars_str(target) }
+    safe! { DISPLAY_IR_DEBUG.get().vars_str(target) }
 }
 
 // The access tree records the accessed members of a value, where accessed children are
@@ -164,14 +177,6 @@ impl<'a> AccessTreeNodeRef<'a> {
             .iter()
             .map(move |(&i, &n)| (i, Self::new(self.tree, n)))
     }
-}
-
-macro_rules! safe {
-    ($($x:tt)*) => {
-        unsafe {
-            $($x)*
-        }
-    };
 }
 
 impl AccessTree {

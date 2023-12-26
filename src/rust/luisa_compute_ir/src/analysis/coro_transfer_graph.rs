@@ -14,6 +14,7 @@
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_use_def::CoroGraphUseDef;
 use crate::analysis::utility::AccessTree;
+use crate::safe;
 use std::collections::HashMap;
 
 pub(crate) struct CoroTransferEdge {
@@ -148,7 +149,7 @@ impl<'a> CoroTransferGraphBuilder<'a> {
         let mut any_change = true;
         while any_change {
             any_change = false;
-            let gg = unsafe { &*(g as *mut CoroTransferGraph) };
+            let gg = safe! { &*(g as *mut CoroTransferGraph) };
             for node in g.nodes.values_mut() {
                 for edge in node.outlets.iter_mut() {
                     // propagate the alive states from the target subscopes

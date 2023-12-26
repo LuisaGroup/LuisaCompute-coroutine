@@ -502,7 +502,7 @@ impl AccessTree {
     // if a node is accessed with dynamic indices at some level of the access chain, then
     // we conservatively assume that all of its children are accessed with dynamic indices
     // and collapse the access chain into a single node (i.e., removing all of its children)
-    pub fn trim_dynamic_access_chains(&mut self) {
+    pub fn dynamic_access_chains_as_whole(&mut self) {
         let this = safe! { &mut *(self as *mut Self) };
         for (&node, &node_ref) in self.nodes.iter() {
             this._collapse_dynamic_access_chains(node_ref, node.type_().as_ref());
@@ -545,14 +545,55 @@ impl AccessTree {
             .collect()
     }
 
-    pub fn access_chain_from_gep_chain(gep_or_local: NodeRef) -> (NodeRef, Vec<NodeRef>) {
-        if let Instruction::Call(Func::GetElementPtr, args) =
-            gep_or_local.get().instruction.as_ref()
-        {
+    pub fn access_chain_from_gep_chain(node: NodeRef) -> (NodeRef, Vec<NodeRef>) {
+        if let Instruction::Call(Func::GetElementPtr, args) = node.get().instruction.as_ref() {
             assert!(!args[0].is_gep(), "nested GEP is not supported");
             (args[0], args.iter().skip(1).cloned().collect())
         } else {
-            (gep_or_local, Vec::new())
+            (node, Vec::new())
         }
+    }
+}
+
+impl AccessTree {
+    fn packed_aggregate_size(t: &Type) -> usize {
+        match t {
+            Type::Vector(v) => v.element().size() * v.length as usize,
+            Type::Matrix(m) => m.element().size() * m.dimension as usize * m.dimension as usize,
+            Type::Struct(s) => s
+                .fields
+                .iter()
+                .map(|f| Self::packed_aggregate_size(f.as_ref()))
+                .sum(),
+            _ => t.size(),
+        }
+    }
+    fn compute_memory_footprint(uses: &AccessTree, node: AccessNodeRef, t: &Type) -> usize {
+        let node = uses.get(node);
+        if node.children.is_empty() {
+            Self::packed_aggregate_size(t)
+        } else {
+            node.children
+                .iter()
+                .map(|(&i, &child)| match i {
+                    AccessChainIndex::Static(i) => {
+                        Self::compute_memory_footprint(uses, child, t.extract(i as usize).as_ref())
+                    }
+                    _ => unreachable!("access chain should be truncated at dynamic indices"),
+                })
+                .sum()
+        }
+    }
+    pub fn dump(&self) {
+        let mut total_size = 0usize;
+        for (i, (node, access_node)) in self.nodes.iter().enumerate() {
+            let node = node.get();
+            let t = node.type_.clone();
+            let size = Self::compute_memory_footprint(self, *access_node, &t);
+            println!("  #{:<3} {:?} (size = {})", i, node.type_.as_ref(), size);
+            println!("       {:?}", node.instruction.as_ref());
+            total_size += size;
+        }
+        println!("  Total Frame Size = {}", total_size);
     }
 }

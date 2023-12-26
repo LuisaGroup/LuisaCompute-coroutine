@@ -5,7 +5,7 @@
 // through all the reachable instructions until the next split mark is encountered.
 // Note: this analysis only works on a single module without recurse into its callees.
 
-use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
+use crate::ir::{collect_nodes, BasicBlock, Func, Instruction, Module, NodeRef};
 use crate::safe;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -256,7 +256,29 @@ impl CoroPreliminaryGraph {
         known.insert(*instr_ref, result);
     }
 
+    fn check_no_duplicate_suspend_tokens(module: &Module) {
+        let nodes = collect_nodes(module.entry);
+        let mut suspend_tokens: Vec<_> = nodes
+            .iter()
+            .filter_map(|node| {
+                if let Instruction::CoroSplitMark { token } = node.get().instruction.as_ref() {
+                    Some(*token)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        suspend_tokens.sort();
+        let size_before = suspend_tokens.len();
+        suspend_tokens.dedup();
+        let size_after = suspend_tokens.len();
+        assert_eq!(size_before, size_after, "Duplicate suspend tokens.");
+    }
+
     fn from(module: &Module) -> Self {
+        // make sure that the input module is valid
+        Self::check_no_duplicate_suspend_tokens(module);
+        // start the translation
         let mut instructions = Vec::new();
         let mut node_to_instr = HashMap::new();
         let mut entry_scope =

@@ -36,6 +36,7 @@ pub(crate) struct CoroTransferNode {
 }
 
 pub(crate) struct CoroTransferGraph {
+    pub union_states: AccessTree,
     pub nodes: HashMap<CoroScopeRef, CoroTransferNode>,
 }
 
@@ -200,6 +201,7 @@ impl<'a> CoroTransferGraphBuilder<'a> {
 
     fn build(&self) -> CoroTransferGraph {
         let mut g = CoroTransferGraph {
+            union_states: self.use_def.union_uses.clone(),
             nodes: HashMap::new(),
         };
         self.build_transfer_topology(&mut g);

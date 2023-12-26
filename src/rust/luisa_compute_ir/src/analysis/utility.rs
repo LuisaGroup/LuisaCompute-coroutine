@@ -134,31 +134,31 @@ pub(crate) struct AccessTreeNodeRef<'a> {
 }
 
 impl<'a> AccessTreeNodeRef<'a> {
-    fn new(tree: &'a AccessTree, node: AccessNodeRef) -> Self {
+    pub fn new(tree: &'a AccessTree, node: AccessNodeRef) -> Self {
         Self { tree, node }
     }
 
-    fn get(&self) -> &AccessNode {
+    pub fn get(&self) -> &AccessNode {
         self.tree.get(self.node)
     }
 
-    fn child(&self, i: AccessChainIndex) -> Option<Self> {
+    pub fn child(&self, i: AccessChainIndex) -> Option<Self> {
         self.get()
             .children
             .get(&i)
             .map(|&n| Self::new(self.tree, n))
     }
 
-    fn has_any_child(&self) -> bool {
+    pub fn has_any_child(&self) -> bool {
         !self.get().children.is_empty()
     }
 
-    fn has_child(&self, i: AccessChainIndex) -> bool {
+    pub fn has_child(&self, i: AccessChainIndex) -> bool {
         let children = &self.get().children;
         children.is_empty() || children.contains_key(&i)
     }
 
-    fn children(&'a self) -> impl Iterator<Item = (AccessChainIndex, Self)> {
+    pub fn children(&'a self) -> impl Iterator<Item = (AccessChainIndex, Self)> {
         self.get()
             .children
             .iter()

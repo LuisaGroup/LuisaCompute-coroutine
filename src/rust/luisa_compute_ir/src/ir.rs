@@ -229,6 +229,10 @@ impl Primitive {
             Primitive::Float64 => 8,
         }
     }
+
+    pub fn to_type(&self) -> CArc<Type> {
+        context::register_type(Type::Primitive(*self))
+    }
 }
 
 impl VectorType {

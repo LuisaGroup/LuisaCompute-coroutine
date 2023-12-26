@@ -1,34 +1,300 @@
 // This file implements the coroutine frame analysis, which computes the layout of the frame structure
 // and determine which fields should be loaded and saved for each subroutine.
-// We start by computing some auxiliary sets for each subroutine:
-// - ExternalUse: the set of nodes that are used inside the subroutine but defined outside (from CoroUseDef)
-// - Kill: the set of nodes that are killed (definitely overwritten) at each suspension point (from CoroUseDef)
-// - Touch: the set of nodes that are touched (possibly overwritten) at each suspension point (from CoroUseDef)
-// - Live: the set of nodes that are live at each suspension point (from CoroTransferGraph)
+// We use the following auxiliary sets to help the analysis:
 // - Load: the set of nodes that are loaded at the beginning of the subroutine (from CoroTransferGraph)
 // - Save: the set of nodes that are saved to the frame at each suspension point (from CoroTransferGraph)
+// The analysis also computes a stable ordering (not changed between runs) of the nodes in the module by their
+// appearing order in the subroutines sorted by the suspend token. This is important to maintain a consistent
+// hash value for the generated code.
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transfer_graph::CoroTransferGraph;
-use crate::ir::{BasicBlock, Instruction, NodeRef};
+use crate::analysis::utility::{AccessChainIndex, AccessTree, AccessTreeNodeRef};
+use crate::ir::{BasicBlock, Const, Func, Instruction, IrBuilder, NodeRef, Primitive, Type};
+use crate::{CArc, TypeOf};
 use std::collections::{BTreeMap, HashMap};
 
-pub(crate) struct CoroFrame {}
+#[derive(Debug, Clone)]
+pub(crate) struct CoroFrameField {
+    type_: Primitive,
+    root: NodeRef,
+    chain: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CoroFrame {
+    pub interface_type: CArc<Type>,
+    pub fields: Vec<CoroFrameField>,
+}
+
+impl CoroFrame {
+    fn _try_add_child(
+        &mut self,
+        child_type: &Type,
+        child_index: usize,
+        tree_node: Option<AccessTreeNodeRef>,
+        root: NodeRef,
+        chain: &mut Vec<usize>,
+    ) {
+        chain.push(child_index);
+        if let Some(tree_node) = tree_node {
+            let i = AccessChainIndex::Static(child_index as i32);
+            if tree_node.has_child(i) {
+                self.add_node(child_type, tree_node.child(i), root, chain);
+            }
+        } else {
+            self.add_node(child_type, None, root, chain);
+        }
+        let popped = chain.pop();
+        assert_eq!(popped, Some(child_index));
+    }
+
+    fn add_node(
+        &mut self,
+        t: &Type,
+        tree_node: Option<AccessTreeNodeRef>,
+        root: NodeRef,
+        chain: &mut Vec<usize>,
+    ) {
+        match t {
+            Type::Void => unreachable!("void type in coroutine frame"),
+            Type::UserData => unreachable!("user data type in coroutine frame"),
+            Type::Primitive(p) => {
+                self.fields.push(CoroFrameField {
+                    type_: p.clone(),
+                    root,
+                    chain: chain.clone(),
+                });
+            }
+            Type::Vector(v) => {
+                let elem = v.element.to_type();
+                for i in 0..v.length {
+                    self._try_add_child(&elem, i as usize, tree_node, root, chain);
+                }
+            }
+            Type::Matrix(m) => {
+                let elem = m.column();
+                for i in 0..m.dimension {
+                    self._try_add_child(&elem, i as usize, tree_node, root, chain);
+                }
+            }
+            Type::Struct(s) => {
+                for (i, field) in s.fields.iter().enumerate() {
+                    self._try_add_child(field, i, tree_node, root, chain);
+                }
+            }
+            Type::Array(a) => {
+                let elem = &a.element;
+                for i in 0..a.length {
+                    self._try_add_child(elem, i, tree_node, root, chain);
+                }
+            }
+            Type::Opaque(_) => unimplemented!("opaque type in coroutine frame"),
+        }
+    }
+
+    fn _build(
+        tree: &AccessTree,
+        stable_indices: &HashMap<NodeRef, u32>,
+        for_aggregates: bool,
+    ) -> Self {
+        let mut desc = CoroFrame {
+            interface_type: CArc::null(),
+            fields: Vec::new(),
+        };
+        for (&node, &tree_node) in tree.nodes.iter() {
+            if for_aggregates == !node.type_().is_primitive() {
+                desc.add_node(
+                    node.type_().as_ref(),
+                    Some(AccessTreeNodeRef::new(tree, tree_node)),
+                    node,
+                    &mut Vec::new(),
+                );
+            }
+        }
+        if for_aggregates {
+            desc.fields.sort_by_key(|field| {
+                let node_index = stable_indices[&field.root];
+                let field_size = match field.type_ {
+                    Primitive::Bool => 1,
+                    _ => field.type_.size() * 8,
+                };
+                (node_index, field_size)
+            });
+        } else {
+            desc.fields.sort_by_key(|field| {
+                let node_index = stable_indices[&field.root];
+                let field_size = match field.type_ {
+                    Primitive::Bool => 1,
+                    _ => field.type_.size() * 8,
+                };
+                (usize::MAX - field_size, node_index)
+            });
+        }
+        desc
+    }
+
+    fn _compute_interface_type(&mut self) {
+        let mut fields = vec![Type::vector(Primitive::Uint32, 4)];
+        fields.extend(self.fields.iter().map(|field| field.type_.to_type()));
+        let alignment = self
+            .fields
+            .iter()
+            .fold(16, |acc, field| std::cmp::max(acc, field.type_.size()));
+        self.interface_type = Type::struct_of(alignment as u32, fields);
+    }
+
+    fn new(tree: &AccessTree, stable_indices: &HashMap<NodeRef, u32>) -> Self {
+        let agg_desc = Self::_build(tree, stable_indices, true);
+        let prim_desc = Self::_build(tree, stable_indices, false);
+        let mut desc = CoroFrame {
+            interface_type: CArc::null(),
+            fields: [agg_desc.fields, prim_desc.fields].concat(),
+        };
+        desc._compute_interface_type();
+        desc
+    }
+}
+
+impl CoroFrame {
+    pub fn resume(
+        &self,
+        load_tree: &AccessTree,
+        frame: NodeRef,
+        b: &mut IrBuilder,
+    ) -> HashMap<NodeRef, NodeRef> {
+        let mut mapping = HashMap::new();
+        for (field_index, field) in self.fields.iter().enumerate() {
+            let root = field.root;
+            let chain: Vec<_> = field
+                .chain
+                .iter()
+                .map(|i| AccessChainIndex::Static(*i as i32))
+                .collect();
+            if load_tree.contains(root, &chain) {
+                let mapped = mapping
+                    .entry(root)
+                    .or_insert_with(|| b.local_zero_init(root.type_().clone()))
+                    .clone();
+                let field_index = b.const_(Const::Uint32(
+                    1/* skip coro_id and token */ + field_index as u32,
+                ));
+                let field_type = field.type_.to_type();
+                let p_value = b.gep(frame, &[field_index], field_type.clone());
+                let value = b.load(p_value);
+                let p_mapped = if field.chain.is_empty() {
+                    mapped
+                } else {
+                    let chain: Vec<_> = field
+                        .chain
+                        .iter()
+                        .map(|&i| b.const_(Const::Uint32(i as u32)))
+                        .collect();
+                    b.gep(mapped, chain.as_slice(), field_type.clone())
+                };
+                b.update(p_mapped, value);
+            }
+        }
+        mapping
+    }
+
+    pub fn suspend(
+        &self,
+        target_token: u32,
+        save_tree: &AccessTree,
+        frame: NodeRef,
+        b: &mut IrBuilder,
+        mapping: &HashMap<NodeRef, NodeRef>,
+    ) {
+        // update target coro token
+        let t_u32 = <u32 as TypeOf>::type_();
+        let target_token = b.const_(Const::Uint32(target_token));
+        let zero = b.const_(Const::Zero(t_u32.clone()));
+        let three = b.const_(Const::Uint32(3));
+        let p_token = b.gep(frame, &[zero, three], t_u32.clone());
+        b.update(p_token, target_token);
+        // save fields
+        for (field_index, field) in self.fields.iter().enumerate() {
+            let root = field.root;
+            let chain: Vec<_> = field
+                .chain
+                .iter()
+                .map(|i| AccessChainIndex::Static(*i as i32))
+                .collect();
+            if save_tree.contains(root, &chain) {
+                let mapped = mapping[&root].clone();
+                let p_mapped = if field.chain.is_empty() {
+                    mapped
+                } else {
+                    let chain: Vec<_> = field
+                        .chain
+                        .iter()
+                        .map(|&i| b.const_(Const::Uint32(i as u32)))
+                        .collect();
+                    b.gep(mapped, chain.as_slice(), field.type_.to_type())
+                };
+                let value = b.load(p_mapped);
+                let field_index = b.const_(Const::Uint32(
+                    1/* skip coro_id and token */ + field_index as u32,
+                ));
+                let p_field = b.gep(frame, &[field_index], field.type_.to_type());
+                b.update(p_field, value);
+            }
+        }
+    }
+
+    pub fn read_coro_id_and_target_token(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
+        let t_u32 = <u32 as TypeOf>::type_();
+        let zero = b.const_(Const::Zero(t_u32.clone()));
+        let gep = b.gep(frame, &[zero], Type::vector_of(t_u32.clone(), 4));
+        b.load(gep)
+    }
+
+    pub fn read_coro_id(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
+        let t_u32 = <u32 as TypeOf>::type_();
+        let coro_id_and_token = self.read_coro_id_and_target_token(frame, b);
+        b.call(Func::Vec3, &[coro_id_and_token], Type::vector_of(t_u32, 3))
+    }
+
+    pub fn read_target_token(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
+        let t_u32 = <u32 as TypeOf>::type_();
+        let zero = b.const_(Const::Zero(t_u32.clone()));
+        let three = b.const_(Const::Uint32(3));
+        let gep = b.gep(frame, &[zero, three], <u32 as TypeOf>::type_());
+        b.load(gep)
+    }
+
+    pub fn initialize(&self, frame: NodeRef, coro_id: NodeRef, b: &mut IrBuilder) {
+        let t_u32 = <u32 as TypeOf>::type_();
+        let coro_id_x = b.extract(coro_id, 0, t_u32.clone());
+        let coro_id_y = b.extract(coro_id, 1, t_u32.clone());
+        let coro_id_z = b.extract(coro_id, 2, t_u32.clone());
+        let coro_token = b.const_(Const::Uint32(u32::MAX));
+        let t_u32x4 = Type::vector_of(t_u32.clone(), 4);
+        let coro_id_and_token = b.call(
+            Func::Vec4,
+            &[coro_id_x, coro_id_y, coro_id_z, coro_token],
+            t_u32x4.clone(),
+        );
+        let zero = b.const_(Const::Zero(t_u32.clone()));
+        let gep = b.gep(frame, &[zero], t_u32x4.clone());
+        b.update(gep, coro_id_and_token);
+    }
+}
 
 struct CoroFrameBuilder<'a> {
     graph: &'a CoroGraph,
     transfer_graph: &'a CoroTransferGraph,
-    node_stable_indices: HashMap<NodeRef, u32>,
 }
 
 fn check_is_btree_map<K, V>(_: &BTreeMap<K, V>) {}
 
 impl<'a> CoroFrameBuilder<'a> {
-    fn compute_node_stable_indices(&mut self) -> HashMap<NodeRef, u32> {
+    fn compute_stable_node_indices(&mut self) -> HashMap<NodeRef, u32> {
         let mut nodes = HashMap::new();
-        self._collect_nodes_in_scope(self.graph.entry, &mut nodes);
         check_is_btree_map(&self.graph.tokens);
-        for (token, scope) in self.graph.tokens.iter() {
+        self._collect_nodes_in_scope(self.graph.entry, &mut nodes);
+        for scope in self.graph.tokens.values() {
             self._collect_nodes_in_scope(*scope, &mut nodes);
         }
         nodes
@@ -204,10 +470,9 @@ impl<'a> CoroFrameBuilder<'a> {
         let mut graph = CoroFrameBuilder {
             graph,
             transfer_graph,
-            node_stable_indices: HashMap::new(),
         };
-        graph.node_stable_indices = graph.compute_node_stable_indices();
-        todo!("layout coroutine frame")
+        let stable_node_indices = graph.compute_stable_node_indices();
+        CoroFrame::new(&graph.transfer_graph.union_states, &stable_node_indices)
     }
 }
 

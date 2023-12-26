@@ -33,11 +33,12 @@ int main(int argc, char *argv[]) {
     auto x_vec = std::vector<uint>(n, 0u);
 
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
-        auto id = coro_id().x;
+        auto cid = coro_id();
+        auto id = cid[0u];
         //        x_buffer.write(id, id * 2u);
         x_buffer.write(id, coro_token() + 1000u + 10 * id);
         $suspend("1");
-        x_buffer.write(id, coro_token() + 2000u + 20 * id);
+        x_buffer.write(cid.y, coro_token() + 2000u + 20 * cid.x);
         //        $if(id % 2u == 0u) {
         //            $suspend("1");
         //            x_buffer.write(id, 1000u + coro_token() * 2u);

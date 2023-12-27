@@ -80,7 +80,7 @@ impl<'a> AccessTreeNodeRef<'a> {
         children.is_empty() || children.contains_key(&i)
     }
 
-    fn children(&'a self) -> impl Iterator<Item = (AccessChainIndex, Self)> {
+    fn children(&'a self) -> impl Iterator<Item = (AccessChainIndex, AccessTreeNodeRef<'a>)> {
         self.get()
             .children
             .iter()

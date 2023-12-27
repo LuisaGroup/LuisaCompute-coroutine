@@ -96,7 +96,7 @@ pub(crate) enum CoroInstruction {
     Terminate,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct CoroScope {
     pub instructions: Vec<CoroInstrRef>, // indices into the graph nodes
 }

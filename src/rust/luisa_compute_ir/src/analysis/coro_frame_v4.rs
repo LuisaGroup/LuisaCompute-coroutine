@@ -349,12 +349,12 @@ pub(crate) struct CoroFrameAnalyser {
 
     pub(crate) continuations: BTreeMap<u32, Continuation>,
 
-    pub(crate) coro_frame: CoroFrame,
+    coro_frame: CoroFrame,
     pub(crate) frame_type: CArc<Type>,
     pub(crate) frame_fields: Vec<CArc<Type>>,
     pub(crate) node2frame_slot: HashMap<NodeRef, usize>,
 
-    replayable_value_analysis: ReplayableValueAnalysis,
+    pub(crate) replayable_value_analysis: ReplayableValueAnalysis,
 }
 
 impl CoroFrameAnalyser {
@@ -378,6 +378,13 @@ impl CoroFrameAnalyser {
             node2frame_slot: HashMap::new(),
             replayable_value_analysis: ReplayableValueAnalysis::new(false),
         }
+    }
+
+    pub(crate) fn input_vars(&mut self, token: u32) -> &HashSet<NodeRef> {
+        return self.coro_frame.input.get(&token).unwrap();
+    }
+    pub(crate) fn output_vars(&mut self, token: u32, token_next: u32) -> &HashSet<NodeRef> {
+        return self.coro_frame.output.get(&(token, token_next)).unwrap();
     }
 
     fn analyse(&mut self, coro_graph: &CoroGraph) {

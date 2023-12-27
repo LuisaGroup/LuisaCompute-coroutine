@@ -139,7 +139,7 @@ impl SplitManager {
                     pools: callable.pools.clone(),
                     curve_basis_set: callable.module.curve_basis_set.clone(),
                 },
-                ret_type: CArc::new(Type::Void), // TODO: coroutine return type: only void allowed
+                ret_type: register_type(Type::Void), // TODO: coroutine return type: only void allowed
                 args: CBoxedSlice::from(callable_info.args.as_slice()),
                 captures: CBoxedSlice::from(callable_info.captures.as_slice()),
                 subroutines: CBoxedSlice::new(vec![]),
@@ -308,7 +308,7 @@ impl SplitManager {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
         builder.coro_resume(token); // TODO: delete
-        builder.comment(CBoxedSlice::from("CoroResume Start".as_bytes())); // TODO: for DEBUG
+        builder.comment(CBoxedSlice::from("CoroResume Start".as_bytes())); // for DEBUG
         let old2frame_index = self
             .coro_callable_info
             .get(&token)
@@ -326,13 +326,13 @@ impl SplitManager {
             //     println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
             // }
         }
-        builder.comment(CBoxedSlice::from("CoroResume End".as_bytes())); // TODO: for DEBUG
+        builder.comment(CBoxedSlice::from("CoroResume End".as_bytes())); // for DEBUG
         scope_builder
     }
     fn coro_store(&mut self, scope_builder: &mut ScopeBuilder, token_next: u32) {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
-        builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes())); // TODO: for DEBUG
+        builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes())); // for DEBUG
 
         let output_vars = self.frame_analyser.output_vars(token, token_next);
 
@@ -386,7 +386,8 @@ impl SplitManager {
         );
         let value = builder.const_(Const::Uint32(token_next));
         builder.update(gep, value);
-        builder.comment(CBoxedSlice::from("CoroSuspend End".as_bytes())); // TODO: for DEBUG
+
+        builder.comment(CBoxedSlice::from("CoroSuspend End".as_bytes())); // for DEBUG
     }
 
     fn visit_bb(

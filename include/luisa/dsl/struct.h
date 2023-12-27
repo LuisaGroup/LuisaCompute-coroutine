@@ -482,7 +482,25 @@ using c_array_to_std_array_t = typename c_array_to_std_array<T>::type;
                 member_index += mem->size();                                                                         \
             }                                                                                                        \
         }                                                                                                            \
-                                                                                                                     \
+        template<typename I>                                                                                         \
+        void write(I &&index, Expr<S> value, luisa::vector<uint> members) const noexcept {                           \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            auto member_index = 0u;                                                                                  \
+            for (auto w_mem = 0u; w_mem < members.size(); ++w_mem) {                                                 \
+                auto i = members[w_mem];                                                                             \
+                auto &mem = type->members()[i];                                                                      \
+                auto stride = (((uint)mem->size() + (uint)sizeof(uint) - 1u) / (uint)sizeof(uint));                  \
+                auto id = dsl::def(std::forward<I>(index));                                                          \
+                builder->call(CallOp::BYTE_BUFFER_WRITE,                                                             \
+                              {_buffer.expression(),                                                                 \
+                               detail::extract_expression((_member_offsets[i] +                                      \
+                                                           (id + _element_offset) * stride) *                        \
+                                                          (uint)sizeof(uint)),                                       \
+                               builder->member(mem, value.expression(), i)});                                        \
+                member_index += mem->size();                                                                         \
+            }                                                                                                        \
+        }                                                                                                            \
         [[nodiscard]] auto operator->() const noexcept { return this; }                                              \
     };                                                                                                               \
     template<>                                                                                                       \

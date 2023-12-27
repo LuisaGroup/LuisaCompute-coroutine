@@ -21,13 +21,15 @@ pub(crate) struct CoroFrameField {
     chain: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct CoroFrame {
+#[derive(Clone)]
+pub(crate) struct CoroFrame<'a> {
+    pub graph: &'a CoroGraph,
+    pub transfer_graph: &'a CoroTransferGraph,
     pub interface_type: CArc<Type>,
     pub fields: Vec<CoroFrameField>,
 }
 
-impl CoroFrame {
+impl<'a> CoroFrame<'a> {
     fn _try_add_child(
         &mut self,
         child_type: &Type,
@@ -94,19 +96,25 @@ impl CoroFrame {
     }
 
     fn _build(
-        tree: &AccessTree,
+        graph: &'a CoroGraph,
+        transfer_graph: &'a CoroTransferGraph,
         stable_indices: &HashMap<NodeRef, u32>,
         for_aggregates: bool,
     ) -> Self {
         let mut desc = CoroFrame {
+            graph,
+            transfer_graph,
             interface_type: CArc::null(),
             fields: Vec::new(),
         };
-        for (&node, &tree_node) in tree.nodes.iter() {
+        for (&node, &tree_node) in transfer_graph.union_states.nodes.iter() {
             if for_aggregates == !node.type_().is_primitive() {
                 desc.add_node(
                     node.type_().as_ref(),
-                    Some(AccessTreeNodeRef::new(tree, tree_node)),
+                    Some(AccessTreeNodeRef::new(
+                        &transfer_graph.union_states,
+                        tree_node,
+                    )),
                     node,
                     &mut Vec::new(),
                 );
@@ -144,10 +152,16 @@ impl CoroFrame {
         self.interface_type = Type::struct_of(alignment as u32, fields);
     }
 
-    fn new(tree: &AccessTree, stable_indices: &HashMap<NodeRef, u32>) -> Self {
-        let agg_desc = Self::_build(tree, stable_indices, true);
-        let prim_desc = Self::_build(tree, stable_indices, false);
+    fn new(
+        graph: &'a CoroGraph,
+        transfer_graph: &'a CoroTransferGraph,
+        stable_indices: &HashMap<NodeRef, u32>,
+    ) -> Self {
+        let agg_desc = Self::_build(graph, transfer_graph, stable_indices, true);
+        let prim_desc = Self::_build(graph, transfer_graph, stable_indices, false);
         let mut desc = CoroFrame {
+            graph,
+            transfer_graph,
             interface_type: CArc::null(),
             fields: [agg_desc.fields, prim_desc.fields].concat(),
         };
@@ -156,14 +170,15 @@ impl CoroFrame {
     }
 }
 
-impl CoroFrame {
+impl<'a> CoroFrame<'a> {
     pub fn resume(
         &self,
-        load_tree: &AccessTree,
+        scope: CoroScopeRef,
         frame: NodeRef,
         b: &mut IrBuilder,
     ) -> HashMap<NodeRef, NodeRef> {
         let mut mapping = HashMap::new();
+        let load_tree = &self.transfer_graph.nodes[&scope].union_states_to_load;
         for (field_index, field) in self.fields.iter().enumerate() {
             let root = field.root;
             let chain: Vec<_> = field
@@ -200,12 +215,14 @@ impl CoroFrame {
 
     pub fn suspend(
         &self,
+        scope: CoroScopeRef,
         target_token: u32,
-        save_tree: &AccessTree,
         frame: NodeRef,
         b: &mut IrBuilder,
         mapping: &HashMap<NodeRef, NodeRef>,
     ) {
+        // get the save tree
+        let save_tree = &self.transfer_graph.nodes[&scope].outlets[&target_token].states_to_save;
         // update target coro token
         let t_u32 = <u32 as TypeOf>::type_();
         let target_token = b.const_(Const::Uint32(target_token));
@@ -466,18 +483,18 @@ impl<'a> CoroFrameBuilder<'a> {
 }
 
 impl<'a> CoroFrameBuilder<'a> {
-    fn build(graph: &'a CoroGraph, transfer_graph: &'a CoroTransferGraph) -> CoroFrame {
-        let mut graph = CoroFrameBuilder {
+    fn build(graph: &'a CoroGraph, transfer_graph: &'a CoroTransferGraph) -> CoroFrame<'a> {
+        let mut builder = CoroFrameBuilder {
             graph,
             transfer_graph,
         };
-        let stable_node_indices = graph.compute_stable_node_indices();
-        CoroFrame::new(&graph.transfer_graph.union_states, &stable_node_indices)
+        let stable_node_indices = builder.compute_stable_node_indices();
+        CoroFrame::new(graph, transfer_graph, &stable_node_indices)
     }
 }
 
-impl CoroFrame {
-    pub fn build(graph: &CoroGraph, transfer_graph: &CoroTransferGraph) -> CoroFrame {
+impl<'a> CoroFrame<'a> {
+    pub fn build(graph: &'a CoroGraph, transfer_graph: &'a CoroTransferGraph) -> CoroFrame<'a> {
         CoroFrameBuilder::build(graph, transfer_graph)
     }
 }

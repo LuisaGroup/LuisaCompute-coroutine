@@ -221,7 +221,7 @@ impl Transform for SplitCoro {
         transfer_graph.dump();
         let coro_frame = CoroFrame::build(&graph, &transfer_graph);
         println!("=============================== CoroFrame ===============================");
-        println!("{:#?}", coro_frame);
+        println!("{:#?}", coro_frame.interface_type.as_ref());
         // TODO
         let frame_analyser = CoroFrameAnalysis::analyse(&graph, &callable);
         SplitManager::split(callable, graph, frame_analyser)

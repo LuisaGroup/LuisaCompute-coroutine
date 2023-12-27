@@ -15,7 +15,7 @@ use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, Coro
 use crate::analysis::coro_use_def::CoroGraphUseDef;
 use crate::analysis::utility::AccessTree;
 use crate::safe;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub(crate) struct CoroTransferEdge {
     // the target of the transfer (another subscope)
@@ -30,7 +30,7 @@ pub(crate) struct CoroTransferEdge {
 // A subscope of the coroutine
 pub(crate) struct CoroTransferNode {
     pub scope: CoroScopeRef,
-    pub outlets: Vec<CoroTransferEdge>,
+    pub outlets: BTreeMap<u32, CoroTransferEdge>,
     pub union_live_states: AccessTree,
     pub union_states_to_load: AccessTree,
     pub union_states_to_save: AccessTree,
@@ -52,7 +52,7 @@ impl CoroTransferGraph {
                 i,
                 node.outlets.len()
             );
-            for edge in node.outlets.iter() {
+            for (_, edge) in node.outlets.iter() {
                 println!("- Target {} Live States -", edge.target.0);
                 edge.live_states.dump();
             }
@@ -128,12 +128,13 @@ impl<'a> CoroTransferGraphBuilder<'a> {
                     .iter()
                     .map(|t| {
                         let target = self.graph.tokens[t];
-                        CoroTransferEdge {
+                        let edge = CoroTransferEdge {
                             target,
                             live_states: self.use_def.scopes[&target].external_uses.clone(),
                             states_to_load: AccessTree::new(),
                             states_to_save: AccessTree::new(),
-                        }
+                        };
+                        (*t, edge)
                     })
                     .collect(),
                 union_live_states: AccessTree::new(),
@@ -151,14 +152,14 @@ impl<'a> CoroTransferGraphBuilder<'a> {
             any_change = false;
             let gg = safe! { &*(g as *mut CoroTransferGraph) };
             for node in g.nodes.values_mut() {
-                for edge in node.outlets.iter_mut() {
+                for (_, edge) in node.outlets.iter_mut() {
                     // propagate the alive states from the target subscopes
                     let target_use_def = &self.use_def.scopes[&edge.target];
                     let target_outlets = &gg.nodes[&edge.target].outlets;
                     let new_alive_states =
                         target_outlets
                             .iter()
-                            .fold(edge.live_states.clone(), |acc, e| {
+                            .fold(edge.live_states.clone(), |acc, (_, e)| {
                                 let killed = &target_use_def.internal_kills[&e.target];
                                 acc.union(&e.live_states.subtract(killed))
                             });
@@ -174,9 +175,9 @@ impl<'a> CoroTransferGraphBuilder<'a> {
             node.union_live_states = node
                 .outlets
                 .iter()
-                .fold(AccessTree::new(), |acc, e| acc.union(&e.live_states));
+                .fold(AccessTree::new(), |acc, (_, e)| acc.union(&e.live_states));
             let external_use = &self.use_def.scopes[&node.scope].external_uses;
-            for edge in node.outlets.iter_mut() {
+            for (_, edge) in node.outlets.iter_mut() {
                 let live = &edge.live_states;
                 // TODO: use per-target touch sets
                 let touch = &self.use_def.scopes[&node.scope].internal_touches;
@@ -192,11 +193,11 @@ impl<'a> CoroTransferGraphBuilder<'a> {
             node.union_states_to_load = node
                 .outlets
                 .iter()
-                .fold(external_use.clone(), |acc, e| acc.union(&e.states_to_load));
+                .fold(external_use.clone(), |acc, (_, e)| acc.union(&e.states_to_load));
             node.union_states_to_save = node
                 .outlets
                 .iter()
-                .fold(AccessTree::new(), |acc, e| acc.union(&e.states_to_save));
+                .fold(AccessTree::new(), |acc, (_, e)| acc.union(&e.states_to_save));
         }
     }
 

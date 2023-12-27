@@ -141,10 +141,17 @@ const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const l
     return nullptr;
 }
 void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
-    auto member_coro_id = member(Type::of<uint3>(), expr, 0u);
-    auto member_coro_token = member(Type::of<uint>(), expr, 1u);
-    assign(member_coro_id, coro_id);
-    assign(member_coro_token, literal(Type::of<uint>(), 0u));
+    // auto member_coro_id = member(Type::of<uint3>(), expr, 0u);
+    // auto member_coro_token = member(Type::of<uint>(), expr, 1u);
+    // assign(member_coro_id, coro_id);
+    // assign(member_coro_token, literal(Type::of<uint>(), 0u));
+    auto id_x = swizzle(Type::of<uint>(), coro_id, 1u, 0b0001u);
+    auto id_y = swizzle(Type::of<uint>(), coro_id, 1u, 0b0010u);
+    auto id_z = swizzle(Type::of<uint>(), coro_id, 1u, 0b0100u);
+    auto zero = literal(Type::of<uint>(), 0u);
+    auto value = call(Type::of<uint4>(), CallOp::MAKE_UINT4, {id_x, id_y, id_z, zero});
+    auto p_coro_id_and_token = member(Type::of<uint4>(), expr, 0u);
+    assign(p_coro_id_and_token, value);
 }
 const CallExpr *FunctionBuilder::coro_id() noexcept {
     check_is_coroutine();

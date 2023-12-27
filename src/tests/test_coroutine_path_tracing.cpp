@@ -300,7 +300,7 @@ int main(int argc, char *argv[]) {
         auto coord = dispatch_id().xy();
         auto coord_1d = coord.y * resolution.y + coord.x;
         auto frame = frame_buffer->read(coord_1d);
-        initialize_coroframe(frame, dispatch_id());
+        // initialize_coroframe(frame, dispatch_id());
         raytracing_coro(frame, image, seed_image, accel, resolution);
         frame_buffer->write(coord_1d, frame);
     };

@@ -1563,3 +1563,13 @@ inline void lc_print_impl(LCPrinterBuffer buffer, T value) {
     auto src = reinterpret_cast<thread const A *>(&value);
     *dst = *src;
 }
+
+template<typename T>
+[[nodiscard]] inline auto lc_coro_id(thread const T &frame) {
+    return frame.m0.xyz;
+}
+
+template<typename T>
+[[nodiscard]] inline auto lc_coro_token(thread const T &frame) {
+    return frame.m0.w;
+}

@@ -19,6 +19,7 @@ pub mod demote_locals;
 
 pub mod defer_load;
 pub mod inliner;
+pub mod materialize_coro;
 pub mod split_coro;
 
 use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
@@ -137,6 +138,10 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
         }
         "defer_load" => {
             let transform = defer_load::DeferLoad;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "materialize_coro" => {
+            let transform = materialize_coro::MaterializeCoro;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),

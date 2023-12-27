@@ -7,12 +7,17 @@
 // appearing order in the subroutines sorted by the suspend token. This is important to maintain a consistent
 // hash value for the generated code.
 
+// TODO: support designated states
+
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transfer_graph::CoroTransferGraph;
 use crate::analysis::utility::{AccessChainIndex, AccessTree, AccessTreeNodeRef};
-use crate::ir::{BasicBlock, Const, Func, Instruction, IrBuilder, NodeRef, Primitive, Type};
-use crate::{CArc, TypeOf};
+use crate::ir::{
+    BasicBlock, Const, Func, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF,
+};
+use crate::{CArc, CBoxedSlice, TypeOf};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::format;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CoroFrameField {
@@ -177,6 +182,7 @@ impl<'a> CoroFrame<'a> {
         frame: NodeRef,
         b: &mut IrBuilder,
     ) -> HashMap<NodeRef, NodeRef> {
+        b.comment(CBoxedSlice::from("coro resume".to_string()));
         let mut mapping = HashMap::new();
         let load_tree = &self.transfer_graph.nodes[&scope].union_states_to_load;
         for (field_index, field) in self.fields.iter().enumerate() {
@@ -221,6 +227,10 @@ impl<'a> CoroFrame<'a> {
         b: &mut IrBuilder,
         mapping: &HashMap<NodeRef, NodeRef>,
     ) {
+        b.comment(CBoxedSlice::from(format!(
+            "coro suspend (target = {})",
+            target_token
+        )));
         // get the save tree
         let save_tree = &self.transfer_graph.nodes[&scope].outlets[&target_token].states_to_save;
         // update target coro token
@@ -258,6 +268,21 @@ impl<'a> CoroFrame<'a> {
                 b.update(p_field, value);
             }
         }
+        // return
+        b.return_(INVALID_REF);
+    }
+
+    pub fn terminate(&self, scope: CoroScopeRef, frame: NodeRef, b: &mut IrBuilder) {
+        b.comment(CBoxedSlice::from("coro terminate".to_string()));
+        let t_u32 = <u32 as TypeOf>::type_();
+        let zero = b.const_(Const::Zero(t_u32.clone()));
+        let three = b.const_(Const::Uint32(3));
+        let gep = b.gep(frame, &[zero, three], <u32 as TypeOf>::type_());
+        const TERMINATE_TOKEN: u32 = i32::MAX as u32;
+        let terminate_token = b.const_(Const::Uint32(TERMINATE_TOKEN));
+        b.update(gep, terminate_token);
+        // TODO: store designated states if any
+        b.return_(INVALID_REF);
     }
 
     pub fn read_coro_id_and_target_token(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
@@ -286,16 +311,23 @@ impl<'a> CoroFrame<'a> {
         let coro_id_x = b.extract(coro_id, 0, t_u32.clone());
         let coro_id_y = b.extract(coro_id, 1, t_u32.clone());
         let coro_id_z = b.extract(coro_id, 2, t_u32.clone());
-        let coro_token = b.const_(Const::Uint32(u32::MAX));
+        let zero = b.const_(Const::Zero(t_u32.clone()));
         let t_u32x4 = Type::vector_of(t_u32.clone(), 4);
         let coro_id_and_token = b.call(
             Func::Vec4,
-            &[coro_id_x, coro_id_y, coro_id_z, coro_token],
+            &[coro_id_x, coro_id_y, coro_id_z, zero],
             t_u32x4.clone(),
         );
-        let zero = b.const_(Const::Zero(t_u32.clone()));
         let gep = b.gep(frame, &[zero], t_u32x4.clone());
         b.update(gep, coro_id_and_token);
+    }
+
+    pub fn dump(&self) {
+        println!("=========================== CoroFrame ===========================");
+        for (i, field) in self.fields.iter().enumerate() {
+            println!("Field {}: {:?}", i, field);
+        }
+        println!("Total Size = {}", self.interface_type.size());
     }
 }
 

@@ -142,7 +142,6 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
         const_cast<FunctionBuilder *>(converted.get())->coroframe_replace(corotype);
         for (int i = 0; i < subroutines.len; ++i) {
             auto sub = IR2AST::build(subroutines.ptr[i]._0.get());
-            const_cast<FunctionBuilder *>(sub.get())->coroframe_replace(corotype);
             auto wrapper = make_wrapper(sub.get());
             sub_builders.insert(std::make_pair(subroutine_ids.ptr[i], wrapper));
         }

@@ -1566,10 +1566,10 @@ inline void lc_print_impl(LCPrinterBuffer buffer, T value) {
 
 template<typename T>
 [[nodiscard]] inline auto lc_coro_id(thread const T &frame) {
-    return frame.m0.xyz;
+    return frame.m0;
 }
 
 template<typename T>
 [[nodiscard]] inline auto lc_coro_token(thread const T &frame) {
-    return frame.m0.w;
+    return frame.m1;
 }

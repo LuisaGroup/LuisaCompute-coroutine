@@ -148,7 +148,10 @@ impl<'a> CoroFrame<'a> {
     }
 
     fn _compute_interface_type(&mut self) {
-        let mut fields = vec![Type::vector(Primitive::Uint32, 4)];
+        let mut fields = vec![
+            Type::vector(Primitive::Uint32, 3), // coro id
+            <u32 as TypeOf>::type_(),           // target coro token
+        ];
         fields.extend(self.fields.iter().map(|field| field.type_.to_type()));
         let alignment = self
             .fields
@@ -198,7 +201,7 @@ impl<'a> CoroFrame<'a> {
                     .or_insert_with(|| b.local_zero_init(root.type_().clone()))
                     .clone();
                 let field_index = b.const_(Const::Uint32(
-                    1/* skip coro_id and token */ + field_index as u32,
+                    2/* skip coro_id and token */ + field_index as u32,
                 ));
                 let field_type = field.type_.to_type();
                 let p_value = b.gep(frame, &[field_index], field_type.clone());
@@ -236,9 +239,8 @@ impl<'a> CoroFrame<'a> {
         // update target coro token
         let t_u32 = <u32 as TypeOf>::type_();
         let target_token = b.const_(Const::Uint32(target_token));
-        let zero = b.const_(Const::Zero(t_u32.clone()));
-        let three = b.const_(Const::Uint32(3));
-        let p_token = b.gep(frame, &[zero, three], t_u32.clone());
+        let one = b.const_(Const::One(t_u32.clone()));
+        let p_token = b.gep(frame, &[one], t_u32.clone());
         b.update(p_token, target_token);
         // save fields
         for (field_index, field) in self.fields.iter().enumerate() {
@@ -262,7 +264,7 @@ impl<'a> CoroFrame<'a> {
                 };
                 let value = b.load(p_mapped);
                 let field_index = b.const_(Const::Uint32(
-                    1/* skip coro_id and token */ + field_index as u32,
+                    2/* skip coro_id and token */ + field_index as u32,
                 ));
                 let p_field = b.gep(frame, &[field_index], field.type_.to_type());
                 b.update(p_field, value);
@@ -275,9 +277,8 @@ impl<'a> CoroFrame<'a> {
     pub fn terminate(&self, scope: CoroScopeRef, frame: NodeRef, b: &mut IrBuilder) {
         b.comment(CBoxedSlice::from("coro terminate".to_string()));
         let t_u32 = <u32 as TypeOf>::type_();
-        let zero = b.const_(Const::Zero(t_u32.clone()));
-        let three = b.const_(Const::Uint32(3));
-        let gep = b.gep(frame, &[zero, three], <u32 as TypeOf>::type_());
+        let one = b.const_(Const::One(t_u32.clone()));
+        let gep = b.gep(frame, &[one], <u32 as TypeOf>::type_());
         const TERMINATE_TOKEN: u32 = i32::MAX as u32;
         let terminate_token = b.const_(Const::Uint32(TERMINATE_TOKEN));
         b.update(gep, terminate_token);
@@ -285,59 +286,19 @@ impl<'a> CoroFrame<'a> {
         b.return_(INVALID_REF);
     }
 
-    pub fn read_coro_id_and_target_token(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
-        let t_u32 = <u32 as TypeOf>::type_();
-        let zero = b.const_(Const::Zero(t_u32.clone()));
-        let gep = b.gep(frame, &[zero], Type::vector_of(t_u32.clone(), 4));
-        b.load(gep)
-    }
-
     pub fn read_coro_id(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
         let t_u32 = <u32 as TypeOf>::type_();
-        let coro_id_and_token = self.read_coro_id_and_target_token(frame, b);
-        let i0 = b.const_(Const::Uint32(0));
-        let i1 = b.const_(Const::Uint32(1));
-        let i2 = b.const_(Const::Uint32(2));
-        let id_x = b.call(
-            Func::ExtractElement,
-            &[coro_id_and_token.clone(), i0],
-            t_u32.clone(),
-        );
-        let id_y = b.call(
-            Func::ExtractElement,
-            &[coro_id_and_token.clone(), i1],
-            t_u32.clone(),
-        );
-        let id_z = b.call(
-            Func::ExtractElement,
-            &[coro_id_and_token.clone(), i2],
-            t_u32.clone(),
-        );
-        b.call(Func::Vec3, &[id_x, id_y, id_z], Type::vector_of(t_u32, 3))
+        let t_v = Type::vector_of(t_u32.clone(), 3);
+        let zero = b.const_(Const::Zero(t_u32.clone()));
+        let p_id = b.gep(frame.clone(), &[zero], t_v);
+        b.load(p_id)
     }
 
     pub fn read_target_token(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
         let t_u32 = <u32 as TypeOf>::type_();
-        let zero = b.const_(Const::Zero(t_u32.clone()));
-        let three = b.const_(Const::Uint32(3));
-        let gep = b.gep(frame, &[zero, three], <u32 as TypeOf>::type_());
+        let one = b.const_(Const::One(t_u32.clone()));
+        let gep = b.gep(frame, &[one], t_u32);
         b.load(gep)
-    }
-
-    pub fn initialize(&self, frame: NodeRef, coro_id: NodeRef, b: &mut IrBuilder) {
-        let t_u32 = <u32 as TypeOf>::type_();
-        let coro_id_x = b.extract(coro_id, 0, t_u32.clone());
-        let coro_id_y = b.extract(coro_id, 1, t_u32.clone());
-        let coro_id_z = b.extract(coro_id, 2, t_u32.clone());
-        let zero = b.const_(Const::Zero(t_u32.clone()));
-        let t_u32x4 = Type::vector_of(t_u32.clone(), 4);
-        let coro_id_and_token = b.call(
-            Func::Vec4,
-            &[coro_id_x, coro_id_y, coro_id_z, zero],
-            t_u32x4.clone(),
-        );
-        let gep = b.gep(frame, &[zero], t_u32x4.clone());
-        b.update(gep, coro_id_and_token);
     }
 
     pub fn dump(&self) {

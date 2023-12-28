@@ -179,8 +179,160 @@ impl<'a> CoroScopeMaterializer<'a> {
         }
     }
 
+    fn replay_value(&self, old_node: NodeRef, ctx: &mut CoroScopeMaterializerCtx) -> NodeRef {
+        if let Some(replayed) = ctx.mappings.get(&old_node) {
+            return replayed.clone();
+        }
+        match old_node.get().instruction.as_ref() {
+            Instruction::Const(c) => ctx.entry_builder.const_(c.clone()),
+            Instruction::Call(func, args) => match func {
+                Func::Unreachable(_)
+                | Func::ZeroInitializer
+                | Func::ThreadId
+                | Func::BlockId
+                | Func::WarpSize
+                | Func::WarpLaneId
+                | Func::DispatchId
+                | Func::DispatchSize => {
+                    ctx.entry_builder
+                        .call(func.clone(), &[], old_node.type_().clone())
+                }
+                Func::CoroId => self
+                    .frame
+                    .read_coro_id(self.get_frame_node(), &mut ctx.entry_builder),
+                Func::CoroToken => ctx
+                    .entry_builder
+                    .const_(Const::Uint32(self.token.unwrap_or(0))),
+                Func::Cast
+                | Func::Bitcast
+                | Func::Pack
+                | Func::Unpack
+                | Func::Add
+                | Func::Sub
+                | Func::Mul
+                | Func::Div
+                | Func::Rem
+                | Func::BitAnd
+                | Func::BitOr
+                | Func::BitXor
+                | Func::Shl
+                | Func::Shr
+                | Func::RotRight
+                | Func::RotLeft
+                | Func::Eq
+                | Func::Ne
+                | Func::Lt
+                | Func::Le
+                | Func::Gt
+                | Func::Ge
+                | Func::MatCompMul
+                | Func::Neg
+                | Func::Not
+                | Func::BitNot
+                | Func::All
+                | Func::Any
+                | Func::Select
+                | Func::Clamp
+                | Func::Lerp
+                | Func::Step
+                | Func::SmoothStep
+                | Func::Saturate
+                | Func::Abs
+                | Func::Min
+                | Func::Max
+                | Func::ReduceSum
+                | Func::ReduceProd
+                | Func::ReduceMin
+                | Func::ReduceMax
+                | Func::Clz
+                | Func::Ctz
+                | Func::PopCount
+                | Func::Reverse
+                | Func::IsInf
+                | Func::IsNan
+                | Func::Acos
+                | Func::Acosh
+                | Func::Asin
+                | Func::Asinh
+                | Func::Atan
+                | Func::Atan2
+                | Func::Atanh
+                | Func::Cos
+                | Func::Cosh
+                | Func::Sin
+                | Func::Sinh
+                | Func::Tan
+                | Func::Tanh
+                | Func::Exp
+                | Func::Exp2
+                | Func::Exp10
+                | Func::Log
+                | Func::Log2
+                | Func::Log10
+                | Func::Powi
+                | Func::Powf
+                | Func::Sqrt
+                | Func::Rsqrt
+                | Func::Ceil
+                | Func::Floor
+                | Func::Fract
+                | Func::Trunc
+                | Func::Round
+                | Func::Fma
+                | Func::Copysign
+                | Func::Cross
+                | Func::Dot
+                | Func::OuterProduct
+                | Func::Length
+                | Func::LengthSquared
+                | Func::Normalize
+                | Func::Faceforward
+                | Func::Distance
+                | Func::Reflect
+                | Func::Determinant
+                | Func::Transpose
+                | Func::Inverse
+                | Func::Vec
+                | Func::Vec2
+                | Func::Vec3
+                | Func::Vec4
+                | Func::Permute
+                | Func::InsertElement
+                | Func::ExtractElement
+                | Func::GetElementPtr
+                | Func::Struct
+                | Func::Array
+                | Func::Mat
+                | Func::Mat2
+                | Func::Mat3
+                | Func::Mat4 => {
+                    let replayed_args: Vec<_> = args
+                        .iter()
+                        .map(|arg| self.replay_value(arg.clone(), ctx))
+                        .collect();
+                    ctx.entry_builder.call(
+                        func.clone(),
+                        replayed_args.as_slice(),
+                        old_node.type_().clone(),
+                    )
+                }
+                _ => unreachable!("non-replayable value"),
+            },
+            _ => unreachable!("non-replayable value"),
+        }
+    }
+
     fn try_replay(&self, old_node: NodeRef, ctx: &mut CoroScopeMaterializerCtx) -> Option<NodeRef> {
-        todo!()
+        if let Some(defined) = ctx.mappings.get(&old_node) {
+            // if already defined, simply return it
+            Some(defined.clone())
+        } else if !ctx.replayable.detect(old_node) {
+            None
+        } else {
+            let replayed = self.replay_value(old_node, ctx);
+            ctx.mappings.insert(old_node, replayed.clone());
+            Some(replayed)
+        }
     }
 
     fn value_or_load(
@@ -242,7 +394,314 @@ impl<'a> CoroScopeMaterializer<'a> {
         ctx: &mut CoroScopeMaterializerCtx,
         state: &mut CoroScopeMaterializerState,
     ) {
-        todo!()
+        if ctx.mappings.contains_key(&ret) {
+            return;
+        }
+        macro_rules! process_return {
+            ($call: expr) => {
+                match $call.type_().as_ref() {
+                    Type::Void => { /* nothing */ }
+                    Type::UserData => todo!(),
+                    Type::Opaque(_) => {
+                        // as non-copyable reference
+                        ctx.mappings.insert(ret.clone(), $call);
+                    }
+                    _ => self.def_or_assign(ret.clone(), $call, ctx, state),
+                }
+            };
+        }
+        match func {
+            // callable
+            Func::Callable(c) => {
+                let args: Vec<_> =
+                    c.0.args
+                        .iter()
+                        .zip(args.iter())
+                        .map(|(formal, &given)| {
+                            if formal.is_reference_argument() || formal.type_().is_opaque("") {
+                                self.ref_or_local(given, ctx, state)
+                            } else {
+                                self.value_or_load(given, ctx, state)
+                            }
+                        })
+                        .collect();
+                let call = state.builder.call(
+                    Func::Callable(c.clone()),
+                    args.as_slice(),
+                    ret.type_().clone(),
+                );
+                process_return!(call)
+            }
+            // always replayable functions, should not appear here
+            Func::CoroId
+            | Func::CoroToken
+            | Func::ZeroInitializer
+            | Func::Unreachable(_)
+            | Func::ThreadId
+            | Func::BlockId
+            | Func::WarpSize
+            | Func::WarpLaneId
+            | Func::DispatchId
+            | Func::DispatchSize => unreachable!(),
+            // local variable operations
+            Func::Load => {
+                let loaded = self.value_or_load(args[0].clone(), ctx, state);
+                self.def_or_assign(ret, loaded, ctx, state);
+            }
+            Func::AddressOf => {
+                // the first argument should be reference
+                let var = self.ref_or_local(args[0].clone(), ctx, state);
+                let addr = state
+                    .builder
+                    .call(func.clone(), &[var], ret.type_().clone());
+                self.def_or_assign(ret, addr, ctx, state);
+            }
+            Func::GetElementPtr => {
+                let (root, chain) = AccessTree::access_chain_from_gep_chain(ret);
+                let root = self.ref_or_local(root, ctx, state);
+                let chain: Vec<_> = chain
+                    .iter()
+                    .map(|&i| self.value_or_load(i, ctx, state))
+                    .collect();
+                let gep = state
+                    .builder
+                    .gep(root, chain.as_slice(), ret.type_().clone());
+                ctx.mappings.insert(ret, gep);
+            }
+            // AD functions
+            Func::PropagateGrad => todo!(),
+            Func::OutputGrad => todo!(),
+            Func::RequiresGradient => todo!(),
+            Func::Backward => todo!(),
+            Func::Gradient => todo!(),
+            Func::GradientMarker => todo!(),
+            Func::AccGrad => todo!(),
+            Func::Detach => todo!(),
+            // resource functions, the first argument should always be a reference
+            Func::RayTracingQueryAll
+            | Func::RayTracingQueryAny
+            | Func::RayTracingInstanceTransform
+            | Func::RayTracingInstanceVisibilityMask
+            | Func::RayTracingInstanceUserId
+            | Func::RayTracingSetInstanceTransform
+            | Func::RayTracingSetInstanceOpacity
+            | Func::RayTracingSetInstanceVisibility
+            | Func::RayTracingSetInstanceUserId
+            | Func::RayTracingTraceClosest
+            | Func::RayTracingTraceAny
+            | Func::RayQueryWorldSpaceRay
+            | Func::RayQueryProceduralCandidateHit
+            | Func::RayQueryTriangleCandidateHit
+            | Func::RayQueryCommittedHit
+            | Func::RayQueryCommitTriangle
+            | Func::RayQueryCommitProcedural
+            | Func::RayQueryTerminate
+            | Func::IndirectDispatchSetCount
+            | Func::IndirectDispatchSetKernel
+            | Func::AtomicRef
+            | Func::AtomicExchange
+            | Func::AtomicCompareExchange
+            | Func::AtomicFetchAdd
+            | Func::AtomicFetchSub
+            | Func::AtomicFetchAnd
+            | Func::AtomicFetchOr
+            | Func::AtomicFetchXor
+            | Func::AtomicFetchMin
+            | Func::AtomicFetchMax
+            | Func::BufferRead
+            | Func::BufferWrite
+            | Func::BufferSize
+            | Func::BufferAddress
+            | Func::ByteBufferRead
+            | Func::ByteBufferWrite
+            | Func::ByteBufferSize
+            | Func::Texture2dRead
+            | Func::Texture2dWrite
+            | Func::Texture2dSize
+            | Func::Texture3dRead
+            | Func::Texture3dWrite
+            | Func::Texture3dSize
+            | Func::BindlessTexture2dSample
+            | Func::BindlessTexture2dSampleLevel
+            | Func::BindlessTexture2dSampleGrad
+            | Func::BindlessTexture2dSampleGradLevel
+            | Func::BindlessTexture3dSample
+            | Func::BindlessTexture3dSampleLevel
+            | Func::BindlessTexture3dSampleGrad
+            | Func::BindlessTexture3dSampleGradLevel
+            | Func::BindlessTexture2dRead
+            | Func::BindlessTexture3dRead
+            | Func::BindlessTexture2dReadLevel
+            | Func::BindlessTexture3dReadLevel
+            | Func::BindlessTexture2dSize
+            | Func::BindlessTexture3dSize
+            | Func::BindlessTexture2dSizeLevel
+            | Func::BindlessTexture3dSizeLevel
+            | Func::BindlessBufferRead
+            | Func::BindlessBufferWrite
+            | Func::BindlessBufferSize
+            | Func::BindlessBufferAddress
+            | Func::BindlessBufferType
+            | Func::BindlessByteBufferRead => {
+                let args: Vec<_> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &a)| {
+                        if i == 0 {
+                            // resource
+                            self.ref_or_local(a, ctx, state)
+                        } else {
+                            // value
+                            self.value_or_load(a, ctx, state)
+                        }
+                    })
+                    .collect();
+                let call = state
+                    .builder
+                    .call(func.clone(), args.as_slice(), ret.type_().clone());
+                process_return!(call)
+            }
+            // functions with all value arguments
+            Func::Assume
+            | Func::Assert(_)
+            | Func::RasterDiscard
+            | Func::Cast
+            | Func::Bitcast
+            | Func::Pack
+            | Func::Unpack
+            | Func::Add
+            | Func::Sub
+            | Func::Mul
+            | Func::Div
+            | Func::Rem
+            | Func::BitAnd
+            | Func::BitOr
+            | Func::BitXor
+            | Func::Shl
+            | Func::Shr
+            | Func::RotRight
+            | Func::RotLeft
+            | Func::Eq
+            | Func::Ne
+            | Func::Lt
+            | Func::Le
+            | Func::Gt
+            | Func::Ge
+            | Func::MatCompMul
+            | Func::Neg
+            | Func::Not
+            | Func::BitNot
+            | Func::All
+            | Func::Any
+            | Func::Select
+            | Func::Clamp
+            | Func::Lerp
+            | Func::Step
+            | Func::SmoothStep
+            | Func::Saturate
+            | Func::Abs
+            | Func::Min
+            | Func::Max
+            | Func::ReduceSum
+            | Func::ReduceProd
+            | Func::ReduceMin
+            | Func::ReduceMax
+            | Func::Clz
+            | Func::Ctz
+            | Func::PopCount
+            | Func::Reverse
+            | Func::IsInf
+            | Func::IsNan
+            | Func::Acos
+            | Func::Acosh
+            | Func::Asin
+            | Func::Asinh
+            | Func::Atan
+            | Func::Atan2
+            | Func::Atanh
+            | Func::Cos
+            | Func::Cosh
+            | Func::Sin
+            | Func::Sinh
+            | Func::Tan
+            | Func::Tanh
+            | Func::Exp
+            | Func::Exp2
+            | Func::Exp10
+            | Func::Log
+            | Func::Log2
+            | Func::Log10
+            | Func::Powi
+            | Func::Powf
+            | Func::Sqrt
+            | Func::Rsqrt
+            | Func::Ceil
+            | Func::Floor
+            | Func::Fract
+            | Func::Trunc
+            | Func::Round
+            | Func::Fma
+            | Func::Copysign
+            | Func::Cross
+            | Func::Dot
+            | Func::OuterProduct
+            | Func::Length
+            | Func::LengthSquared
+            | Func::Normalize
+            | Func::Faceforward
+            | Func::Distance
+            | Func::Reflect
+            | Func::Determinant
+            | Func::Transpose
+            | Func::Inverse
+            | Func::WarpIsFirstActiveLane
+            | Func::WarpFirstActiveLane
+            | Func::WarpActiveAllEqual
+            | Func::WarpActiveBitAnd
+            | Func::WarpActiveBitOr
+            | Func::WarpActiveBitXor
+            | Func::WarpActiveCountBits
+            | Func::WarpActiveMax
+            | Func::WarpActiveMin
+            | Func::WarpActiveProduct
+            | Func::WarpActiveSum
+            | Func::WarpActiveAll
+            | Func::WarpActiveAny
+            | Func::WarpActiveBitMask
+            | Func::WarpPrefixCountBits
+            | Func::WarpPrefixSum
+            | Func::WarpPrefixProduct
+            | Func::WarpReadLaneAt
+            | Func::WarpReadFirstLane
+            | Func::SynchronizeBlock
+            | Func::Vec
+            | Func::Vec2
+            | Func::Vec3
+            | Func::Vec4
+            | Func::Permute
+            | Func::InsertElement
+            | Func::ExtractElement
+            | Func::Struct
+            | Func::Array
+            | Func::Mat
+            | Func::Mat2
+            | Func::Mat3
+            | Func::Mat4
+            | Func::ShaderExecutionReorder
+            | Func::CpuCustomOp(_) => {
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|&a| self.value_or_load(a, ctx, state))
+                    .collect();
+                let call = state
+                    .builder
+                    .call(func.clone(), args.as_slice(), ret.type_().clone());
+                process_return!(call)
+            }
+            // other, unused
+            Func::Unknown0 => todo!(),
+            Func::Unknown1 => todo!(),
+        }
     }
 
     fn materialize_simple(
@@ -251,13 +710,16 @@ impl<'a> CoroScopeMaterializer<'a> {
         ctx: &mut CoroScopeMaterializerCtx,
         state: &mut CoroScopeMaterializerState,
     ) {
+        if ctx.replayable.detect(node) {
+            self.replay_value(node.clone(), ctx);
+            return;
+        }
         match node.get().instruction.as_ref() {
             Instruction::Local { init } => {
                 let init = self.value_or_load(init.clone(), ctx, state);
                 let this = self.ref_or_local(node, ctx, state);
                 state.builder.update(this, init);
             }
-            Instruction::Const(_) => {} // processed on the user-site
             Instruction::Update { var, value } => {
                 let value = self.value_or_load(value.clone(), ctx, state);
                 self.def_or_assign(var.clone(), value, ctx, state);
@@ -344,7 +806,10 @@ impl<'a> CoroScopeMaterializer<'a> {
             Instruction::Comment(msg) => {
                 state.builder.comment(msg.clone());
             }
-            Instruction::CoroRegister { .. } => todo!(),
+            Instruction::CoroRegister { var, value, token } => {
+                let value = self.value_or_load(value.clone(), ctx, state);
+                todo!();
+            }
             _ => unreachable!(),
         }
     }

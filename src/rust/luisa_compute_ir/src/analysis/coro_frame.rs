@@ -295,7 +295,25 @@ impl<'a> CoroFrame<'a> {
     pub fn read_coro_id(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
         let t_u32 = <u32 as TypeOf>::type_();
         let coro_id_and_token = self.read_coro_id_and_target_token(frame, b);
-        b.call(Func::Vec3, &[coro_id_and_token], Type::vector_of(t_u32, 3))
+        let i0 = b.const_(Const::Uint32(0));
+        let i1 = b.const_(Const::Uint32(1));
+        let i2 = b.const_(Const::Uint32(2));
+        let id_x = b.call(
+            Func::ExtractElement,
+            &[coro_id_and_token.clone(), i0],
+            t_u32.clone(),
+        );
+        let id_y = b.call(
+            Func::ExtractElement,
+            &[coro_id_and_token.clone(), i1],
+            t_u32.clone(),
+        );
+        let id_z = b.call(
+            Func::ExtractElement,
+            &[coro_id_and_token.clone(), i2],
+            t_u32.clone(),
+        );
+        b.call(Func::Vec3, &[id_x, id_y, id_z], Type::vector_of(t_u32, 3))
     }
 
     pub fn read_target_token(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {

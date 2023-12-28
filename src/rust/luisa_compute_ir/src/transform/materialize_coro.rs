@@ -186,18 +186,13 @@ impl<'a> CoroScopeMaterializer<'a> {
         match old_node.get().instruction.as_ref() {
             Instruction::Const(c) => ctx.entry_builder.const_(c.clone()),
             Instruction::Call(func, args) => match func {
-                Func::Unreachable(_)
-                | Func::ZeroInitializer
-                | Func::ThreadId
-                | Func::BlockId
-                | Func::WarpSize
-                | Func::WarpLaneId
-                | Func::DispatchId
-                | Func::DispatchSize => {
-                    ctx.entry_builder
-                        .call(func.clone(), &[], old_node.type_().clone())
+                Func::Unreachable(_) | Func::ZeroInitializer | Func::WarpSize => ctx
+                    .entry_builder
+                    .call(func.clone(), &[], old_node.type_().clone()),
+                Func::ThreadId | Func::BlockId | Func::WarpLaneId | Func::DispatchSize => {
+                    panic!("{:?} is not available in coroutines", func)
                 }
-                Func::CoroId => self
+                Func::CoroId | Func::DispatchId => self
                     .frame
                     .read_coro_id(self.get_frame_node(), &mut ctx.entry_builder),
                 Func::CoroToken => ctx

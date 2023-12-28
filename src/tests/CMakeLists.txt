@@ -197,3 +197,4 @@ endif ()
 
 # coroutine tests
 luisa_compute_add_executable(test_coro_sdf_renderer coro/sdf_renderer.cpp)
+luisa_compute_add_executable(test_coro_path_tracing coro/path_tracing.cpp)

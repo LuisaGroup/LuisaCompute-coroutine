@@ -196,4 +196,4 @@ if (LUISA_COMPUTE_TEST_QT_INTEROP)
 endif ()
 
 # coroutine tests
-luisa_compute_add_executable(coro_playground coro/playground.cpp)
+luisa_compute_add_executable(test_coro_sdf_renderer coro/sdf_renderer.cpp)

@@ -121,7 +121,8 @@ void FunctionBuilder::check_is_coroutine() noexcept {
 uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
     check_is_coroutine();
     uint token = _coro_tokens.size() + 1;
-    _coro_tokens.insert(std::make_pair(desc, token));
+    auto [_, success] = _coro_tokens.insert(std::make_pair(desc, token));
+    LUISA_ASSERT(success, "Duplicated suspend token '{}' description.", desc);
     _create_and_append_statement<SuspendStmt>(token);
     return token;
 }

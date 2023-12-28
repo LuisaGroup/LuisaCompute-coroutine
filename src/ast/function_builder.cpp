@@ -145,9 +145,9 @@ void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *exp
     // auto member_coro_token = member(Type::of<uint>(), expr, 1u);
     // assign(member_coro_id, coro_id);
     // assign(member_coro_token, literal(Type::of<uint>(), 0u));
-    auto id_x = swizzle(Type::of<uint>(), coro_id, 1u, 0b0001u);
-    auto id_y = swizzle(Type::of<uint>(), coro_id, 1u, 0b0010u);
-    auto id_z = swizzle(Type::of<uint>(), coro_id, 1u, 0b0100u);
+    auto id_x = swizzle(Type::of<uint>(), coro_id, 1u, 0u);
+    auto id_y = swizzle(Type::of<uint>(), coro_id, 1u, 1u);
+    auto id_z = swizzle(Type::of<uint>(), coro_id, 1u, 2u);
     auto zero = literal(Type::of<uint>(), 0u);
     auto value = call(Type::of<uint4>(), CallOp::MAKE_UINT4, {id_x, id_y, id_z, zero});
     auto p_coro_id_and_token = member(Type::of<uint4>(), expr, 0u);

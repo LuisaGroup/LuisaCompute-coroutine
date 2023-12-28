@@ -209,7 +209,7 @@ int main(int argc, char *argv[]) {
             auto light_area = length(cross(light_u, light_v));
             auto light_normal = normalize(cross(light_u, light_v));
             $for (depth, max_depth) {
-                $suspend("1, trace");
+                // $suspend("1, trace");
 
                 // trace
                 auto hit = accel.trace_closest(ray);
@@ -224,7 +224,7 @@ int main(int argc, char *argv[]) {
                 $if (cos_wo < 1e-4f) { $break; };
                 auto material = material_buffer->read(hit.inst);
 
-                $suspend("2, hit light");
+                // $suspend("2, hit light");
 
                 // hit light
                 $if (hit.inst == static_cast<uint>(meshes.size() - 1u)) {
@@ -239,7 +239,7 @@ int main(int argc, char *argv[]) {
                     $break;
                 };
 
-                $suspend("3, sample light");
+                // $suspend("3, sample light");
 
                 // sample light
                 auto ux_light = lcg(state);
@@ -261,7 +261,7 @@ int main(int argc, char *argv[]) {
                     radiance += beta * bsdf * mis_weight * light_emission / max(pdf_light, 1e-4f);
                 };
 
-                $suspend("4, sample BSDF");
+                // $suspend("4, sample BSDF");
 
                 // sample BSDF
                 Var<Onb> onb = make_onb(n);
@@ -274,7 +274,7 @@ int main(int argc, char *argv[]) {
                 pdf_bsdf = cos_wi * inv_pi;
                 beta *= material.albedo;// * cos_wi * inv_pi / pdf_bsdf => * 1.f
 
-                $suspend("5, rr");
+                // $suspend("5, rr");
 
                 // rr
                 auto l = dot(make_float3(0.212671f, 0.715160f, 0.072169f), beta);

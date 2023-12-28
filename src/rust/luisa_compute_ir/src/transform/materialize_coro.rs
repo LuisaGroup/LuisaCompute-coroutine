@@ -962,7 +962,10 @@ impl<'a> CoroScopeMaterializer<'a> {
         // materialize the body
         let mut b = IrBuilder::new_without_bb(self.coro.pools.clone());
         b.set_insert_point(ctx.entry_builder.get_insert_point());
-        b.comment(CBoxedSlice::from("coro body".to_string()));
+        b.comment(CBoxedSlice::from(format!(
+            "coro body (token = {})",
+            self.token.unwrap_or(0)
+        )));
         let mut state = CoroScopeMaterializerState { builder: b };
         self.materialize_instructions(&self.get_scope().instructions, &mut ctx, &mut state);
         // create the callable module

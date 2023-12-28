@@ -197,6 +197,7 @@ int main(int argc, char *argv[]) {
             $suspend("per_depth");
             $for (depth, 10u) {
                 // trace
+                $suspend("before_tracing");
                 Var<TriangleHit> hit = accel.intersect(ray, {});
                 reorder_shader_execution();
                 $if (hit->miss()) { $break; };

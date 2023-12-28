@@ -26,7 +26,7 @@ use crate::transform::canonicalize_control_flow::CanonicalizeControlFlow;
 use crate::transform::defer_load::DeferLoad;
 use crate::transform::demote_locals::DemoteLocals;
 use crate::transform::Transform;
-use crate::{CArc, CBoxedSlice, Pooled};
+use crate::{CArc, CBox, CBoxedSlice, Pooled};
 use bitflags::Flags;
 use std::collections::HashMap;
 
@@ -318,11 +318,11 @@ impl<'a> CoroScopeMaterializer<'a> {
     }
 
     fn try_replay(&self, old_node: NodeRef, ctx: &mut CoroScopeMaterializerCtx) -> Option<NodeRef> {
-        if let Some(defined) = ctx.mappings.get(&old_node) {
+        if !ctx.replayable.detect(old_node) {
+            None
+        } else if let Some(defined) = ctx.mappings.get(&old_node) {
             // if already defined, simply return it
             Some(defined.clone())
-        } else if !ctx.replayable.detect(old_node) {
-            None
         } else {
             let replayed = self.replay_value(old_node, ctx);
             ctx.mappings.insert(old_node, replayed.clone());
@@ -833,6 +833,9 @@ impl<'a> CoroScopeMaterializer<'a> {
                 self.materialize_simple(node.clone(), ctx, state);
             }
             CoroInstruction::ConditionStackReplay { items } => {
+                state.builder.comment(CBoxedSlice::from(
+                    "condition stack replay begin".to_string(),
+                ));
                 for item in items.iter() {
                     macro_rules! decode_value {
                         ($t:tt, $value: expr) => {
@@ -856,17 +859,29 @@ impl<'a> CoroScopeMaterializer<'a> {
                     };
                     self.def_or_assign(item.node.clone(), value, ctx, state);
                 }
+                state
+                    .builder
+                    .comment(CBoxedSlice::from("condition stack replay end".to_string()));
             }
             CoroInstruction::MakeFirstFlag => {
                 self.make_first_flag(ctx);
             }
             CoroInstruction::SkipIfFirstFlag { body, .. } => {
+                state
+                    .builder
+                    .comment(CBoxedSlice::from("skip if first flag".to_string()));
                 let flag = state.builder.load(ctx.first_flag.unwrap().clone());
                 let true_branch = self.materialize_branch_block(body, ctx, state);
                 let false_branch = IrBuilder::new(state.builder.pools.clone()).finish();
                 state.builder.if_(flag, true_branch, false_branch);
+                state
+                    .builder
+                    .comment(CBoxedSlice::from("after skip if first flag".to_string()));
             }
             CoroInstruction::ClearFirstFlag(_) => {
+                state
+                    .builder
+                    .comment(CBoxedSlice::from("clear first flag".to_string()));
                 let v = state.builder.const_(Const::Bool(true));
                 state.builder.update(ctx.first_flag.unwrap(), v);
             }
@@ -963,19 +978,21 @@ impl<'a> CoroScopeMaterializer<'a> {
         )));
         let mut state = CoroScopeMaterializerState { builder: b };
         self.materialize_instructions(&self.get_scope().instructions, &mut ctx, &mut state);
+        let module = Module {
+            kind: ModuleKind::Function,
+            entry: ctx.entry_builder.finish(),
+            flags: ModuleFlags::empty(),
+            curve_basis_set: if ctx.uses_ray_tracing {
+                self.coro.module.curve_basis_set
+            } else {
+                CurveBasisSet::empty()
+            },
+            pools: self.coro.pools.clone(),
+        };
+        let module = DemoteLocals.transform_module(module);
         // create the callable module
         CallableModule {
-            module: Module {
-                kind: ModuleKind::Function,
-                entry: ctx.entry_builder.finish(),
-                flags: ModuleFlags::empty(),
-                curve_basis_set: if ctx.uses_ray_tracing {
-                    self.coro.module.curve_basis_set
-                } else {
-                    CurveBasisSet::empty()
-                },
-                pools: self.coro.pools.clone(),
-            },
+            module,
             ret_type: Type::void(),
             args: CBoxedSlice::new(self.args.clone()),
             captures: CBoxedSlice::new(Vec::new()),
@@ -993,11 +1010,8 @@ impl Transform for MaterializeCoro {
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);
-        coro_graph.dump();
         let coro_use_def = CoroUseDefAnalysis::analyze(&coro_graph);
-        coro_use_def.dump();
         let coro_transfer_graph = CoroTransferGraph::build(&coro_graph, &coro_use_def);
-        coro_transfer_graph.dump();
         let coro_frame = CoroFrame::build(&coro_graph, &coro_transfer_graph);
         coro_frame.dump();
         let mut entry = CoroScopeMaterializer::new(&coro_frame, &callable, None).materialize();

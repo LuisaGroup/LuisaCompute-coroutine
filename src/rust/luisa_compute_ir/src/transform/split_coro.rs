@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hasher;
+use std::process::exit;
 use sha2::digest::DynDigest;
 use crate::analysis::coro_frame_v4::{CoroFrameAnalyser, CoroFrameAnalysis};
 // use crate::analysis::coro_graph::CoroPreliminaryGraph;
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
+use crate::analysis::utility::DISPLAY_IR_DEBUG;
 use crate::context::register_type;
 use crate::ir::{BasicBlock, CallableModule, CallableModuleRef, Capture, Const, Func, Instruction, INVALID_REF, IrBuilder, Module, ModuleFlags, ModuleKind, ModulePools, new_node, Node, NodeRef, PhiIncoming, Primitive, SwitchCase, Type};
 use crate::transform::Transform;
@@ -191,6 +193,10 @@ impl SplitManager {
             };
             callable_info.frame_node = callable_info.args[0].clone();
 
+            for (node, index) in callable_info.old2frame_index.iter() {
+                println!("state[{index}] = {:?}", node.type_())
+            }
+
             coro_callable_info.insert(*token, callable_info);
             self.replayable_builders.insert(*token, IrBuilder::new(self.callable.pools.clone()));
         }
@@ -239,7 +245,7 @@ impl SplitManager {
         while visit_state.instr_index < bb.len() {
             let coro_instr_ref = bb.get(visit_state.instr_index).unwrap().clone();
             let coro_instr = self.graph.instructions.get(coro_instr_ref.0).unwrap().clone();
-            println!("{:?}", coro_instr);
+            // println!("{:?}", coro_instr);
 
             match &coro_instr {
                 CoroInstruction::Entry
@@ -360,8 +366,8 @@ impl SplitManager {
         let frame_node = self.coro_callable_info.get(&token).unwrap().frame_node;
         for (old_node, index) in old2frame_index.iter() {
             let index_node = builder.const_(Const::Uint32(*index as u32));
-            let gep =
-                builder.gep_chained(frame_node, &[index_node], self.frame_analyser.frame_fields[*index].clone());
+            let gep = builder.gep_chained(
+                frame_node, &[index_node], self.frame_analyser.frame_fields[*index].clone());
             self.record_node_mapping(token, *old_node, gep);
         }
         builder.comment(CBoxedSlice::from("CoroResume End".as_bytes())); // for DEBUG
@@ -380,6 +386,8 @@ impl SplitManager {
             let frame_fields = self.frame_analyser.frame_fields.clone(); // clone to avoid multiple borrow
             let output_vars = self.frame_analyser.output_vars(token, token_next);
             for old_node in output_vars.iter() {
+                println!("{:?}", old_node);
+                unsafe { println!("{}", DISPLAY_IR_DEBUG.get().var_str(old_node)); }
                 let index = old2frame_index.get(old_node).unwrap();
 
                 let index_node = builder.const_(Const::Uint32(*index as u32));
@@ -395,6 +403,7 @@ impl SplitManager {
                     &[index_node],
                     frame_fields[*index].clone(),
                 );
+                println!("{:?} -> state[{}] = {:?}, update {:?}", old_node.type_(), index, gep.type_(), value.type_());
                 builder.update(gep, value);
             }
         }
@@ -727,7 +736,11 @@ impl SplitManager {
     fn duplicate_args(&mut self, frame_token: u32, args: &CBoxedSlice<NodeRef>) -> Vec<NodeRef> {
         let dup_args: Vec<NodeRef> = args
             .iter()
-            .map(|arg| self.duplicate_arg(frame_token, *arg))
+            .map(|arg| {
+                let dup_arg = self.duplicate_arg(frame_token, *arg);
+                // println!("{:?} => {:?}", arg, dup_arg);  // for DEBUG
+                dup_arg
+            })
             .collect();
         dup_args
     }

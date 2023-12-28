@@ -417,10 +417,10 @@ impl CoroFrameAnalyser {
 
     fn register_args_captures(&mut self, callable: &CallableModule) {
         for arg in callable.args.as_ref() {
-            assert_eq!(self.defined_default.insert(*arg), true);
+            assert!(self.defined_default.insert(*arg));
         }
         for capture in callable.captures.as_ref() {
-            assert_eq!(self.defined_default.insert(capture.node), true);
+            assert!(self.defined_default.insert(capture.node));
         }
     }
 
@@ -521,7 +521,34 @@ impl CoroFrameAnalyser {
         }));
 
         // allocate frame slots
-        self.node2frame_slot = graph_coloring.color_of_node.clone();
+        let mut slot_unoccupied = HashSet::new();
+        for i in STATE_INDEX_START..self.frame_fields.len() {
+            slot_unoccupied.insert(i);
+        }
+        let mut slot_old2new = HashMap::new();
+        for (node, index) in graph_coloring.color_of_node.iter() {
+            let mut allocated_flag = false;
+            if let Some(index_new) = slot_old2new.get(index) {
+                // share slots
+                self.node2frame_slot.insert(*node, *index_new);
+            } else {
+                // allocate a new slot
+                let mut index_new: usize = 0;
+                for &i in slot_unoccupied.iter() {
+                    let field = self.frame_fields.get(i).unwrap().as_ref();
+                    if node.type_().as_ref() == field {
+                        index_new = i;
+                        allocated_flag = true;
+                        break;
+                    }
+                }
+                assert!(allocated_flag, "State node not allocated");
+                self.node2frame_slot.insert(*node, index_new);
+                slot_old2new.insert(*index, index_new);
+                slot_unoccupied.remove(&index_new);
+            }
+        }
+        assert!(slot_unoccupied.is_empty());
     }
 
     fn visit_bb(&mut self, coro_graph: &CoroGraph, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {

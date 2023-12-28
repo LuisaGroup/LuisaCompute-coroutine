@@ -23,6 +23,7 @@ int main(int argc, char *argv[]) {
         $loop {
             $if (x == 5) { $break; };
             $suspend("bad");
+            // $comment("bad");
             $if (x == 5) {
                 device_log("token = {}, x = {}", coro_token(), x);
             };

@@ -356,6 +356,7 @@ impl<'a> CoroScopeMaterializer<'a> {
         state: &mut CoroScopeMaterializerState,
     ) {
         let var = self.ref_or_local(old_node, ctx, state);
+        assert!(var.is_gep() || var.is_local());
         state.builder.update(var, new_value);
     }
 
@@ -389,9 +390,6 @@ impl<'a> CoroScopeMaterializer<'a> {
         ctx: &mut CoroScopeMaterializerCtx,
         state: &mut CoroScopeMaterializerState,
     ) {
-        if ctx.mappings.contains_key(&ret) {
-            return;
-        }
         macro_rules! process_return {
             ($call: expr) => {
                 match $call.type_().as_ref() {
@@ -1010,6 +1008,7 @@ impl Transform for MaterializeCoro {
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);
+        coro_graph.dump();
         let coro_use_def = CoroUseDefAnalysis::analyze(&coro_graph);
         let coro_transfer_graph = CoroTransferGraph::build(&coro_graph, &coro_use_def);
         let coro_frame = CoroFrame::build(&coro_graph, &coro_transfer_graph);

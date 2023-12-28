@@ -1218,7 +1218,11 @@ impl CoroGraph {
                 }
                 _ => {
                     print_indent!(indent);
-                    println!("${} = Simple({:?})", instr_ref.0, node);
+                    if node.type_().is_void() {
+                        println!("Simple({:?})", node);
+                    } else {
+                        println!("${} = Simple({:?})", instr_ref.0, node);
+                    }
                 }
             },
             CoroInstruction::ConditionStackReplay { items } => {

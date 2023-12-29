@@ -139,7 +139,7 @@ impl SplitManager {
                     pools: callable.pools.clone(),
                     curve_basis_set: callable.module.curve_basis_set.clone(),
                 },
-                ret_type: CArc::new(Type::Void), // TODO: coroutine return type: only void allowed
+                ret_type: register_type(Type::Void), // TODO: coroutine return type: only void allowed
                 args: CBoxedSlice::from(callable_info.args.as_slice()),
                 captures: CBoxedSlice::from(callable_info.captures.as_slice()),
                 subroutines: CBoxedSlice::new(vec![]),
@@ -308,7 +308,7 @@ impl SplitManager {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
         builder.coro_resume(token); // TODO: delete
-        builder.comment(CBoxedSlice::from("CoroResume Start".as_bytes())); // TODO: for DEBUG
+        builder.comment(CBoxedSlice::from("CoroResume Start".as_bytes())); // for DEBUG
         let old2frame_index = self
             .coro_callable_info
             .get(&token)
@@ -326,13 +326,13 @@ impl SplitManager {
             //     println!("{} => {}", self.display_ir.var_str(old_node), self.display_ir.var_str_or_insert(&gep));
             // }
         }
-        builder.comment(CBoxedSlice::from("CoroResume End".as_bytes())); // TODO: for DEBUG
+        builder.comment(CBoxedSlice::from("CoroResume End".as_bytes())); // for DEBUG
         scope_builder
     }
     fn coro_store(&mut self, scope_builder: &mut ScopeBuilder, token_next: u32) {
         let token = scope_builder.token;
         let builder = &mut scope_builder.builder;
-        builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes())); // TODO: for DEBUG
+        builder.comment(CBoxedSlice::from("CoroSuspend Start".as_bytes())); // for DEBUG
 
         let output_vars = self.frame_analyser.output_vars(token, token_next);
 
@@ -386,7 +386,8 @@ impl SplitManager {
         );
         let value = builder.const_(Const::Uint32(token_next));
         builder.update(gep, value);
-        builder.comment(CBoxedSlice::from("CoroSuspend End".as_bytes())); // TODO: for DEBUG
+
+        builder.comment(CBoxedSlice::from("CoroSuspend End".as_bytes())); // for DEBUG
     }
 
     fn visit_bb(
@@ -1520,26 +1521,26 @@ impl CoroutineSplitImpl {
         let coro_graph = CoroGraph::from(&callable.module);
         crate::analysis::coro_frame_v4::CoroFrameAnalysis::analyse(&coro_graph, &callable);
 
-        // let mut coro_frame_analyser = CoroFrameAnalyser::new();
-        // coro_frame_analyser.analyse_callable(&callable);
-        // println!("{}", coro_frame_analyser.display_coro_frame());
-        // println!("{}", coro_frame_analyser.display_continuations());
-        //
-        // let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
-        // println!("{:-^40}", " After split ");
-        // let result = DisplayIR::new().display_ir_callable(&coroutine_entry);
-        // println!("{:-^40}\n{}", format!(" CoroScope {} ", 0), result);
-        // for (token, coro) in coroutine_entry
-        //     .subroutine_ids
-        //     .iter()
-        //     .zip(coroutine_entry.subroutines.iter())
-        // {
-        //     let result = DisplayIR::new().display_ir_callable(coro.as_ref());
-        //     println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
-        // }
-        //
-        // coroutine_entry
-        unimplemented!("Coroutine split");
+        let mut coro_frame_analyser = CoroFrameAnalyser::new();
+        coro_frame_analyser.analyse_callable(&callable);
+        println!("{}", coro_frame_analyser.display_coro_frame());
+        println!("{}", coro_frame_analyser.display_continuations());
+
+        let coroutine_entry = SplitManager::split(coro_frame_analyser, &callable);
+        println!("{:-^40}", " After split ");
+        let result = DisplayIR::new().display_ir_callable(&coroutine_entry);
+        println!("{:-^40}\n{}", format!(" CoroScope {} ", 0), result);
+        for (token, coro) in coroutine_entry
+            .subroutine_ids
+            .iter()
+            .zip(coroutine_entry.subroutines.iter())
+        {
+            let result = DisplayIR::new().display_ir_callable(coro.as_ref());
+            println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
+        }
+
+        coroutine_entry
+        // unimplemented!("Coroutine split");
     }
 }
 

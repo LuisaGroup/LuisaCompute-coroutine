@@ -101,6 +101,7 @@ impl ActiveVar {
 
     fn record_use(&mut self, replayable_value_analysis: &mut ReplayableValueAnalysis, node: NodeRef) {
         // let token = self.token; // for DEBUG
+        // let node_index = unsafe { DISPLAY_IR_DEBUG.get().get(&node) }; // for DEBUG
         let defined_index = *self.defined_count.get(&node).unwrap_or(&-1);
         self.used.entry(node).or_default().insert(defined_index);
         if defined_index < 0 && !replayable_value_analysis.detect(node) {
@@ -109,6 +110,7 @@ impl ActiveVar {
     }
     fn record_def(&mut self, node: NodeRef) {
         // let token = self.token; // for DEBUG
+        // let node_index = unsafe { DISPLAY_IR_DEBUG.get().get(&node) }; // for DEBUG
         let defined_index = self.defined_count.entry(node).or_insert(-1);
         *defined_index += 1;
         let def_index = *defined_index;
@@ -349,12 +351,12 @@ pub(crate) struct CoroFrameAnalyser {
 
     pub(crate) continuations: BTreeMap<u32, Continuation>,
 
-    pub(crate) coro_frame: CoroFrame,
+    coro_frame: CoroFrame,
     pub(crate) frame_type: CArc<Type>,
     pub(crate) frame_fields: Vec<CArc<Type>>,
     pub(crate) node2frame_slot: HashMap<NodeRef, usize>,
 
-    replayable_value_analysis: ReplayableValueAnalysis,
+    pub(crate) replayable_value_analysis: ReplayableValueAnalysis,
 }
 
 impl CoroFrameAnalyser {
@@ -380,6 +382,13 @@ impl CoroFrameAnalyser {
         }
     }
 
+    pub(crate) fn input_vars(&mut self, token: u32) -> &HashSet<NodeRef> {
+        return self.coro_frame.input.get(&token).unwrap();
+    }
+    pub(crate) fn output_vars(&mut self, token: u32, token_next: u32) -> &HashSet<NodeRef> {
+        return self.coro_frame.output.get(&(token, token_next)).unwrap();
+    }
+
     fn analyse(&mut self, coro_graph: &CoroGraph) {
         let mut coro_scope_ref_vec = BTreeMap::new();
         for (token, scope) in coro_graph.tokens.iter() {
@@ -390,13 +399,12 @@ impl CoroFrameAnalyser {
             let mut frame_builder = FrameBuilder::new(token, Some(&self.defined_default));
             let scope = coro_graph.scopes.get(coro_scope_ref.0).unwrap().instructions.clone();
             frame_builder = self.visit_bb(coro_graph, frame_builder, &scope);
-            if self.active_var_by_token.entry(token).or_default().is_empty() {
-                let index = self.active_vars.len();
-                assert_eq!(frame_builder.active_var.token_next, INVALID_FRAME_TOKEN_MASK);
-                self.active_vars.push(frame_builder.active_var.clone());
-                self.active_var_by_token.entry(token).or_default().insert(index);
-                self.active_var_by_token_next.entry(frame_builder.active_var.token_next).or_default().insert(index);
-            }
+            let index = self.active_vars.len();
+            let token_next = frame_builder.active_var.token_next;
+            assert_eq!(token_next, INVALID_FRAME_TOKEN_MASK);
+            self.active_vars.push(frame_builder.active_var);
+            self.active_var_by_token.entry(token).or_default().insert(index);
+            self.active_var_by_token_next.entry(token_next).or_default().insert(index);
         }
         let exit_index = self.active_vars.len();
         self.active_vars.push(ActiveVar::new(INVALID_FRAME_TOKEN_MASK));
@@ -410,11 +418,12 @@ impl CoroFrameAnalyser {
 
     fn register_args_captures(&mut self, callable: &CallableModule) {
         for arg in callable.args.as_ref() {
-            assert_eq!(self.defined_default.insert(*arg), true);
+            assert!(self.defined_default.insert(*arg));
         }
         for capture in callable.captures.as_ref() {
-            assert_eq!(self.defined_default.insert(capture.node), true);
+            assert!(self.defined_default.insert(capture.node));
         }
+        println!("defined_default = {:?}", self.defined_default);
     }
 
     fn calculate_frame(&mut self) {
@@ -514,7 +523,34 @@ impl CoroFrameAnalyser {
         }));
 
         // allocate frame slots
-        self.node2frame_slot = graph_coloring.color_of_node.clone();
+        let mut slot_unoccupied = HashSet::new();
+        for i in STATE_INDEX_START..self.frame_fields.len() {
+            slot_unoccupied.insert(i);
+        }
+        let mut slot_old2new = HashMap::new();
+        for (node, index) in graph_coloring.color_of_node.iter() {
+            let mut allocated_flag = false;
+            if let Some(index_new) = slot_old2new.get(index) {
+                // share slots
+                self.node2frame_slot.insert(*node, *index_new);
+            } else {
+                // allocate a new slot
+                let mut index_new: usize = 0;
+                for &i in slot_unoccupied.iter() {
+                    let field = self.frame_fields.get(i).unwrap().as_ref();
+                    if node.type_().as_ref() == field {
+                        index_new = i;
+                        allocated_flag = true;
+                        break;
+                    }
+                }
+                assert!(allocated_flag, "State node not allocated");
+                self.node2frame_slot.insert(*node, index_new);
+                slot_old2new.insert(*index, index_new);
+                slot_unoccupied.remove(&index_new);
+            }
+        }
+        assert!(slot_unoccupied.is_empty());
     }
 
     fn visit_bb(&mut self, coro_graph: &CoroGraph, mut frame_builder: FrameBuilder, bb: &Vec<CoroInstrRef>) -> FrameBuilder {
@@ -542,6 +578,7 @@ impl CoroFrameAnalyser {
         frame_builder.active_var.enter_scope();
         for instr_ref in bb.iter() {
             let instruction = coro_graph.instructions.get(instr_ref.0).unwrap();
+            println!("{:?}", instruction);
             match instruction {
                 CoroInstruction::Simple(node_ref) => {
                     let instruction = node_ref.get().instruction.as_ref();
@@ -567,6 +604,7 @@ impl CoroFrameAnalyser {
 
                         Instruction::Update { var, value } => {
                             record_use!(value);
+                            record_use!(var);
                             record_def!(var);
                         }
                         // end
@@ -621,8 +659,8 @@ impl CoroFrameAnalyser {
                         | Instruction::CoroResume { .. } => {
                             unreachable!("Instruction {:?} unreachable in CoroFrame analysis", instruction);
                         }
-                        Instruction::CoroRegister { .. } => {
-                            todo!()
+                        Instruction::CoroRegister { token, value, var } => {
+                            record_use!(value);
                         }
                     }
                 }

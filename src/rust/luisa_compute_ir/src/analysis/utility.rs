@@ -171,7 +171,7 @@ impl<'a> AccessTreeNodeRef<'a> {
         children.is_empty() || children.contains_key(&i)
     }
 
-    pub fn children(&'a self) -> impl Iterator<Item = (AccessChainIndex, Self)> {
+    pub fn children(&'a self) -> impl Iterator<Item = (AccessChainIndex, AccessTreeNodeRef<'a>)> {
         self.get()
             .children
             .iter()
@@ -665,5 +665,22 @@ impl AccessTree {
             total_size += size;
         }
         println!("  Total Size = {}", total_size);
+    }
+}
+
+
+
+pub(crate) fn node_updatable(var: NodeRef) -> bool {
+    match var.get().instruction.as_ref() {
+        Instruction::Local { .. } => true,
+        Instruction::Argument { by_value } => {
+            !by_value
+        }
+        Instruction::Shared { .. } => true,
+        Instruction::Call(func, _) => match func {
+            Func::GetElementPtr => true,
+            _ => false,
+        },
+        _ => false,
     }
 }

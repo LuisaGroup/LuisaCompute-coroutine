@@ -279,7 +279,7 @@ impl<'a> CoroFrame<'a> {
         let t_u32 = <u32 as TypeOf>::type_();
         let one = b.const_(Const::One(t_u32.clone()));
         let gep = b.gep(frame, &[one], <u32 as TypeOf>::type_());
-        const TERMINATE_TOKEN: u32 = 0x8000_0000 as u32;
+        const TERMINATE_TOKEN: u32 = 0x8000_0000u32;
         let terminate_token = b.const_(Const::Uint32(TERMINATE_TOKEN));
         b.update(gep, terminate_token);
         // TODO: store designated states if any

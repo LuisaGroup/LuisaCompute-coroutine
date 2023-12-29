@@ -1142,7 +1142,7 @@ impl CanonicalizeControlFlow {
                         b.set_insert_point(module.entry.first);
                         let local = b.local_zero_init(node.type_().clone());
                         for incoming in incomings.iter() {
-                            b.set_insert_point(incoming.block.last.get().prev);
+                            b.set_insert_point(incoming.value);
                             b.update(local, incoming.value);
                         }
                         b.set_insert_point(node);

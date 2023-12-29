@@ -3,7 +3,7 @@
 //
 
 #include <luisa/luisa-compute.h>
-#include<luisa/coro/coro_dispatcher.h>
+#include <luisa/coro/coro_dispatcher.h>
 using namespace luisa;
 using namespace luisa::compute;
 
@@ -35,9 +35,9 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
         auto id = coro_id().x;
         //        x_buffer.write(id, id * 2u);
-        x_buffer.write(id, coro_token() +1000u + 10 * id);
+        x_buffer.write(id, coro_token() + 1000u + 10 * id);
         $suspend("1");
-        x_buffer.write(id, coro_token() +2000u + 20 * id);
+        x_buffer.write(id, coro_token() + 2000u + 20 * id);
         //        $if(id % 2u == 0u) {
         //            $suspend("1");
         //            x_buffer.write(id, 1000u + coro_token() * 2u);
@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
         //        };
     };
     auto type = Type::of<CoroFrame>();
-    auto frame_buffer = device.create_soa<CoroFrame>(n);
+    auto frame_buffer = device.create_buffer<CoroFrame>(n);
     Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_id();
         auto id_x = id.x;
@@ -102,6 +102,27 @@ int main(int argc, char *argv[]) {
         x_buffer.write(id, 0u);
     };
     auto clear_shader = device.compile(clear);
+    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, 17, {}, true};
+    stream << clear_shader(x_buffer).dispatch(n);
+
+    Wdispatcher(x_buffer, n, n);
+    LUISA_INFO("Wavefront Dispatcher:");
+    stream << Wdispatcher.await_all()
+           << x_buffer.copy_to(x_vec.data())
+           << synchronize();
+    for (auto i = 0u; i < n; ++i) {
+        LUISA_INFO("x[{}] = {}", i, x_vec[i]);
+    }
+    stream << clear_shader(x_buffer).dispatch(n);
+
+    Wdispatcher(x_buffer, n, n);
+    LUISA_INFO("Wavefront Dispatcher:");
+    stream << Wdispatcher.await_all()
+           << x_buffer.copy_to(x_vec.data())
+           << synchronize();
+    for (auto i = 0u; i < n; ++i) {
+        LUISA_INFO("x[{}] = {}", i, x_vec[i]);
+    }
     coro::SimpleCoroDispatcher Sdispatcher{&coro, device, n};
     stream << clear_shader(x_buffer).dispatch(n);
     Sdispatcher(x_buffer, n, n);
@@ -112,7 +133,7 @@ int main(int argc, char *argv[]) {
     for (auto i = 0u; i < n; ++i) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
-    coro::PersistentCoroDispatcher PTdispatcher{&coro, device, stream, 64u, 32u, 1u, false};
+    coro::PersistentCoroDispatcher PTdispatcher{&coro, device, stream, 128 * 128 * 4u, 256u, 2u, false};
     stream << clear_shader(x_buffer).dispatch(n);
     PTdispatcher(x_buffer, n, n);
     /*for (auto iter = 0u; iter < 6; ++iter) {
@@ -127,17 +148,6 @@ int main(int argc, char *argv[]) {
            << x_buffer.copy_to(x_vec.data())
            << synchronize();
     LUISA_INFO("Persistent Thread Dispatcher:");
-    for (auto i = 0u; i < n; ++i) {
-        LUISA_INFO("x[{}] = {}", i, x_vec[i]);
-    }
-    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, 20, {}, false};
-    stream << clear_shader(x_buffer).dispatch(n);
-
-    Wdispatcher(x_buffer, n, n);
-    LUISA_INFO("Wavefront Dispatcher:");
-    stream << Wdispatcher.await_all()
-           << x_buffer.copy_to(x_vec.data())
-           << synchronize();
     for (auto i = 0u; i < n; ++i) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }

@@ -156,13 +156,13 @@ class WavefrontCoroDispatcher : public CoroDispatcherBase<void(FrameRef, Args...
 private:
     using FrameType = std::remove_reference_t<FrameRef>;
     using Container = compute::SOA<FrameType>;
-    Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, uint, Args...> _gen_shader;
+    Shader1D<Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
     luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
     Shader1D<Buffer<uint>, Buffer<uint>, Container, uint> _gather_shader;
     Shader1D<Buffer<uint>, Container, uint> _initialize_shader;
     Shader1D<Buffer<uint>, Container, uint, uint> _compact_shader;
-
+    Shader1D<Buffer<uint>, uint> _clear_shader;
     Container _frame;
     compute::Buffer<uint> _resume_index;
     compute::Buffer<uint> _resume_count;
@@ -248,13 +248,12 @@ public:
                                  &get_coro_token, &id, &get_coro_token, 1, max_sub_coro);
         _sort_hint = radix_sort(device, max_frame_count, _sort_temp_storage,
                                 &get_coro_hint, &keep_index);
-        Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, Var<Container> frame_buffer, UInt st_task_id, UInt n, Var<Args>... args) {
+        Kernel1D gen_kernel = [&](BufferUInt index, UInt offset, Var<Container> frame_buffer, UInt st_task_id, UInt n, Var<Args>... args) {
             auto x = dispatch_x();
             $if (x >= n) {
                 $return();
             };
             //auto frame_id = index->read(x);
-            auto offset = _max_frame_count - count.read(0);
             auto frame_id = offset + x;
             auto frame = frame_buffer.read(frame_id);
             initialize_coroframe(frame, def<uint3>(st_task_id + x, 0, 0));
@@ -278,8 +277,8 @@ public:
                 (*coroutine)[i](frame, args...);
                 auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
                 frame_buffer.write(frame_id, frame);
-                if (debug)
-                    device_log("resume kernel {} : id {} goto kernel {}", i, frame_id, nxt);
+                //if (debug)
+                //    device_log("resume kernel {} : id {} goto kernel {}", i, frame_id, nxt);
                 //count.atomic(nxt).fetch_add(1u);
             };
             _resume_shaders[i] = device.compile(resume_kernel);
@@ -304,16 +303,17 @@ public:
         };
         _gather_shader = device.compile(_collect_kernel);
         Kernel1D _compact_kernel = [&](BufferUInt index, Var<Container> frame_buffer, UInt empty_offset, UInt n) {
-            _global_buffer->write(0u, 0u);
+            //_global_buffer->write(0u, 0u);
             auto x = dispatch_x();
             $if (empty_offset + x < n) {
                 auto frame = frame_buffer.read(empty_offset + x);
                 $if ((read_promise<uint>(frame, "coro_token") & token_mask) != 0) {
+
                     auto res = _global_buffer->atomic(0).fetch_add(1u);
                     auto slot = index.read(res);
                     auto empty = frame_buffer.read(slot);
                     frame_buffer.write(slot, frame);
-                    frame_buffer.write(empty_offset, empty);
+                    frame_buffer.write(empty_offset + x, empty);
                 };
             };
         };
@@ -328,6 +328,13 @@ public:
                 count.write(x, ite(x == 0, max_frame_count, 0u));
             };
         };
+        Kernel1D clear = [&](BufferUInt buffer, UInt n) {
+            auto x = dispatch_x();
+            $if (x < n) {
+                buffer.write(x, 0u);
+            };
+        };
+        _clear_shader = device.compile(clear);
         _initialize_shader = device.compile(_initialize_kernel);
         stream << _initialize_shader(_resume_count, _frame, _max_frame_count).dispatch(_max_frame_count);
     }
@@ -612,11 +619,18 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
             LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
         }
     if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
-        if (_host_count[0] != _max_frame_count) {
-            stream << _compact_shader(_resume_index, _frame, _host_count[0], _max_frame_count).dispatch(_max_frame_count - _host_count[0]);
+        auto gen_count = std::min(this->_dispatch_size - this->_dispatch_counter, _host_count[0]);
+        if (_debug) {
+            LUISA_INFO("Gen {} new frame", gen_count);
         }
-        stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint, uint>(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _frame, _dispatch_counter, _max_frame_count).dispatch(_host_count[0]);
-        _dispatch_counter += _host_count[0];
+        if (_host_count[0] != _max_frame_count) {
+            stream << _clear_shader(_global_buffer, 1).dispatch(1u);
+            stream << _compact_shader(_resume_index, _frame, _max_frame_count - _host_count[0], _max_frame_count).dispatch(_host_count[0]);
+        }
+        stream << this->template call_shader<1, Buffer<uint>, uint, Container, uint, uint>(
+                          _gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _max_frame_count - _host_count[0], _frame, _dispatch_counter, _max_frame_count)
+                      .dispatch(gen_count);
+        _dispatch_counter += gen_count;
         _host_empty = false;
     } else {
         for (uint i = 1; i < _max_sub_coro; i++) {

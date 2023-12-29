@@ -237,6 +237,7 @@ public:
             if (hint_token.size() != 0) {
                 auto id = keep_index(index);
                 auto frame = _frame->read(id);
+
                 return read_promise<uint>(frame, "coro_hint");
             } else {
                 return def<uint>(0u);

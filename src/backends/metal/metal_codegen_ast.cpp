@@ -429,12 +429,12 @@ void MetalCodegenAST::_emit_function() noexcept {
             _scratch << "  auto print_buffer = args.print_buffer;\n";
         }
     } else {
-        auto texture_count = std::count_if(
+        auto template_count = std::count_if(
             _function.arguments().cbegin(), _function.arguments().cend(),
-            [](auto arg) { return arg.type()->is_texture(); });
-        if (texture_count > 0) {
+            [](auto arg) { return arg.is_reference() || arg.type()->is_texture(); });
+        if (template_count > 0) {
             _scratch << "template<";
-            for (auto i = 0u; i < texture_count; i++) {
+            for (auto i = 0u; i < template_count; i++) {
                 _scratch << "typename T" << i << ", ";
             }
             _scratch.pop_back();
@@ -443,20 +443,15 @@ void MetalCodegenAST::_emit_function() noexcept {
         }
         _emit_type_name(_function.return_type());
         _scratch << " callable_" << hash_to_string(_function.hash()) << "(";
-        auto emitted_texture_count = 0u;
+        auto emitted_template_count = 0u;
         if (!_function.arguments().empty() || _uses_printing) {
             for (auto arg : _function.arguments()) {
-                auto is_mut_ref = arg.is_reference() &&
-                                  (to_underlying(_function.variable_usage(arg.uid())) &
-                                   to_underlying(Usage::WRITE));
-                if (is_mut_ref) { _scratch << "thread "; }
-                if (arg.type()->is_texture()) {
-                    _scratch << "T" << emitted_texture_count++;
+                if (arg.is_reference() || arg.type()->is_texture()) {
+                    _scratch << "T" << emitted_template_count++;
                 } else {
                     _emit_type_name(arg.type(), _function.variable_usage(arg.uid()));
                 }
                 _scratch << " ";
-                if (is_mut_ref) { _scratch << "&"; }
                 _emit_variable_name(arg);
                 _scratch << ", ";
             }
@@ -817,7 +812,9 @@ void MetalCodegenAST::visit(const LiteralExpr *expr) noexcept {
 }
 
 void MetalCodegenAST::visit(const RefExpr *expr) noexcept {
+    if (expr->variable().is_reference()) { _scratch << "(*"; }
     _emit_variable_name(expr->variable());
+    if (expr->variable().is_reference()) { _scratch << ")"; }
 }
 
 void MetalCodegenAST::_emit_access_chain(luisa::span<const Expression *const> chain) noexcept {
@@ -1125,9 +1122,12 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
     } else {
         auto trailing_comma = false;
         for (auto i = 0u; i < expr->arguments().size(); i++) {
+            auto is_ref_arg = expr->is_custom() && expr->custom().arguments()[i].is_reference();
             auto arg = expr->arguments()[i];
             trailing_comma = true;
+            if (is_ref_arg) { _scratch << "&("; }
             arg->accept(*this);
+            if (is_ref_arg) { _scratch << ")"; }
             _scratch << ", ";
         }
         if (expr->is_custom() && _uses_printing) {

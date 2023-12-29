@@ -208,16 +208,21 @@ int main(int argc, char *argv[]) {
     //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
     //coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y / 3, {}, false};
     coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 256u, 2u, false};
-    stream << clear_shader().dispatch(resolution);
+    stream << clear_shader().dispatch(resolution)
+           << synchronize();
     /*for (auto i = 0u; i < 100u; i++) {
         stream << shader(seed_image, accum_image, i).dispatch(resolution);
     }*/
-    for (auto i = 0u; i < 100u; ++i) {
+    Clock clk;
+    for (auto i = 0u; i < 1000u; ++i) {
         LUISA_INFO("spp {}", i);
         Wdispatcher(seed_image, accum_image, i, resolution.x * resolution.y);
-        stream << Wdispatcher.await_all()
-               << synchronize();
+        stream << Wdispatcher.await_all();
+        // << synchronize();
     }
+    stream << synchronize();
+    auto dt = clk.toc();
+    LUISA_INFO("Time: {} ms ({} spp/s)", dt, 1e6 / dt);
 
     LUISA_INFO("Wavefront Dispatcher:");
     stream << accum_image.copy_to(host_image.data())

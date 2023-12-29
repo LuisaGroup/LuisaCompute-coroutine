@@ -101,6 +101,7 @@ impl ActiveVar {
 
     fn record_use(&mut self, replayable_value_analysis: &mut ReplayableValueAnalysis, node: NodeRef) {
         // let token = self.token; // for DEBUG
+        // let node_index = unsafe { DISPLAY_IR_DEBUG.get().get(&node) }; // for DEBUG
         let defined_index = *self.defined_count.get(&node).unwrap_or(&-1);
         self.used.entry(node).or_default().insert(defined_index);
         if defined_index < 0 && !replayable_value_analysis.detect(node) {
@@ -109,6 +110,7 @@ impl ActiveVar {
     }
     fn record_def(&mut self, node: NodeRef) {
         // let token = self.token; // for DEBUG
+        // let node_index = unsafe { DISPLAY_IR_DEBUG.get().get(&node) }; // for DEBUG
         let defined_index = self.defined_count.entry(node).or_insert(-1);
         *defined_index += 1;
         let def_index = *defined_index;
@@ -397,13 +399,12 @@ impl CoroFrameAnalyser {
             let mut frame_builder = FrameBuilder::new(token, Some(&self.defined_default));
             let scope = coro_graph.scopes.get(coro_scope_ref.0).unwrap().instructions.clone();
             frame_builder = self.visit_bb(coro_graph, frame_builder, &scope);
-            if self.active_var_by_token.entry(token).or_default().is_empty() {
-                let index = self.active_vars.len();
-                assert_eq!(frame_builder.active_var.token_next, INVALID_FRAME_TOKEN_MASK);
-                self.active_vars.push(frame_builder.active_var.clone());
-                self.active_var_by_token.entry(token).or_default().insert(index);
-                self.active_var_by_token_next.entry(frame_builder.active_var.token_next).or_default().insert(index);
-            }
+            let index = self.active_vars.len();
+            let token_next = frame_builder.active_var.token_next;
+            assert_eq!(token_next, INVALID_FRAME_TOKEN_MASK);
+            self.active_vars.push(frame_builder.active_var);
+            self.active_var_by_token.entry(token).or_default().insert(index);
+            self.active_var_by_token_next.entry(token_next).or_default().insert(index);
         }
         let exit_index = self.active_vars.len();
         self.active_vars.push(ActiveVar::new(INVALID_FRAME_TOKEN_MASK));
@@ -422,6 +423,7 @@ impl CoroFrameAnalyser {
         for capture in callable.captures.as_ref() {
             assert!(self.defined_default.insert(capture.node));
         }
+        println!("defined_default = {:?}", self.defined_default);
     }
 
     fn calculate_frame(&mut self) {
@@ -576,6 +578,7 @@ impl CoroFrameAnalyser {
         frame_builder.active_var.enter_scope();
         for instr_ref in bb.iter() {
             let instruction = coro_graph.instructions.get(instr_ref.0).unwrap();
+            println!("{:?}", instruction);
             match instruction {
                 CoroInstruction::Simple(node_ref) => {
                     let instruction = node_ref.get().instruction.as_ref();
@@ -601,6 +604,7 @@ impl CoroFrameAnalyser {
 
                         Instruction::Update { var, value } => {
                             record_use!(value);
+                            record_use!(var);
                             record_def!(var);
                         }
                         // end
@@ -655,8 +659,8 @@ impl CoroFrameAnalyser {
                         | Instruction::CoroResume { .. } => {
                             unreachable!("Instruction {:?} unreachable in CoroFrame analysis", instruction);
                         }
-                        Instruction::CoroRegister { .. } => {
-                            todo!()
+                        Instruction::CoroRegister { token, value, var } => {
+                            record_use!(value);
                         }
                     }
                 }

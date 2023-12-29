@@ -7,8 +7,9 @@ use crate::analysis::coro_frame_v4::{CoroFrameAnalyser, CoroFrameAnalysis};
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::frame_token_manager::INVALID_FRAME_TOKEN_MASK;
-use crate::analysis::utility::DISPLAY_IR_DEBUG;
+use crate::analysis::utility::{DISPLAY_IR_DEBUG, node_updatable};
 use crate::context::register_type;
+use crate::display::DisplayIR;
 use crate::ir::{BasicBlock, CallableModule, CallableModuleRef, Capture, Const, Func, Instruction, INVALID_REF, IrBuilder, Module, ModuleFlags, ModuleKind, ModulePools, new_node, Node, NodeRef, PhiIncoming, Primitive, SwitchCase, Type};
 use crate::transform::Transform;
 
@@ -40,6 +41,7 @@ struct CallableModuleInfo {
     old2frame_index: HashMap<NodeRef, usize>,
     register_var2index: HashMap<u32, usize>,
     flag_ref2node_ref: HashMap<CoroInstrRef, NodeRef>,
+    condition_stack_replay: HashMap<NodeRef, NodeRef>,
 }
 
 #[derive(Default)]
@@ -95,12 +97,9 @@ impl SplitManager {
                 if $coro_resume {
                     scope_builder = manager.coro_resume(scope_builder);
                 }
-                let mut scope_builder = manager.visit_bb(
+                let scope_builder = manager.visit_bb(
                     scope_builder,
                     visit_state);
-                manager.coro_store(&mut scope_builder, INVALID_FRAME_TOKEN_MASK);
-                scope_builder.builder.coro_suspend(INVALID_FRAME_TOKEN_MASK);
-                scope_builder.builder.return_(INVALID_REF);
                 let bb = scope_builder.builder.finish();
                 let mut replayable_builder = manager.replayable_builders.remove(&$token).unwrap();
                 replayable_builder.append_block(bb);
@@ -190,12 +189,9 @@ impl SplitManager {
                 old2frame_index: self.frame_analyser.node2frame_slot.clone(),
                 register_var2index: HashMap::new(),
                 flag_ref2node_ref: HashMap::new(),
+                condition_stack_replay: HashMap::new(),
             };
             callable_info.frame_node = callable_info.args[0].clone();
-
-            for (node, index) in callable_info.old2frame_index.iter() {
-                println!("state[{index}] = {:?}", node.type_())
-            }
 
             coro_callable_info.insert(*token, callable_info);
             self.replayable_builders.insert(*token, IrBuilder::new(self.callable.pools.clone()));
@@ -252,7 +248,28 @@ impl SplitManager {
                 | CoroInstruction::EntryScope { .. } => {
                     unreachable!("{:?} shouldn't exist after coro graph analysis", coro_instr);
                 }
-                CoroInstruction::ConditionStackReplay { .. } => {}
+                CoroInstruction::ConditionStackReplay { items } => {
+                    for item in items.iter() {
+                        let node = item.node;
+                        let value = item.value;
+                        let type_ = node.type_().as_ref();
+                        println!("ConditionStackReplay {:?}: {:?} = {:?}", node, type_, value);
+                        let value = {
+                            let builder = self.replayable_builders.get_mut(&token).unwrap();
+                            match type_ {
+                                &Type::Primitive(Primitive::Bool) => builder.const_(Const::Bool(value == 1)),
+                                &Type::Primitive(Primitive::Int32) => builder.const_(Const::Int32(value)),
+                                _ => panic!("Unexpected type in ConditionStackReplay"),
+                            }
+                        };
+                        if node_updatable(node) {
+                            scope_builder.builder.update(node, value);
+                        } else {
+                            // set a new node to replace the old one
+                            self.coro_callable_info.get_mut(&token).unwrap().condition_stack_replay.insert(node, value);
+                        }
+                    }
+                }
 
                 CoroInstruction::MakeFirstFlag => {
                     // create a cond node and record the CoroInstrRef -> NodeRef mapping
@@ -284,32 +301,49 @@ impl SplitManager {
                 CoroInstruction::Simple(node) => {
                     let type_ = node.type_().as_ref();
                     let instruction = node.get().instruction.as_ref();
-                    let dup_node = match instruction {
-                        Instruction::CoroSplitMark { .. }
-                        | Instruction::CoroSuspend { .. }
-                        | Instruction::CoroResume { .. } => {
-                            unreachable!("{:?} does not belong to CoroInstruction::Simple", instruction)
-                        }
-                        Instruction::CoroRegister { token, value, var } => {
-                            // var <-> frame[token][index] <-> value
-                            assert_eq!(*token, scope_builder.token);
-                            let callable_info = self.coro_callable_info.get_mut(token).unwrap();
-                            let index = callable_info.old2frame_index.get(value).unwrap();
-                            callable_info.register_var2index.insert(*var, *index);
-                            INVALID_REF
-                        }
 
-                        Instruction::Loop { .. }
-                        | Instruction::GenericLoop { .. }
-                        | Instruction::Break
-                        | Instruction::Continue
-                        | Instruction::Return(_)
-                        | Instruction::If { .. }
-                        | Instruction::Switch { .. } => {
-                            unreachable!("{:?} does not belong to CoroInstruction::Simple", instruction);
-                        }
+                    let dup_node = if let Some(value) =
+                        self.coro_callable_info.get(&token).unwrap().condition_stack_replay.get(node) {
+                        // create a local
+                        let replayable_builder = self.replayable_builders.get_mut(&token).unwrap();
+                        replayable_builder.comment(CBoxedSlice::from("ConditionStackReplay".as_bytes()));
+                        let dup_node = replayable_builder.local(*value);
+                        // update value
+                        let node_original = new_node(
+                            &self.callable.pools,
+                            Node::new(node.get().instruction.clone(), node.type_().clone()));
+                        scope_builder.builder.append(node_original);
+                        scope_builder.builder.update(dup_node, node_original);
+                        dup_node
+                    } else {
+                        let dup_node = match instruction {
+                            Instruction::CoroSplitMark { .. }
+                            | Instruction::CoroSuspend { .. }
+                            | Instruction::CoroResume { .. } => {
+                                unreachable!("{:?} does not belong to CoroInstruction::Simple", instruction)
+                            }
+                            Instruction::CoroRegister { token, value, var } => {
+                                // var <-> frame[token][index] <-> value
+                                assert_eq!(*token, scope_builder.token);
+                                let callable_info = self.coro_callable_info.get_mut(token).unwrap();
+                                let index = callable_info.old2frame_index.get(value).unwrap();
+                                callable_info.register_var2index.insert(*var, *index);
+                                INVALID_REF
+                            }
 
-                        _ => self.duplicate_node(&mut scope_builder, *node),
+                            Instruction::Loop { .. }
+                            | Instruction::GenericLoop { .. }
+                            | Instruction::Break
+                            | Instruction::Continue
+                            | Instruction::Return(_)
+                            | Instruction::If { .. }
+                            | Instruction::Switch { .. } => {
+                                unreachable!("{:?} does not belong to CoroInstruction::Simple", instruction);
+                            }
+
+                            _ => self.duplicate_node(&mut scope_builder, *node),
+                        };
+                        dup_node
                     };
                     if dup_node != INVALID_REF {
                         self.record_node_mapping(token, *node, dup_node);
@@ -350,6 +384,8 @@ impl SplitManager {
                 }
 
                 CoroInstruction::Terminate => {
+                    scope_builder.builder.coro_suspend(INVALID_FRAME_TOKEN_MASK);
+                    self.coro_store(&mut scope_builder, INVALID_FRAME_TOKEN_MASK);
                     scope_builder.builder.return_(INVALID_REF);
                 }
             }
@@ -403,7 +439,6 @@ impl SplitManager {
                     &[index_node],
                     frame_fields[*index].clone(),
                 );
-                println!("{:?} -> state[{}] = {:?}, update {:?}", old_node.type_(), index, gep.type_(), value.type_());
                 builder.update(gep, value);
             }
         }
@@ -449,7 +484,8 @@ impl SplitManager {
                 // replayable nodes
                 self.duplicate_replayable(frame_token, node)
             } else {
-                panic!("Unreplayable node not found in find_duplicated_node")
+                panic!("Unreplayable node not found in find_duplicated_node => {:?}: {:?} = {:?}",
+                       unsafe { DISPLAY_IR_DEBUG.get().var_str(&node) }, node.type_(), node);
             }
         }
     }
@@ -803,6 +839,20 @@ impl Transform for SplitCoro {
         let graph = CoroGraph::from(&callable.module);
         graph.dump();
         let frame_analyser = CoroFrameAnalysis::analyse(&graph, &callable);
-        SplitManager::split(callable, graph, frame_analyser)
+        let coroutine_entry = SplitManager::split(callable, graph, frame_analyser);
+
+        println!("{:-^40}", " After split ");
+        let result = DisplayIR::new().display_ir_callable(&coroutine_entry);
+        println!("{:-^40}\n{}", format!(" CoroScope {} ", 0), result);
+        for (token, coro) in coroutine_entry
+            .subroutine_ids
+            .iter()
+            .zip(coroutine_entry.subroutines.iter())
+        {
+            let result = DisplayIR::new().display_ir_callable(coro.as_ref());
+            println!("{:-^40}\n{}", format!(" CoroScope {} ", token), result);
+        }
+
+        coroutine_entry
     }
 }

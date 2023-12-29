@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::display::DisplayIR;
-use crate::ir::{NodeRef};
+use crate::ir::{Func, Instruction, NodeRef};
 
 // Singleton pattern for DisplayIR
 pub(crate) struct LazyDisplayIR {
@@ -54,4 +54,21 @@ pub(crate) fn display_node_map(target: &HashMap<NodeRef, i32>) -> String {
 
 pub(crate) fn display_node_set(target: &HashSet<NodeRef>) -> String {
     unsafe { DISPLAY_IR_DEBUG.get().vars_str(target) }
+}
+
+
+
+pub(crate) fn node_updatable(var: NodeRef) -> bool {
+    match var.get().instruction.as_ref() {
+        Instruction::Local { .. } => true,
+        Instruction::Argument { by_value } => {
+            !by_value
+        }
+        Instruction::Shared { .. } => true,
+        Instruction::Call(func, _) => match func {
+            Func::GetElementPtr => true,
+            _ => false,
+        },
+        _ => false,
+    }
 }

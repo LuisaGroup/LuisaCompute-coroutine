@@ -23,6 +23,7 @@ struct CodegenResult {
     using Properties = vstd::vector<Property>;
     vstd::StringBuilder result;
     Properties properties;
+    vstd::vector<std::pair<vstd::string, Type const*>> printers;
     bool useTex2DBindless;
     bool useTex3DBindless;
     bool useBufferBindless;
@@ -31,12 +32,13 @@ struct CodegenResult {
     CodegenResult() {}
     CodegenResult(
         vstd::StringBuilder &&result,
+        vstd::vector<std::pair<vstd::string, Type const*>>&& printers,
         Properties &&properties,
         bool useTex2DBindless,
         bool useTex3DBindless,
         bool useBufferBindless,
         uint64 immutableHeaderSize,
-        vstd::MD5 typeMD5) : result(std::move(result)), properties(std::move(properties)), useTex2DBindless{useTex2DBindless}, useTex3DBindless{useTex3DBindless}, useBufferBindless{useBufferBindless}, immutableHeaderSize(immutableHeaderSize), typeMD5(typeMD5) {}
+        vstd::MD5 typeMD5) : result(std::move(result)), properties(std::move(properties)), printers(std::move(printers)), useTex2DBindless{useTex2DBindless}, useTex3DBindless{useTex3DBindless}, useBufferBindless{useBufferBindless}, immutableHeaderSize(immutableHeaderSize), typeMD5(typeMD5) {}
     CodegenResult(CodegenResult const &) = delete;
     CodegenResult(CodegenResult &&) = default;
 };
@@ -72,27 +74,27 @@ public:
     void GenerateCBuffer(
         std::initializer_list<vstd::IRange<Variable> *> f,
         vstd::StringBuilder &result,
-        uint& bind_count);
+        uint &bind_count);
     void GenerateBindless(
         CodegenResult::Properties &properties,
         vstd::StringBuilder &str,
         luisa::BinaryIO const *internalDataPath,
         bool isSpirV,
-        uint& bind_count);
+        uint &bind_count);
     void PreprocessCodegenProperties(
         CodegenResult::Properties &properties,
         vstd::StringBuilder &varData,
         RegisterIndexer &registerCount,
         luisa::BinaryIO const *internalDataPath,
         bool cbufferNonEmpty, bool isRaster, bool isSpirv, uint &bind_count);
-    void PostprocessCodegenProperties(vstd::StringBuilder &finalResult);
+    void PostprocessCodegenProperties(vstd::StringBuilder &finalResult, bool use_autodiff);
     void CodegenProperties(
         CodegenResult::Properties &properties,
         vstd::StringBuilder &varData,
         Function kernel,
         uint offset,
         RegisterIndexer &registerCount,
-        uint& bind_count);
+        uint &bind_count);
     CodegenResult Codegen(Function kernel, luisa::BinaryIO const *internalDataPath, luisa::string_view native_code, uint custom_mask, bool isSpirV);
     CodegenResult RasterCodegen(
         MeshFormat const &meshFormat,
@@ -103,6 +105,7 @@ public:
         uint custom_mask,
         bool isSpirV);
     static vstd::string_view ReadInternalHLSLFile(vstd::string_view name, luisa::BinaryIO const *ctx);
+    uint AddPrinter(vstd::string_view name, Type const* structType);
     vstd::StringBuilder GetNewTempVarName();
 };
 class StringStateVisitor final : public StmtVisitor, public ExprVisitor {
@@ -114,8 +117,15 @@ class StringStateVisitor final : public StmtVisitor, public ExprVisitor {
         ~Scope();
     };
     size_t accessCount = 0;
-    size_t rayQuery = 0;
+    size_t printCount = 0;
+    // size_t rayQuery = 0;
     bool literalBrace = false;
+    struct VarHash {
+        size_t operator()(Variable const &v) const {
+            return v.hash();
+        }
+    };
+    luisa::unordered_set<Variable, VarHash> lazyDeclVars;
 
 public:
     luisa::unordered_map<uint64, Variable> *sharedVariables = nullptr;
@@ -129,7 +139,7 @@ public:
     void visit(const CastExpr *expr) override;
     void visit(const ConstantExpr *expr) override;
     void visit(const TypeIDExpr *expr) override { LUISA_NOT_IMPLEMENTED(); }
-    void visit(const StringIDExpr *expr) override { LUISA_NOT_IMPLEMENTED(); }
+    void visit(const StringIDExpr *expr) override;
     void visit(const CpuCustomOpExpr *) override { LUISA_NOT_IMPLEMENTED(); }
     void visit(const GpuCustomOpExpr *) override { LUISA_NOT_IMPLEMENTED(); }
 
@@ -148,6 +158,7 @@ public:
     void visit(const CommentStmt *) override;
     void visit(const RayQueryStmt *) override;
     void visit(const AutoDiffStmt *stmt) override;
+    void visit(const PrintStmt *stmt) override;
     void VisitFunction(
 #ifdef LUISA_ENABLE_IR
         vstd::unordered_set<Variable> const &grad_vars,
@@ -264,7 +275,7 @@ struct PrintValue<Vector<EleType, N>> {
     using T = Vector<EleType, N>;
     void print_elem(T const &v, vstd::StringBuilder &varName) {
         for (uint64 i = 0; i < N; ++i) {
-            PrintValue<float>{}(v[i], varName);
+            PrintValue<EleType>{}(v[i], varName);
             varName += ',';
         }
         auto &&last = varName.end() - 1;

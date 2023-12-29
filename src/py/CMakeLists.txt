@@ -17,8 +17,7 @@ set(LUISA_PYTHON_SOURCES
         managed_collector.cpp managed_collector.h
         managed_device.h
         py_stream.cpp py_stream.h
-        ref_counter.cpp ref_counter.h
-        stb.cpp)
+        ref_counter.cpp ref_counter.h)
 
 pybind11_add_module(lcapi ${LUISA_PYTHON_SOURCES})
 
@@ -32,6 +31,6 @@ if (SKBUILD)
     install(DIRECTORY luisa
             DESTINATION ${SKBUILD_PLATLIB_DIR})
     install(TARGETS lcapi
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_BINDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif ()

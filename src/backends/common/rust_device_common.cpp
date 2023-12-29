@@ -1,3 +1,4 @@
+#include <luisa/core/clock.h>
 #include <luisa/rust/ir.hpp>
 #include <luisa/rust/api_types.hpp>
 
@@ -321,6 +322,22 @@ public:
             .index_stride = sizeof(Triangle)};
         _converted.emplace_back(converted);
     }
+    void visit(const CurveBuildCommand *command) noexcept override {
+        api::Command converted{.tag = Tag::CURVE_BUILD};
+        converted.CURVE_BUILD._0 = api::CurveBuildCommand{
+            .curve = {command->handle()},
+            .request = _convert_accel_build_request(command->request()),
+            .basis = static_cast<api::CurveBasis>(command->basis()),
+            .cp_count = command->cp_count(),
+            .seg_count = command->seg_count(),
+            .cp_buffer = {command->cp_buffer()},
+            .cp_buffer_offset = command->cp_buffer_offset(),
+            .cp_buffer_stride = command->cp_stride(),
+            .seg_buffer = {command->seg_buffer()},
+            .seg_buffer_offset = command->seg_buffer_offset(),
+        };
+        _converted.emplace_back(converted);
+    }
     void visit(const ProceduralPrimitiveBuildCommand *command) noexcept override {
         api::Command converted{.tag = Tag::PROCEDURAL_PRIMITIVE_BUILD};
         converted.PROCEDURAL_PRIMITIVE_BUILD._0 = api::ProceduralPrimitiveBuildCommand{
@@ -392,7 +409,7 @@ public:
 class CpuOidnDenoiser : public OidnDenoiser {
 public:
     using OidnDenoiser::OidnDenoiser;
-    void execute(bool async) noexcept {
+    void execute(bool async) noexcept override {
         auto lock = luisa::make_unique<std::shared_lock<std::shared_mutex>>(_mutex);
         if (!async) {
             exec_filters();
@@ -415,12 +432,13 @@ public:
 class CpuOidnDenoiserExt : public DenoiserExt {
     DeviceInterface *_device;
 public:
+    virtual ~CpuOidnDenoiserExt() noexcept = default;
     explicit CpuOidnDenoiserExt(DeviceInterface *device) noexcept
         : _device{device} {}
     luisa::shared_ptr<Denoiser> create(uint64_t stream) noexcept override {
         return luisa::make_shared<CpuOidnDenoiser>(_device, oidn::newDevice(oidn::DeviceType::CPU), stream);
     }
-    luisa::shared_ptr<Denoiser> create(Stream &stream) noexcept override{
+    luisa::shared_ptr<Denoiser> create(Stream &stream) noexcept override {
         return create(stream.handle());
     }
 };
@@ -582,16 +600,30 @@ public:
             shader->get()->module.flags |= ir::ModuleFlags_REQUIRES_REV_AD_TRANSFORM;
             transform_ir_kernel_module_auto(shader->get());
         }
+        // for debugging
+        Clock clk;
+        auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
+        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "reg2mem");
+        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "canonicalize_control_flow");
+        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "demote_locals");
+        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "defer_load");
+        // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "split_coro");
+        shader->get()->module = ir::luisa_compute_ir_transform_pipeline_transform_module(ppl, shader->get()->module);
+        ir::luisa_compute_ir_transform_pipeline_destroy(ppl);
+        LUISA_VERBOSE("IR transform took {} ms.", clk.toc());
         return create_shader(option, shader->get());
     }
 
     ShaderCreationInfo
     create_shader(const ShaderOption &option_, const ir::KernelModule *kernel) noexcept override {
-        api::ShaderOption option{};
-        option.compile_only = option_.compile_only;
-        option.enable_cache = option_.enable_cache;
-        option.enable_debug_info = option_.enable_debug_info;
-        option.enable_fast_math = option_.enable_fast_math;
+        api::ShaderOption option{
+            .enable_cache = option_.enable_cache,
+            .enable_fast_math = option_.enable_fast_math,
+            .enable_debug_info = option_.enable_debug_info,
+            .compile_only = option_.compile_only,
+            .time_trace = option_.time_trace,
+            .max_registers = option_.max_registers,
+            .name = option_.name.data()};
         auto shader = device.create_shader(device.device, api::KernelModule{(uint64_t)kernel}, &option);
         ShaderCreationInfo info{};
         info.block_size[0] = shader.block_size[0];
@@ -665,6 +697,21 @@ public:
         device.destroy_mesh(device.device, api::Mesh{handle});
     }
 
+    ResourceCreationInfo create_curve(const AccelOption &option_) noexcept override {
+        api::AccelOption option{};
+        option.allow_compaction = option_.allow_compaction;
+        option.allow_update = option_.allow_update;
+        option.hint = static_cast<api::AccelUsageHint>(option_.hint);
+        auto mesh = device.create_curve(device.device, &option);
+        ResourceCreationInfo info{};
+        info.handle = mesh.handle;
+        info.native_handle = mesh.native_handle;
+        return info;
+    }
+
+    void destroy_curve(uint64_t handle) noexcept override {
+        device.destroy_curve(device.device, api::Curve{handle});
+    }
     ResourceCreationInfo create_procedural_primitive(const AccelOption &option_) noexcept override {
         api::AccelOption option{};
         option.allow_compaction = option_.allow_compaction;
@@ -711,6 +758,12 @@ public:
             LUISA_WARNING_WITH_LOCATION("Unsupported device extension: {}.", name);
             return nullptr;
         }
+    }
+    luisa::string query(luisa::string_view property) noexcept override {
+        const auto ptr = (device.query)(device.device, property.data());
+        luisa::string result(ptr);
+        (lib.free_string)(ptr);
+        return result;
     }
 };
 

@@ -77,6 +77,7 @@ private:
 private:
     void _dup_function(const FunctionBuilder &f) noexcept {
         auto fb = FunctionBuilder::current();
+        fb->mark_required_curve_basis_set(f.required_curve_bases());
         if (f.tag() == Function::Tag::KERNEL) {
             fb->set_block_size(f.block_size());
             luisa::unordered_set<const Expression *> collected;
@@ -376,6 +377,25 @@ private:
                 for (auto arg : s->arguments()) { args.emplace_back(_dup_expr(arg)); }
                 fb->print_(s->format(), args);
                 break;
+            }
+            case Statement::Tag::SUSPEND: {
+                // TODO: fix this...
+                auto s = static_cast<const SuspendStmt *>(stmt);
+                auto token = s->token();
+                auto token_name = [this, token] {
+                    auto &original = this->_contexts.back()->original;
+                    for (auto &&[name, t] : original._coro_tokens) {
+                        if (t == token) { return name; }
+                    }
+                    LUISA_ERROR_WITH_LOCATION("Invalid coroutine token.");
+                }();
+                auto new_token = fb->suspend_(token_name);
+                LUISA_ASSERT(token == new_token, "Invalid coroutine token.");
+            }
+            case Statement::Tag::COROBIND: {
+                // TODO: fix this...
+                auto s = static_cast<const CoroBindStmt *>(stmt);
+                fb->_create_and_append_statement<CoroBindStmt>(s->token(), s->expression(), s->var_id());
             }
         }
     }

@@ -744,6 +744,16 @@ private:
         auto old_ctx = std::exchange(_func_ctx, &ctx);
         // convert
         ctx.j["tag"] = luisa::to_string(f.tag());
+        ctx.j["curve_bases"] = [bs = f.required_curve_bases()] {
+            JSON::Array a;
+            a.reserve(bs.count());
+            for (auto i = 0u; i < curve_basis_count; i++) {
+                if (auto basis = static_cast<CurveBasis>(i); bs.test(basis)) {
+                    a.emplace_back(luisa::to_string(basis));
+                }
+            }
+            return a;
+        }();
         ctx.j["arguments"] = [&] {
             JSON::Array a;
             a.reserve(f.arguments().size());
@@ -758,7 +768,7 @@ private:
                 a.reserve(f.bound_arguments().size());
                 for (auto b : f.bound_arguments()) {
                     a.emplace_back(luisa::visit(
-                        [&a]<typename T>(T b) noexcept -> JSON {
+                        []<typename T>(T b) noexcept -> JSON {
                             if constexpr (std::is_same_v<T, Function::BufferBinding>) {
                                 return JSON::Object{
                                     {"tag", "BUFFER"},

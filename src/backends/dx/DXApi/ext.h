@@ -3,6 +3,7 @@
 #include <luisa/vstl/spin_mutex.h>
 #include <luisa/backends/ext/tex_compress_ext.h>
 #include <luisa/backends/ext/native_resource_ext_interface.h>
+#include <luisa/backends/ext/pinned_memory_ext.hpp>
 #include <luisa/backends/ext/raster_ext_interface.h>
 #include <luisa/backends/ext/dx_cuda_interop.h>
 #include <luisa/backends/ext/dstorage_ext_interface.h>
@@ -160,6 +161,7 @@ public:
     ResourceCreationInfo create_depth_buffer(DepthFormat format, uint width, uint height) noexcept override;
     void destroy_depth_buffer(uint64_t handle) noexcept override;
 };
+#ifdef LCDX_ENABLE_CUDA
 class DxCudaInteropImpl : public luisa::compute::DxCudaInterop {
     LCDevice &_device;
 
@@ -176,7 +178,7 @@ public:
     virtual DeviceInterface *device() override;
     void unmap(void *cuda_ptr, void *cuda_handle) noexcept override;
 };
-
+#endif
 class DStorageExtImpl final : public DStorageExt, public vstd::IOperatorNewBase {
     luisa::DynamicModule dstorage_core_module;
     luisa::DynamicModule dstorage_module;
@@ -184,8 +186,8 @@ class DStorageExtImpl final : public DStorageExt, public vstd::IOperatorNewBase 
     ComPtr<IDStorageCompressionCodec> compression_codec;
     vstd::spin_mutex spin_mtx;
     std::mutex mtx;
-    std::atomic_size_t staging_size;
     LCDevice *mdevice;
+    std::atomic_bool staging{false};
     bool is_hdd = false;
     void init_factory();
     void init_factory_nolock();
@@ -211,5 +213,19 @@ public:
         const void *data, size_t size_bytes,
         Compression algorithm, CompressionQuality quality,
         luisa::vector<std::byte> &result) noexcept override;
+};
+class DxPinnedMemoryExt : public PinnedMemoryExt {
+    LCDevice *_device;
+protected:
+    [[nodiscard]] BufferCreationInfo _pin_host_memory(
+        const Type *elem_type, size_t elem_count,
+        void *host_ptr, const PinnedMemoryOption &option) noexcept override;
+
+    [[nodiscard]] BufferCreationInfo _allocate_pinned_memory(
+        const Type *elem_type, size_t elem_count,
+        const PinnedMemoryOption &option) noexcept override;
+public:
+    explicit DxPinnedMemoryExt(LCDevice *device) : _device(device) {}
+    [[nodiscard]] DeviceInterface *device() const noexcept override;
 };
 }// namespace lc::dx

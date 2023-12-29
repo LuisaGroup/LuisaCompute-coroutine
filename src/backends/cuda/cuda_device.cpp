@@ -23,6 +23,7 @@
 #include "cuda_device.h"
 #include "cuda_buffer.h"
 #include "cuda_mesh.h"
+#include "cuda_curve.h"
 #include "cuda_procedural_primitive.h"
 #include "cuda_accel.h"
 #include "cuda_stream.h"
@@ -65,6 +66,7 @@ static const bool LUISA_CUDA_ENABLE_OPTIX_VALIDATION = ([] {
     if (env == nullptr) return false;
     return std::string_view{env} == "1";
 })();
+
 namespace luisa::compute::cuda {
 
 [[nodiscard]] static auto cuda_array_format(PixelFormat format) noexcept {
@@ -177,9 +179,6 @@ CUDADevice::CUDADevice(Context &&ctx,
         _cudadevrt_library = luisa::string{std::istreambuf_iterator<char>{devrt_file},
                                            std::istreambuf_iterator<char>{}};
     }
-
-    // event pool
-    _event_manager = luisa::make_unique<CUDAEventManager>(handle().uuid());
 }
 
 CUDADevice::~CUDADevice() noexcept {
@@ -187,6 +186,14 @@ CUDADevice::~CUDADevice() noexcept {
         LUISA_CHECK_CUDA(cuCtxSynchronize());
         LUISA_CHECK_CUDA(cuModuleUnload(_builtin_kernel_module));
     });
+}
+
+CUDAEventManager *CUDADevice::event_manager() const noexcept {
+    std::scoped_lock lock{_event_manager_mutex};
+    if (_event_manager == nullptr) [[unlikely]] {
+        _event_manager = luisa::make_unique<CUDAEventManager>(handle().uuid());
+    }
+    return _event_manager.get();
 }
 
 BufferCreationInfo CUDADevice::create_buffer(const Type *element,
@@ -315,6 +322,10 @@ void CUDADevice::synchronize_stream(uint64_t stream_handle) noexcept {
     with_handle([stream = reinterpret_cast<CUDAStream *>(stream_handle)] {
         stream->synchronize();
     });
+}
+
+void CUDADevice::set_stream_log_callback(uint64_t stream_handle, const StreamLogCallback &callback) noexcept {
+    reinterpret_cast<CUDAStream *>(stream_handle)->set_log_callback(callback);
 }
 
 void CUDADevice::dispatch(uint64_t stream_handle, CommandList &&list) noexcept {
@@ -456,12 +467,14 @@ template<bool allow_update_expected_metadata>
     // update the empty fields in metadata
     if constexpr (allow_update_expected_metadata) {
         if (expected_metadata.checksum == 0u) { expected_metadata.checksum = metadata->checksum; }
+        if (expected_metadata.curve_bases.none()) { expected_metadata.curve_bases = metadata->curve_bases; }
         if (expected_metadata.kind == CUDAShaderMetadata::Kind::UNKNOWN) { expected_metadata.kind = metadata->kind; }
         expected_metadata.enable_debug = metadata->enable_debug;
         expected_metadata.requires_trace_closest = metadata->requires_trace_closest;
         expected_metadata.requires_trace_any = metadata->requires_trace_any;
         expected_metadata.requires_ray_query = metadata->requires_ray_query;
         expected_metadata.requires_printing = metadata->requires_printing;
+        if (expected_metadata.max_register_count == 0u) { expected_metadata.max_register_count = metadata->max_register_count; }
         if (all(expected_metadata.block_size == 0u)) { expected_metadata.block_size = metadata->block_size; }
         if (expected_metadata.argument_types.empty()) { expected_metadata.argument_types = metadata->argument_types; }
         if (expected_metadata.argument_usages.empty()) { expected_metadata.argument_usages = metadata->argument_usages; }
@@ -547,11 +560,11 @@ ShaderCreationInfo CUDADevice::_create_shader(luisa::string name,
     auto p = with_handle([&]() noexcept -> CUDAShader * {
         if (expected_metadata.kind == CUDAShaderMetadata::Kind::RAY_TRACING) {
             return new_with_allocator<CUDAShaderOptiX>(
-                handle().optix_context(), ptx.data(), ptx.size(),
+                handle().optix_context(), std::move(ptx),
                 "__raygen__main", expected_metadata, std::move(bound_arguments));
         }
         return new_with_allocator<CUDAShaderNative>(
-            this, ptx.data(), ptx.size(), "kernel_main",
+            this, std::move(ptx), "kernel_main",
             expected_metadata, std::move(bound_arguments));
     });
 #ifndef NDEBUG
@@ -619,21 +632,42 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
     auto sm_option = luisa::format("-arch=compute_{}", _handle.compute_capability());
     auto nvrtc_version_option = luisa::format("-DLC_NVRTC_VERSION={}", _compiler->nvrtc_version());
     auto optix_version_option = luisa::format("-DLC_OPTIX_VERSION={}", optix::VERSION);
-    luisa::vector<const char *> nvrtc_options {
+    luisa::vector<const char *> nvrtc_options{
         sm_option.c_str(),
-            nvrtc_version_option.c_str(),
-            optix_version_option.c_str(),
-            "--std=c++17",
-            "-default-device",
-            "-restrict",
-            "-extra-device-vectorization",
-            "-dw",
-            "-w",
-            "-ewp",
+        nvrtc_version_option.c_str(),
+        optix_version_option.c_str(),
+        "--std=c++17",
+        "-default-device",
+        "-restrict",
+        "-extra-device-vectorization",
+        "-dw",
+        "-w",
+        "-ewp",
 #if !defined(NDEBUG) && LUISA_CUDA_KERNEL_DEBUG
-            "-DLUISA_DEBUG=1",
+        "-DLUISA_DEBUG=1",
 #endif
     };
+
+    luisa::string max_reg_opt;
+    if (option.max_registers != 0u) {
+        max_reg_opt = luisa::format(
+            "-maxrregcount={}",
+            std::clamp(option.max_registers, 0u, 255u));
+        nvrtc_options.emplace_back(max_reg_opt.c_str());
+    }
+
+    // generate time trace for optimization the compilation time
+    if (option.time_trace &&
+        _compiler->nvrtc_version() >= 120100 &&
+        _handle.driver_version() >= 12010) {
+        nvrtc_options.emplace_back("-time=-");
+    }
+
+    // multithreaded compilation
+    if (_compiler->nvrtc_version() >= 120100 &&
+        _handle.driver_version() >= 12030) {
+        nvrtc_options.emplace_back("-split-compile=0");
+    }
 
     if (option.enable_debug_info) {
         nvrtc_options.emplace_back("-lineinfo");
@@ -647,10 +681,11 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
         nvrtc_options.emplace_back("-use_fast_math");
     }
 
+    // FIXME: OptiX IR disabled due to many internal compiler errors
     // TODO: use OptiX IR for ray tracing shaders
-    //    if (kernel.requires_raytracing()) {
-    //        nvrtc_options.emplace_back("--optix-ir");
-    //    }
+    //  if (kernel.requires_raytracing()) {
+    //      nvrtc_options.emplace_back("--optix-ir");
+    //  }
 
     // compute hash
     auto src_hash = _compiler->compute_hash(scratch.string(), nvrtc_options);
@@ -658,6 +693,7 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
     // create metadata
     CUDAShaderMetadata metadata{
         .checksum = src_hash,
+        .curve_bases = kernel.required_curve_bases(),
         .kind = kernel.requires_raytracing() ?
                     CUDAShaderMetadata::Kind::RAY_TRACING :
                     CUDAShaderMetadata::Kind::COMPUTE,
@@ -666,6 +702,7 @@ ShaderCreationInfo CUDADevice::create_shader(const ShaderOption &option, Functio
         .requires_trace_any = kernel.propagated_builtin_callables().test(CallOp::RAY_TRACING_TRACE_ANY),
         .requires_ray_query = kernel.propagated_builtin_callables().uses_ray_query(),
         .requires_printing = kernel.requires_printing(),
+        .max_register_count = std::clamp(option.max_registers, 0u, 255u),
         .block_size = kernel.block_size(),
         .argument_types = [kernel] {
             luisa::vector<luisa::string> types;
@@ -716,6 +753,7 @@ ShaderCreationInfo CUDADevice::load_shader(luisa::string_view name_in,
     CUDAShaderMetadata metadata{
         .checksum = 0u,
         .kind = CUDAShaderMetadata::Kind::UNKNOWN,
+        .max_register_count = 0u,
         .block_size = uint3{1u, 1u, 1u},
         .argument_types = [arg_types] {
             luisa::vector<luisa::string> types;
@@ -746,12 +784,11 @@ ShaderCreationInfo CUDADevice::load_shader(luisa::string_view name_in,
     auto p = with_handle([&]() noexcept -> CUDAShader * {
         if (metadata.kind == CUDAShaderMetadata::Kind::RAY_TRACING) {
             return new_with_allocator<CUDAShaderOptiX>(
-                handle().optix_context(), ptx.data(), ptx.size(),
+                handle().optix_context(), std::move(ptx),
                 "__raygen__main", metadata);
         }
         return new_with_allocator<CUDAShaderNative>(
-            this, ptx.data(), ptx.size(),
-            "kernel_main", metadata);
+            this, std::move(ptx), "kernel_main", metadata);
     });
 #ifndef NDEBUG
     p->set_name(std::move(name));
@@ -774,17 +811,17 @@ void CUDADevice::destroy_shader(uint64_t handle) noexcept {
 }
 
 ResourceCreationInfo CUDADevice::create_event() noexcept {
-    auto event_handle = with_handle([this] {
-        return _event_manager->create();
+    auto event_handle = with_handle([m = this->event_manager()] {
+        return m->create();
     });
     return {.handle = reinterpret_cast<uint64_t>(event_handle),
             .native_handle = event_handle->handle()};
 }
 
 void CUDADevice::destroy_event(uint64_t handle) noexcept {
-    with_handle([this, handle] {
+    with_handle([m = this->event_manager(), handle] {
         auto event = reinterpret_cast<CUDAEvent *>(handle);
-        _event_manager->destroy(event);
+        m->destroy(event);
     });
 }
 
@@ -826,6 +863,21 @@ void CUDADevice::destroy_mesh(uint64_t handle) noexcept {
     with_handle([=] {
         auto mesh = reinterpret_cast<CUDAMesh *>(handle);
         delete_with_allocator(mesh);
+    });
+}
+
+ResourceCreationInfo CUDADevice::create_curve(const AccelOption &option) noexcept {
+    auto curve_handle = with_handle([&option] {
+        return new_with_allocator<CUDACurve>(option);
+    });
+    return {.handle = reinterpret_cast<uint64_t>(curve_handle),
+            .native_handle = const_cast<optix::TraversableHandle *>(curve_handle->pointer_to_handle())};
+}
+
+void CUDADevice::destroy_curve(uint64_t handle) noexcept {
+    with_handle([=] {
+        auto curve = reinterpret_cast<CUDACurve *>(handle);
+        delete_with_allocator(curve);
     });
 }
 
@@ -912,8 +964,6 @@ static void initialize() {
         LUISA_VERBOSE("Successfully initialized CUDA "
                       "backend with driver version {}.{}.",
                       driver_version_major, driver_version_minor);
-        // OptiX
-        static_cast<void>(optix::api());
     });
 }
 
@@ -1034,6 +1084,7 @@ void CUDADevice::set_name(luisa::compute::Resource::Tag resource_tag,
                 reinterpret_cast<CUDABindlessArray *>(handle)->set_name(std::move(name));
                 break;
             case Resource::Tag::MESH: [[fallthrough]];
+            case Resource::Tag::CURVE: [[fallthrough]];
             case Resource::Tag::PROCEDURAL_PRIMITIVE:
                 reinterpret_cast<CUDAPrimitive *>(handle)->set_name(std::move(name));
                 break;

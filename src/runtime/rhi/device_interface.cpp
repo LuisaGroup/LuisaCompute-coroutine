@@ -13,5 +13,18 @@ Context DeviceInterface::context() const noexcept {
     return Context{_ctx_impl};
 }
 
-}// namespace luisa::compute
+void DeviceInterface::set_stream_log_callback(uint64_t stream_handle,
+                                              const StreamLogCallback &callback) noexcept {
+    LUISA_WARNING_WITH_LOCATION("DeviceInterface::set_stream_log_callback() is not "
+                                "implemented. Calls to this method are ignored.");
+}
 
+ResourceCreationInfo DeviceInterface::create_curve(const AccelOption &option) noexcept {
+    LUISA_NOT_IMPLEMENTED();
+}
+
+void DeviceInterface::destroy_curve(uint64_t handle) noexcept {
+    LUISA_NOT_IMPLEMENTED();
+}
+
+}// namespace luisa::compute

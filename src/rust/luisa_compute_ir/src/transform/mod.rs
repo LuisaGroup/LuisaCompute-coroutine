@@ -12,9 +12,17 @@ pub mod reg2mem;
 use bitflags::Flags;
 
 pub mod coroutine;
-pub mod inliner;
 
-use crate::ir::{self, ModuleFlags, CallableModule, Module, KernelModule};
+pub mod extract_loop_cond;
+
+pub mod demote_locals;
+
+pub mod defer_load;
+pub mod inliner;
+pub mod materialize_coro;
+pub mod split_coro;
+
+use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
 
 pub trait Transform {
     fn transform_module(&self, module: Module) -> Module {
@@ -114,6 +122,26 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
         }
         "coroutine" => {
             let transform = coroutine::CoroutineSplit;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "extract_loop_cond" => {
+            let transform = extract_loop_cond::ExtractLoopCond;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "demote_locals" => {
+            let transform = demote_locals::DemoteLocals;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "split_coro" => {
+            let transform = split_coro::SplitCoro;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "defer_load" => {
+            let transform = defer_load::DeferLoad;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "materialize_coro" => {
+            let transform = materialize_coro::MaterializeCoro;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         _ => panic!("unknown transform {}", name),

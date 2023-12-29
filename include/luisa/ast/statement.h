@@ -545,8 +545,7 @@ private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
 
 public:
-    PrintStmt(luisa::string fmt, luisa::vector<const Expression *> args) noexcept
-        : Statement{Tag::PRINT}, _format{std::move(fmt)}, _args{std::move(args)} {}
+    PrintStmt(luisa::string fmt, luisa::vector<const Expression *> args) noexcept;
     [[nodiscard]] auto format() const noexcept { return luisa::string_view{_format}; }
     [[nodiscard]] auto arguments() const noexcept { return luisa::span{_args}; }
     LUISA_STATEMENT_COMMON()
@@ -665,6 +664,11 @@ void traverse_expressions(
         case Statement::Tag::PRINT: {
             auto print_stmt = static_cast<const PrintStmt *>(stmt);
             for (auto arg : print_stmt->arguments()) { do_visit(arg); }
+            break;
+        }
+        case Statement::Tag::COROBIND: {
+            auto coro_stmt = static_cast<const CoroBindStmt *>(stmt);
+            do_visit(coro_stmt->expression());
             break;
         }
     }

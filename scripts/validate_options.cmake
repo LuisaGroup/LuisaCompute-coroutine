@@ -32,7 +32,7 @@ endif ()
 if (NOT LUISA_COMPUTE_ENABLE_RUST)
     message(FATAL_ERROR "\nRust is required for future releases. \n\
     To install Rust, run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` on unix environment\n\
-    or download and run the installer from https://static.rust-lang.org/rustup/dist/i686-pc-windows-gnu/rustup-init.exe on windows environment.\n\
+    or download and run the installer from https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe on windows environment.\n\
     please set LUISA_COMPUTE_DISABLE_RUST_OVERRIDE to ON to acknowledge this")
 endif ()
 
@@ -79,10 +79,6 @@ if (LUISA_COMPUTE_ENABLE_CPU OR LUISA_COMPUTE_ENABLE_REMOTE)
     endif ()
 endif ()
 
-if (LUISA_COMPUTE_ENABLE_CUDA)
-    option(LUISA_COMPUTE_DOWNLOAD_NVCOMP "Download the nvCOMP library for CUDA GPU decompression" OFF)
-endif ()
-
 if (SKBUILD OR LUISA_COMPUTE_FORCE_PYTHON_BINDINGS)
     find_package(Python3 COMPONENTS Interpreter Development.Module QUIET REQUIRED)
 endif ()
@@ -90,6 +86,3 @@ endif ()
 if (LUISA_COMPUTE_ENABLE_GUI)
     # currently nothing to check
 endif ()
-
-# Open Image Denoise
-option(LUISA_COMPUTE_DOWNLOAD_OIDN "Download OpenImageDenoise for denoiser extension" OFF)

@@ -92,7 +92,7 @@ impl ToSSAImpl {
         record: &mut SSABlockRecord,
     ) {
         let value = self.promote(value, builder, record);
-        if var.is_local() || var.is_refernece_argument() {
+        if var.is_local() || var.is_reference_argument() {
             record.phis.insert(var);
 
             if !self.local_defs.contains(&var) {
@@ -404,13 +404,14 @@ impl ToSSAImpl {
             Instruction::Return(_) => {
                 panic!("call LowerControlFlow before ToSSA");
             }
-            Instruction::CoroRegister { .. }|
-            Instruction::CoroSplitMark { .. } => {
+            Instruction::CoroRegister { .. } | Instruction::CoroSplitMark { .. } => {
                 unimplemented!("Coroutine is not supported yet");
             }
-            Instruction::CoroSuspend { .. }
-            | Instruction::CoroResume { .. } => {
-                unreachable!("{:?} should not be defined as statement directly", instruction);
+            Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
+                unreachable!(
+                    "{:?} should not be defined as statement directly",
+                    instruction
+                );
             }
             Instruction::Print { fmt, args } => {
                 let args = args
@@ -450,6 +451,7 @@ impl Transform for ToSSA {
         let mut entry = module.entry;
         *entry.get_mut() = *body;
         Module {
+            curve_basis_set: module.curve_basis_set,
             kind: module.kind,
             entry,
             pools: module.pools,

@@ -708,6 +708,7 @@ void CallableLibrary::deser_ptr(Statement *obj, std::byte const *&ptr, DeserPack
         case Statement::Tag::PRINT:
             create_stmt.template operator()<PrintStmt>();
             break;
+        default: LUISA_NOT_IMPLEMENTED();
     }
 }
 
@@ -715,6 +716,7 @@ void CallableLibrary::deserialize_func_builder(detail::FunctionBuilder &builder,
     detail::callable_library_function_builder_deserialize_stack_push(&builder);
     using namespace detail;
     using namespace std::string_view_literals;
+    builder._required_curve_bases = CurveBasisSet::from_u64(deser_value<uint64_t>(ptr, pack));
     builder._return_type = deser_value<Type const *>(ptr, pack);
     builder._builtin_variables.push_back_uninitialized(deser_value<size_t>(ptr, pack));
     for (auto &&i : builder._builtin_variables) {
@@ -768,6 +770,7 @@ void CallableLibrary::serialize_func_builder(detail::FunctionBuilder const &buil
                      "Callable cannot contain bound-argument.");
     }
     LUISA_ASSERT(builder._used_external_functions.empty(), "Callable cannot contain external-function.");
+    ser_value(builder.required_curve_bases().to_u64(), vec);
     // return type
     if (builder._return_type)
         ser_value(builder._return_type.value(), vec);
@@ -794,7 +797,6 @@ void CallableLibrary::serialize_func_builder(detail::FunctionBuilder const &buil
     for (auto &&i : builder._used_custom_callables) {
         ser_value(i->hash(), vec);
     }
-    auto before_size = vec.size();
     ser_value(builder._local_variables.size(), vec);
     for (auto &&i : builder._local_variables) {
         ser_value(i, vec);
@@ -900,4 +902,21 @@ luisa::vector<luisa::string_view> CallableLibrary::names() const noexcept {
     }
     return vec;
 }
+Function CallableLibrary::get_function(luisa::string_view name) const noexcept {
+    auto iter = _callables.find(name);
+    if (iter == _callables.end()) [[unlikely]] {
+        LUISA_ERROR("Callable {} not found", name);
+    }
+    auto &func = iter->second;
+    return Function{func.get()};
+}
+luisa::shared_ptr<const detail::FunctionBuilder> CallableLibrary::get_function_builder(luisa::string_view name) const noexcept {
+    auto iter = _callables.find(name);
+    if (iter == _callables.end()) [[unlikely]] {
+        LUISA_ERROR("Callable {} not found", name);
+    }
+    auto &func = iter->second;
+    return func;
+}
+
 }// namespace luisa::compute

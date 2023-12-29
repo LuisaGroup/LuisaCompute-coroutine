@@ -2,7 +2,6 @@
 #include <DXApi/LCDevice.h>
 #include <luisa/runtime/rhi/command.h>
 #include <luisa/runtime/command_list.h>
-#include "../../common/hlsl/hlsl_codegen.h"
 #include <Shader/ComputeShader.h>
 #include <Resource/RenderTexture.h>
 #include <Resource/TopAccel.h>
@@ -18,9 +17,14 @@
 #include <luisa/backends/ext/raster_cmd.h>
 #include <Resource/SparseTexture.h>
 #include <luisa/backends/ext/dx_custom_cmd.h>
+#include "../../common/shader_print_formatter.h"
 
 namespace lc::dx {
 using Argument = luisa::compute::Argument;
+static bool is_device_buffer(Resource const *res) {
+    auto tag = res->GetTag();
+    return (tag != Resource::Tag::UploadBuffer) && (tag != Resource::Tag::ReadbackBuffer);
+}
 template<typename Visitor>
 void DecodeCmd(vstd::span<const Argument> args, Visitor &&visitor) {
     using Tag = Argument::Tag;
@@ -61,7 +65,7 @@ public:
         accelOffset->emplace_back(buildAccelSize, size);
         buildAccelSize += size;
     }
-    void UniformAlign(size_t align) {
+    void UniformAlign(size_t align) const {
         argBuffer->resize_uninitialized(CalcAlign(argBuffer->size(), align));
     }
     template<typename T>
@@ -86,14 +90,19 @@ public:
         void operator()(Argument::Buffer const &bf) {
             auto res = reinterpret_cast<Buffer const *>(bf.handle);
             if (((uint)arg->varUsage & (uint)Usage::WRITE) != 0) {
+                LUISA_ASSERT(is_device_buffer(res), "Unordered access buffer can not be host-buffer.");
                 self->stateTracker->RecordState(
                     res,
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                     true);
             } else {
-                self->stateTracker->RecordState(
-                    res,
-                    self->stateTracker->ReadState(ResourceReadUsage::Srv));
+                if (is_device_buffer(res))
+                    self->stateTracker->RecordState(
+                        res,
+                        self->stateTracker->ReadState(ResourceReadUsage::Srv));
+                else {
+                    LUISA_ASSERT(res->GetTag() == Resource::Tag::UploadBuffer, "Only upload-buffer allowed as shader's resource.");
+                }
             }
             ++arg;
         }
@@ -180,16 +189,34 @@ public:
         }
     }
     void visit(const BufferUploadCommand *cmd) noexcept override {
-        stateTracker->RecordState(reinterpret_cast<Buffer const *>(cmd->handle()), D3D12_RESOURCE_STATE_COPY_DEST);
+        auto res = reinterpret_cast<Buffer const *>(cmd->handle());
+        if (is_device_buffer(res))
+            stateTracker->RecordState(res, D3D12_RESOURCE_STATE_COPY_DEST);
+        else {
+            LUISA_ERROR("Host-buffer should not be used to upload.");
+        }
     }
     void visit(const BufferDownloadCommand *cmd) noexcept override {
-        stateTracker->RecordState(reinterpret_cast<Buffer const *>(cmd->handle()), stateTracker->ReadState(ResourceReadUsage::CopySource));
+        auto res = reinterpret_cast<Buffer const *>(cmd->handle());
+        if (is_device_buffer(res))
+            stateTracker->RecordState(res, stateTracker->ReadState(ResourceReadUsage::CopySource));
+        else {
+            LUISA_ERROR("Host-buffer should not be used to download.");
+        }
     }
     void visit(const BufferCopyCommand *cmd) noexcept override {
         auto srcBf = reinterpret_cast<Buffer const *>(cmd->src_handle());
         auto dstBf = reinterpret_cast<Buffer const *>(cmd->dst_handle());
-        stateTracker->RecordState(srcBf, stateTracker->ReadState(ResourceReadUsage::CopySource));
-        stateTracker->RecordState(dstBf, D3D12_RESOURCE_STATE_COPY_DEST);
+        if (is_device_buffer(srcBf))
+            stateTracker->RecordState(srcBf, stateTracker->ReadState(ResourceReadUsage::CopySource));
+        else {
+            LUISA_ASSERT(srcBf->GetTag() == Resource::Tag::UploadBuffer, "Only upload-buffer allowed as copy source.");
+        }
+        if (is_device_buffer(dstBf))
+            stateTracker->RecordState(dstBf, D3D12_RESOURCE_STATE_COPY_DEST);
+        else {
+            LUISA_ASSERT(dstBf->GetTag() == Resource::Tag::ReadbackBuffer, "Only non write-combined-buffer allowed as copy destination.");
+        }
     }
     void visit(const BufferToTextureCopyCommand *cmd) noexcept override {
         auto rt = reinterpret_cast<TextureBase *>(cmd->texture());
@@ -197,10 +224,13 @@ public:
         stateTracker->RecordState(
             rt,
             D3D12_RESOURCE_STATE_COPY_DEST);
-
-        stateTracker->RecordState(
-            bf,
-            stateTracker->ReadState(ResourceReadUsage::CopySource));
+        if (is_device_buffer(bf))
+            stateTracker->RecordState(
+                bf,
+                stateTracker->ReadState(ResourceReadUsage::CopySource));
+        else {
+            LUISA_ASSERT(bf->GetTag() == Resource::Tag::UploadBuffer, "Only upload-buffer allowed as copy source.");
+        }
     }
 
     void visit(const TextureUploadCommand *cmd) noexcept override {
@@ -237,9 +267,13 @@ public:
         stateTracker->RecordState(
             rt,
             stateTracker->ReadState(ResourceReadUsage::CopySource, rt));
-        stateTracker->RecordState(
-            bf,
-            D3D12_RESOURCE_STATE_COPY_DEST);
+        if (is_device_buffer(bf))
+            stateTracker->RecordState(
+                bf,
+                D3D12_RESOURCE_STATE_COPY_DEST);
+        else {
+            LUISA_ASSERT(bf->GetTag() == Resource::Tag::ReadbackBuffer, "Only non write-combined-buffer allowed as copy destination.");
+        }
     }
     void visit(const ShaderDispatchCommand *cmd) noexcept override {
         auto cs = reinterpret_cast<ComputeShader *>(cmd->handle());
@@ -305,6 +339,8 @@ public:
                 aabbOptions,
                 bottomAccelDatas->emplace_back()));
     }
+    void visit(const CurveBuildCommand *) noexcept override { /* TODO */
+    }
     void visit(const BindlessArrayUpdateCommand *cmd) noexcept override {
         auto arr = reinterpret_cast<BindlessArray *>(cmd->handle());
         arr->PreProcessStates(
@@ -367,6 +403,7 @@ public:
 class LCCmdVisitor : public CommandVisitor {
 public:
     Device *device;
+    luisa::function<void(luisa::string_view)> *logger;
     CommandBufferBuilder *bd;
     ResourceStateTracker *stateTracker;
     BufferView argBuffer;
@@ -474,16 +511,40 @@ public:
         auto &&tempBuffer = *bufferVec;
         bufferVec++;
         auto cs = static_cast<ComputeShader const *>(shader);
+        BufferView readback_count_buffer;
+        BufferView readback_buffer;
+        BufferView count_buffer;
+        BufferView data_buffer;
+        CommandAllocator *alloc{nullptr};
         auto BeforeDispatch = [&]() {
             bindProps->emplace_back(DescriptorHeapView(device->samplerHeap.get()));
             if (tempBuffer.second > 0) {
                 bindProps->emplace_back(BufferView(argBuffer.buffer, argBuffer.offset + tempBuffer.first, tempBuffer.second));
             }
-            DescriptorHeapView globalHeapView(DescriptorHeapView(device->globalHeap.get()));
+            DescriptorHeapView globalHeapView(device->globalHeap.get());
             vstd::push_back_func(*bindProps, shader->BindlessCount(), [&] { return globalHeapView; });
             Visitor visitor{this, cs->Args().data()};
             DecodeCmd(shader->ArgBindings(), visitor);
             DecodeCmd(cmd->arguments(), visitor);
+            auto printers = shader->Printers();
+            if (!printers.empty()) [[unlikely]] {
+                alloc = bd->GetCB()->GetAlloc();
+                static const uint zero = 0;
+                auto upload_buffer = alloc->GetTempUploadBuffer(sizeof(uint), 16);
+                count_buffer = alloc->GetTempDefaultBuffer(sizeof(uint), 16);
+                readback_count_buffer = alloc->GetTempReadbackBuffer(sizeof(uint), 16);
+                data_buffer = alloc->GetTempDefaultBuffer(1024ull * 1024ull, 16);
+                readback_buffer = alloc->GetTempReadbackBuffer(1024ull * 1024ull, 16);
+                static_cast<UploadBuffer const *>(upload_buffer.buffer)->CopyData(upload_buffer.offset, {reinterpret_cast<uint8_t const *>(&zero), sizeof(uint)});
+                stateTracker->RecordState(count_buffer.buffer, D3D12_RESOURCE_STATE_COPY_DEST);
+                stateTracker->UpdateState(*bd);
+                bd->CopyBuffer(upload_buffer.buffer, count_buffer.buffer, upload_buffer.offset, count_buffer.offset, sizeof(uint));
+                stateTracker->RecordState(count_buffer.buffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                stateTracker->RecordState(data_buffer.buffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                stateTracker->UpdateState(*bd);
+                bindProps->emplace_back(count_buffer);
+                bindProps->emplace_back(data_buffer);
+            }
         };
         if (cmd->is_indirect()) {
             auto &&t = cmd->indirect_dispatch();
@@ -510,23 +571,43 @@ public:
                 t,
                 *bindProps);
         }
-
-        /*switch (shader->GetTag()) {
-            case Shader::Tag::ComputeShader: {
-                auto cs = static_cast<ComputeShader const *>(shader);
-                bd->DispatchCompute(
-                    cs,
-                    cmd->dispatch_size(),
-                    bindProps);
-            } break;
-            case Shader::Tag::RayTracingShader: {
-                auto rts = static_cast<RTShader const *>(shader);
-                bd->DispatchRT(
-                    rts,
-                    cmd->dispatch_size(),
-                    bindProps);
-            } break;
-        }*/
+        if (data_buffer.buffer != nullptr) [[unlikely]] {
+            stateTracker->RecordState(count_buffer.buffer, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            stateTracker->RecordState(data_buffer.buffer, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            stateTracker->UpdateState(*bd);
+            bd->CopyBuffer(count_buffer.buffer, readback_count_buffer.buffer, count_buffer.offset, readback_count_buffer.offset, sizeof(uint));
+            bd->CopyBuffer(data_buffer.buffer, readback_buffer.buffer, data_buffer.offset, readback_buffer.offset, data_buffer.byteSize);
+            alloc->ExecuteAfterComplete([logger = this->logger, shader, readback_count_buffer, readback_buffer]() {
+                uint size{0};
+                static_cast<ReadbackBuffer const *>(readback_count_buffer.buffer)
+                    ->CopyData(
+                        readback_count_buffer.offset,
+                        {reinterpret_cast<uint8_t *>(&size), sizeof(uint)});
+                if (size == 0) return;
+                vstd::vector<std::byte> data;
+                data.push_back_uninitialized(std::min<size_t>(readback_buffer.byteSize, size));
+                static_cast<ReadbackBuffer const *>(readback_buffer.buffer)
+                    ->CopyData(
+                        readback_buffer.offset,
+                        {reinterpret_cast<uint8_t *>(data.data()), data.size()});
+                auto printers = shader->Printers();
+                auto ptr = data.data();
+                auto end = ptr + data.size();
+                while (ptr < end) {
+                    uint flagTypeIdx = *reinterpret_cast<uint32_t *>(ptr);
+                    ptr += sizeof(uint);
+                    auto &type = printers[flagTypeIdx];
+                    ShaderPrintFormatter formatter{type.first, type.second, false};
+                    luisa::string result;
+                    formatter(result, {ptr, type.second->size()});
+                    ptr += type.second->size();
+                    if (logger) [[likely]] {
+                        (*logger)(result);
+                    }
+                }
+                // while(reinterpret_cast<size_t>(ptr) < reinterpret_cast<size_t>())
+            });
+        }
     }
     void visit(const TextureUploadCommand *cmd) noexcept override {
 
@@ -681,6 +762,8 @@ public:
         }
         accelScratchOffsets++;
         bottomAccelData++;
+    }
+    void visit(const CurveBuildCommand *) noexcept override { /* TODO */
     }
     void visit(const MeshBuildCommand *cmd) noexcept override {
         BottomBuild(cmd->handle());
@@ -862,6 +945,7 @@ void LCCmdBuffer::Execute(
     auto commands = cmdList.commands();
     auto funcs = std::move(cmdList).steal_callbacks();
     auto allocator = queue.CreateAllocator(maxAlloc);
+    auto allocType = allocator->Type();
     bool cmdListIsEmpty = true;
     {
         std::unique_lock lck{mtx};
@@ -878,6 +962,11 @@ void LCCmdBuffer::Execute(
         accelOffset.clear();
 
         LCCmdVisitor visitor;
+        if (logCallback) {
+            visitor.logger = &logCallback;
+        } else {
+            visitor.logger = nullptr;
+        }
         visitor.bindProps = &bindProps;
         visitor.updateAccel = &updateAccel;
         visitor.vbv = &vbv;
@@ -887,7 +976,10 @@ void LCCmdBuffer::Execute(
             ID3D12DescriptorHeap *h[2] = {
                 device->globalHeap->GetHeap(),
                 device->samplerHeap->GetHeap()};
-            bd->GetCB()->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
+            auto cb = bd->GetCB();
+            if (cb->GetAlloc()->Type() != D3D12_COMMAND_LIST_TYPE_COPY) {
+                cb->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
+            }
         };
         auto cmdBuffer = allocator->GetBuffer();
         auto cmdBuilder = cmdBuffer->Build();
@@ -903,11 +995,11 @@ void LCCmdBuffer::Execute(
         ID3D12DescriptorHeap *h[2] = {
             device->globalHeap->GetHeap(),
             device->samplerHeap->GetHeap()};
+        if (!commands.empty() && allocType != D3D12_COMMAND_LIST_TYPE_COPY) {
+            cmdBuffer->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
+        }
         for (auto lst : cmdLists) {
             cmdListIsEmpty = cmdListIsEmpty && (lst == nullptr);
-            if (!cmdListIsEmpty) {
-                cmdBuffer->CmdList()->SetDescriptorHeaps(vstd::array_count(h), h);
-            }
             // Clear caches
             ppVisitor.argVecs->clear();
             ppVisitor.argBuffer->clear();
@@ -929,6 +1021,8 @@ void LCCmdBuffer::Execute(
             if (ppVisitor.argBuffer->empty()) {
                 visitor.argBuffer = {};
             } else {
+// Use default buffer as arguments buffer
+#ifdef false
                 auto uploadBuffer = allocator->GetTempDefaultBuffer(ppVisitor.argBuffer->size(), 16);
                 tracker.RecordState(
                     uploadBuffer.buffer,
@@ -942,6 +1036,16 @@ void LCCmdBuffer::Execute(
                 tracker.RecordState(
                     uploadBuffer.buffer,
                     tracker.ReadState(ResourceReadUsage::Srv));
+#else
+                // use upload buffer maybe faster?
+                auto uploadBuffer = allocator->GetTempUploadBuffer(ppVisitor.argBuffer->size(), 16);
+                static_cast<UploadBuffer const *>(uploadBuffer.buffer)
+                    ->CopyData(
+                        uploadBuffer.offset,
+                        {reinterpret_cast<uint8_t const *>(
+                             ppVisitor.argBuffer->data()),
+                         ppVisitor.argBuffer->size()});
+#endif
                 visitor.argBuffer = uploadBuffer;
             }
             tracker.UpdateState(

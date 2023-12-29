@@ -3,7 +3,7 @@
 //
 
 #include <luisa/luisa-compute.h>
-#include <luisa/coro/coro_dispatcher.h>
+#include<luisa/coro/coro_dispatcher.h>
 using namespace luisa;
 using namespace luisa::compute;
 
@@ -35,9 +35,9 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer, UInt n) noexcept {
         auto id = coro_id().x;
         //        x_buffer.write(id, id * 2u);
-        x_buffer.write(id, coro_token() + 1000u + 10 * id);
+        x_buffer.write(id, coro_token() +1000u + 10 * id);
         $suspend("1");
-        x_buffer.write(id, coro_token() + 2000u + 20 * id);
+        x_buffer.write(id, coro_token() +2000u + 20 * id);
         //        $if(id % 2u == 0u) {
         //            $suspend("1");
         //            x_buffer.write(id, 1000u + coro_token() * 2u);

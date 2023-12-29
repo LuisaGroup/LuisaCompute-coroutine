@@ -92,10 +92,48 @@ static const ModuleFlags ModuleFlags_NONE = ModuleFlags{ /* .bits = */ (uint32_t
 static const ModuleFlags ModuleFlags_REQUIRES_REV_AD_TRANSFORM = ModuleFlags{ /* .bits = */ (uint32_t)1 };
 static const ModuleFlags ModuleFlags_REQUIRES_FWD_AD_TRANSFORM = ModuleFlags{ /* .bits = */ (uint32_t)2 };
 
+struct CurveBasisSet {
+    uint32_t bits;
+
+    explicit operator bool() const {
+        return !!bits;
+    }
+    CurveBasisSet operator~() const {
+        return CurveBasisSet { static_cast<decltype(bits)>(~bits) };
+    }
+    CurveBasisSet operator|(const CurveBasisSet& other) const {
+        return CurveBasisSet { static_cast<decltype(bits)>(this->bits | other.bits) };
+    }
+    CurveBasisSet& operator|=(const CurveBasisSet& other) {
+        *this = (*this | other);
+        return *this;
+    }
+    CurveBasisSet operator&(const CurveBasisSet& other) const {
+        return CurveBasisSet { static_cast<decltype(bits)>(this->bits & other.bits) };
+    }
+    CurveBasisSet& operator&=(const CurveBasisSet& other) {
+        *this = (*this & other);
+        return *this;
+    }
+    CurveBasisSet operator^(const CurveBasisSet& other) const {
+        return CurveBasisSet { static_cast<decltype(bits)>(this->bits ^ other.bits) };
+    }
+    CurveBasisSet& operator^=(const CurveBasisSet& other) {
+        *this = (*this ^ other);
+        return *this;
+    }
+};
+static const CurveBasisSet CurveBasisSet_NONE = CurveBasisSet{ /* .bits = */ (uint32_t)0 };
+static const CurveBasisSet CurveBasisSet_PIECEWISE_LINEAR = CurveBasisSet{ /* .bits = */ (uint32_t)1 };
+static const CurveBasisSet CurveBasisSet_CUBIC_BSPLINE = CurveBasisSet{ /* .bits = */ (uint32_t)2 };
+static const CurveBasisSet CurveBasisSet_CATMULL_ROM = CurveBasisSet{ /* .bits = */ (uint32_t)4 };
+static const CurveBasisSet CurveBasisSet_BEZIER = CurveBasisSet{ /* .bits = */ (uint32_t)8 };
+
 struct Module {
     ModuleKind kind;
     Pooled<BasicBlock> entry;
     ModuleFlags flags;
+    CurveBasisSet curve_basis_set;
     CArc<ModulePools> pools;
 };
 
@@ -331,6 +369,7 @@ struct Func {
         IndirectDispatchSetCount,
         IndirectDispatchSetKernel,
         Load,
+        AddressOf,
         Cast,
         Bitcast,
         Pack,
@@ -466,6 +505,8 @@ struct Func {
         BufferWrite,
         /// buffer -> uint: returns buffer size in *elements*
         BufferSize,
+        /// buffer -> u64: returns address of the buffer
+        BufferAddress,
         /// (buffer, index_bytes) -> value
         ByteBufferRead,
         /// (buffer, index_bytes, value) -> void
@@ -522,6 +563,8 @@ struct Func {
         BindlessBufferWrite,
         /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
         BindlessBufferSize,
+        /// (bindless_array, index: uint) -> u64: returns the address of the buffer
+        BindlessBufferAddress,
         BindlessBufferType,
         BindlessByteBufferRead,
         Vec,

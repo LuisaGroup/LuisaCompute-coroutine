@@ -121,7 +121,8 @@ void FunctionBuilder::check_is_coroutine() noexcept {
 uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
     check_is_coroutine();
     uint token = _coro_tokens.size() + 1;
-    _coro_tokens.insert(std::make_pair(desc, token));
+    auto [_, success] = _coro_tokens.insert(std::make_pair(desc, token));
+    LUISA_ASSERT(success, "Duplicated suspend token '{}' description.", desc);
     _create_and_append_statement<SuspendStmt>(token);
     return token;
 }
@@ -138,6 +139,7 @@ const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const l
     if (var != -1) {
         return _create_expression<MemberExpr>(expr->type()->corotype()->members()[var], expr, var);
     }
+    return nullptr;
 }
 void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
     auto member_coro_id = member(Type::of<uint3>(), expr, 0u);
@@ -245,7 +247,7 @@ inline const RefExpr *FunctionBuilder::_builtin(const Type *type, Variable::Tag 
     Variable v{type, tag, _next_variable_uid()};
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
-    if (_tag == Function::Tag::CALLABLE || _tag == Function::Tag::COROUTINE) [[unlikely]] {
+    if (_tag == Function::Tag::CALLABLE) [[unlikely]] {
         _arguments.emplace_back(v);
         _bound_arguments.emplace_back();
     }
@@ -491,6 +493,7 @@ void FunctionBuilder::_compute_hash() noexcept {
     for (auto &&arg : _arguments) { hashes.emplace_back(hash_value(arg)); }
     for (auto &&c : _captured_constants) { hashes.emplace_back(hash_value(c)); }
     hashes.emplace_back(hash_value(_block_size));
+    hashes.emplace_back(_required_curve_bases.hash());
     _hash = hash64(hashes.data(), hashes.size() * sizeof(uint64_t), seed);
     _hash_computed = true;
 }
@@ -599,6 +602,14 @@ const CallExpr *FunctionBuilder::call(const Type *type,
     return expr;
 }
 
+void FunctionBuilder::mark_required_curve_basis(CurveBasis basis) noexcept {
+    _required_curve_bases.mark(basis);
+}
+
+void FunctionBuilder::mark_required_curve_basis_set(CurveBasisSet basis_set) noexcept {
+    _required_curve_bases.propagate(basis_set);
+}
+
 void FunctionBuilder::call(luisa::shared_ptr<const ExternalFunction> func,
                            luisa::span<const Expression *const> args) noexcept {
     _void_expr(call(nullptr, std::move(func), args));
@@ -612,7 +623,7 @@ const CallExpr *FunctionBuilder::call(const Type *type, Function custom, luisa::
     }
     auto f = custom.builder();
     CallExpr::ArgumentList call_args(f->_arguments.size(), nullptr);
-    LUISA_INFO_WITH_LOCATION("Args count: {} ?= {}", args.size(), call_args.size());
+    // LUISA_INFO_WITH_LOCATION("Args count: {} ?= {}", args.size(), call_args.size());
     auto in_iter = args.begin();
     for (auto i = 0u; i < f->_arguments.size(); i++) {
         if (auto arg = f->_arguments[i]; arg.is_builtin()) {
@@ -677,6 +688,7 @@ const CallExpr *FunctionBuilder::call(const Type *type, Function custom, luisa::
         _used_custom_callables.emplace_back(custom.shared_builder());
         // propagate used builtin/custom callables and constants
         _propagated_builtin_callables.propagate(f->_propagated_builtin_callables);
+        _required_curve_bases.propagate(f->_required_curve_bases);
         _requires_atomic_float |= f->_requires_atomic_float;
         _requires_printing |= f->_requires_printing;
     }

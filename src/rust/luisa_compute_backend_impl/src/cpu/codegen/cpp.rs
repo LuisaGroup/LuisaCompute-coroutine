@@ -723,6 +723,16 @@ impl<'a> FunctionEmitter<'a> {
                 .unwrap();
                 true
             }
+            Func::BufferAddress => {
+                let buffer_ty = self.type_gen.gen_c_type(args[0].type_());
+                writeln!(
+                    &mut self.body,
+                    "const {} {} = lc_buffer_address({});",
+                    node_ty_s, var, args_v[0]
+                )
+                .unwrap();
+                true
+            }
             Func::BindlessByteBufferRead => {
                 writeln!(
                     &mut self.body,
@@ -756,6 +766,15 @@ impl<'a> FunctionEmitter<'a> {
                     &mut self.body,
                     "const {} {} = lc_bindless_buffer_size(k_args, {}, {}, {});",
                     node_ty_s, var, args_v[0], args_v[1], args_v[2]
+                )
+                .unwrap();
+                true
+            }
+            Func::BindlessBufferAddress => {
+                writeln!(
+                    &mut self.body,
+                    "const {} {} = lc_bindless_buffer_address(k_args, {}, {});",
+                    node_ty_s, var, args_v[0], args_v[1]
                 )
                 .unwrap();
                 true
@@ -1119,6 +1138,16 @@ impl<'a> FunctionEmitter<'a> {
                 writeln!(self.body, "const {} {} = *{};", node_ty_s, var, args_v[0]).unwrap();
                 true
             }
+            Func::AddressOf => {
+                let ty = self.type_gen.gen_c_type(args[0].type_());
+                writeln!(
+                    self.body,
+                    "const {} {} = lc_address_of<{}>({});",
+                    node_ty_s, var, ty, args_v[0]
+                )
+                .unwrap();
+                true
+            }
             Func::GradientMarker => {
                 let ty = self.type_gen.gen_c_type(args[1].type_());
                 writeln!(
@@ -1380,7 +1409,7 @@ impl<'a> FunctionEmitter<'a> {
             Func::RayQueryWorldSpaceRay => {
                 writeln!(
                     self.body,
-                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_world_space_ray({2}));",
+                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_world_space_ray(cvt_rq({2})));",
                     node_ty_s, var, args_v[0]
                 )
                 .unwrap();
@@ -1389,7 +1418,7 @@ impl<'a> FunctionEmitter<'a> {
             Func::RayQueryProceduralCandidateHit => {
                 writeln!(
                     self.body,
-                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_procedural_candidate_hit({2}));",
+                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_procedural_candidate_hit(cvt_rq({2})));",
                     node_ty_s, var, args_v[0]
                 )
                 .unwrap();
@@ -1398,7 +1427,7 @@ impl<'a> FunctionEmitter<'a> {
             Func::RayQueryTriangleCandidateHit => {
                 writeln!(
                     self.body,
-                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_triangle_candidate_hit({2}));",
+                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_triangle_candidate_hit(cvt_rq({2})));",
                     node_ty_s, var, args_v[0]
                 )
                 .unwrap();
@@ -1407,27 +1436,32 @@ impl<'a> FunctionEmitter<'a> {
             Func::RayQueryCommittedHit => {
                 writeln!(
                     self.body,
-                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_committed_hit({2}));",
+                    "const {0} {1} = lc_bit_cast<{0}>(lc_ray_query_committed_hit(cvt_rq({2})));",
                     node_ty_s, var, args_v[0]
                 )
                 .unwrap();
                 true
             }
             Func::RayQueryCommitTriangle => {
-                writeln!(self.body, "lc_ray_query_commit_triangle({0});", args_v[0]).unwrap();
+                writeln!(
+                    self.body,
+                    "lc_ray_query_commit_triangle(cvt_rq({0}));",
+                    args_v[0]
+                )
+                .unwrap();
                 true
             }
             Func::RayQueryCommitProcedural => {
                 writeln!(
                     self.body,
-                    "lc_ray_query_commit_procedural({0}, {1});",
+                    "lc_ray_query_commit_procedural(cvt_rq({0}), {1});",
                     args_v[0], args_v[1]
                 )
                 .unwrap();
                 true
             }
             Func::RayQueryTerminate => {
-                writeln!(self.body, "lc_ray_query_terminate({0});", args_v[0]).unwrap();
+                writeln!(self.body, "lc_ray_query_terminate(cvt_rq({0}));", args_v[0]).unwrap();
                 true
             }
             Func::CoroId => {
@@ -1643,11 +1677,17 @@ impl<'a> FunctionEmitter<'a> {
                 self.inside_generic_loop = false;
                 {
                     self.write_ident();
-                    writeln!(&mut self.body, "do {{").unwrap();
-                    self.gen_block(*body);
+                    writeln!(&mut self.body, "for (;;) {{").unwrap();
+                    self.indent += 1;
+                    for node in body.iter() {
+                        self.gen_instr(node);
+                    }
                     let cond_v = self.gen_node(*cond);
                     self.write_ident();
-                    writeln!(&mut self.body, "}} while({});", cond_v).unwrap();
+                    writeln!(&mut self.body, "if (!({})) {{ break; }}", cond_v).unwrap();
+                    self.indent -= 1;
+                    self.write_ident();
+                    writeln!(&mut self.body, "}}").unwrap();
                 }
                 self.inside_generic_loop = old_inside_generic_loop;
             }
@@ -1775,7 +1815,7 @@ impl<'a> FunctionEmitter<'a> {
                 self.write_ident();
                 writeln!(
                     &mut self.body,
-                    "lc_ray_query({}, [&](const TriangleHit& hit) {{",
+                    "lc_ray_query(cvt_rq({}), [&](const TriangleHit& hit) {{",
                     rq_v
                 )
                 .unwrap();

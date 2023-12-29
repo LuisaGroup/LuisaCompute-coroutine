@@ -113,6 +113,13 @@ struct ShaderOption {
     /// \details No shader object will be created if this field is set to
     ///   `true`. This field is useful for AOT compilation.
     bool compile_only{false};
+    /// @brief The maximum number of registers used by the shader.
+    /// \details If set to a positive value, the shader will be compiled with
+    ///   the specified number of registers. This field has no effect on CPU
+    ///   backend.
+    uint32_t max_registers{0};
+    /// \brief Whether to measure time spent on each compilation phase.
+    bool time_trace{false};
     /// \brief A user-defined name for the shader.
     /// \details If provided, the shader will be read from or written to disk
     ///   via the `BinaryIO` object (passed to backends on device creation)
@@ -139,6 +146,7 @@ public:
         TEXTURE,
         BINDLESS_ARRAY,
         MESH,
+        CURVE,
         PROCEDURAL_PRIMITIVE,
         ACCEL,
         STREAM,
@@ -159,6 +167,7 @@ private:
     luisa::shared_ptr<DeviceInterface> _device{nullptr};
     ResourceCreationInfo _info{};
     Tag _tag{};
+    uint64_t _uid{};
 
 private:
     [[noreturn]] static void _error_invalid() noexcept;
@@ -207,7 +216,9 @@ public:
     [[nodiscard]] auto handle() const noexcept { return _info.handle; }
     [[nodiscard]] auto native_handle() const noexcept { return _info.native_handle; }
     [[nodiscard]] auto tag() const noexcept { return _tag; }
-    [[nodiscard]] explicit operator bool() const noexcept { return _info.valid(); }
+    [[nodiscard]] auto uid() const noexcept { return _uid; }
+    [[nodiscard]] auto valid() const noexcept { return _info.valid(); }
+    [[nodiscard]] explicit operator bool() const noexcept { return valid(); }
     void set_name(luisa::string_view name) const noexcept;
 };
 

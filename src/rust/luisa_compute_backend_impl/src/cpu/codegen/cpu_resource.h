@@ -12,8 +12,21 @@ inline T lc_cpu_custom_op(const KernelFnArgs *k_args, size_t i, T value) noexcep
 }
 
 template<class T>
+inline uint64_t lc_address_of(const T &value) noexcept {
+    return reinterpret_cast<uint64_t>(&value);
+}
+template<class T>
+inline uint64_t lc_address_of(const T *value) noexcept {
+    return reinterpret_cast<uint64_t>(value);
+}
+
+template<class T>
 inline size_t lc_buffer_size(const KernelFnArgs *k_args, const BufferView &buffer) noexcept {
     return buffer.size / sizeof(T);
+}
+
+inline uint64_t lc_buffer_address(const BufferView &buffer) noexcept {
+    return reinterpret_cast<uint64_t>(buffer.data);
 }
 
 template<class T>
@@ -63,7 +76,7 @@ inline void lc_buffer_write(const KernelFnArgs *k_args, const BufferView &buffer
 template<class T>
 inline void lc_byte_buffer_write(const KernelFnArgs *k_args, const BufferView &buffer, size_t i, T value) noexcept {
 #ifdef LUISA_DEBUG
-   if (i >= lc_buffer_size<uint8_t>(k_args, buffer) || i + sizeof(T) > lc_buffer_size<uint8_t>(k_args, buffer)) {
+    if (i >= lc_buffer_size<uint8_t>(k_args, buffer) || i + sizeof(T) > lc_buffer_size<uint8_t>(k_args, buffer)) {
         lc_abort_and_print_sll(k_args->internal_data, "ByteBuffer write out of bounds: {} >= {}", i,
                                lc_buffer_size<T>(k_args, buffer));
     }
@@ -172,7 +185,7 @@ inline T lc_bindless_byte_buffer_read(const KernelFnArgs *k_args, const Bindless
 }
 template<class T>
 inline void lc_bindless_byte_buffer_write(const KernelFnArgs *k_args, const BindlessArray &array, size_t buf_index,
-                                      size_t element, T value) noexcept {
+                                          size_t element, T value) noexcept {
     auto buf = lc_bindless_buffer(k_args, array, buf_index);
     lc_byte_buffer_write<T>(k_args, buf, element, value);
 }
@@ -186,6 +199,10 @@ inline T lc_bindless_buffer_read(const KernelFnArgs *k_args, const BindlessArray
 inline size_t lc_bindless_buffer_size(const KernelFnArgs *k_args, const BindlessArray &array, size_t buf_index, size_t stride) noexcept {
     auto buf = lc_bindless_buffer(k_args, array, buf_index);
     return buf.size / stride;
+}
+inline uint64_t lc_bindless_buffer_address(const KernelFnArgs *k_args, const BindlessArray &array, size_t buf_index) noexcept {
+    auto buf = lc_bindless_buffer(k_args, array, buf_index);
+    return reinterpret_cast<uint64_t>(buf.data);
 }
 
 template<class T>
@@ -340,7 +357,18 @@ inline void lc_ray_query_commit_procedural(RayQuery &rq, float t) {
 inline void lc_ray_query_terminate(RayQuery &rq) {
     rq.terminated = true;
 }
-
+inline RayQuery &cvt_rq(RayQuery *rq) {
+    return *rq;
+}
+inline const RayQuery &cvt_rq(const RayQuery *rq) {
+    return *rq;
+}
+inline RayQuery &cvt_rq(RayQuery &rq) {
+    return rq;
+}
+inline const RayQuery &cvt_rq(const RayQuery &rq) {
+    return rq;
+}
 template<class T, class P>
 struct Callbacks {
     T on_triangle_hit;
@@ -363,7 +391,7 @@ inline void lc_ray_query(RayQuery &rq, T on_triangle_hit, P on_procedural_hit) {
     auto accel = rq.accel;
     return accel->ray_query(accel->handle, &rq, on_triangle_hit_wrapper<T, P>, on_procedural_hit_wrapper<T, P>);
 }
-inline CommitedHit lc_ray_query_committed_hit(RayQuery &rq) {
+inline auto lc_ray_query_committed_hit(RayQuery &rq) {
     return rq.hit;
 }
 template<typename T>

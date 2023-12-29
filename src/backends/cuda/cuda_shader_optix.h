@@ -21,7 +21,15 @@ private:
     size_t _argument_buffer_size{};
     optix::Module _module{};
     optix::ProgramGroup _program_group_rg{};
+    optix::ProgramGroup _program_group_curve_piecewise_linear{};
+    optix::ProgramGroup _program_group_curve_cubic_bspline{};
+    optix::ProgramGroup _program_group_curve_catmull_rom{};
+    optix::ProgramGroup _program_group_curve_bezier{};
     optix::ProgramGroup _program_group_ray_query{};
+    optix::ProgramGroup _program_group_ray_query_curve_piecewise_linear{};
+    optix::ProgramGroup _program_group_ray_query_curve_cubic_bspline{};
+    optix::ProgramGroup _program_group_ray_query_curve_catmull_rom{};
+    optix::ProgramGroup _program_group_ray_query_curve_bezier{};
     optix::Pipeline _pipeline{};
     luisa::vector<ShaderDispatchCommand::Argument> _bound_arguments;
     CUdeviceptr _sbt_buffer{};
@@ -36,13 +44,11 @@ private:
     void _launch(CUDACommandEncoder &encoder, ShaderDispatchCommand *command) const noexcept override;
 
 public:
-    CUDAShaderOptiX(optix::DeviceContext optix_ctx,
-                    const char *ptx, size_t ptx_size, const char *entry,
-                    const CUDAShaderMetadata &metadata,
+    CUDAShaderOptiX(optix::DeviceContext optix_ctx, luisa::string ptx,
+                    const char *entry, const CUDAShaderMetadata &metadata,
                     luisa::vector<ShaderDispatchCommand::Argument> bound_arguments = {}) noexcept;
     ~CUDAShaderOptiX() noexcept override;
     [[nodiscard]] void *handle() const noexcept override { return _pipeline; }
 };
 
 }// namespace luisa::compute::cuda
-

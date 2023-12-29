@@ -6,6 +6,7 @@ use half::f16;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::any::{Any, TypeId};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
@@ -227,6 +228,10 @@ impl Primitive {
             Primitive::Float32 => 4,
             Primitive::Float64 => 8,
         }
+    }
+
+    pub fn to_type(&self) -> CArc<Type> {
+        context::register_type(Type::Primitive(*self))
     }
 }
 
@@ -568,6 +573,13 @@ impl Type {
             _ => false,
         }
     }
+
+    pub fn is_aggregate(&self) -> bool {
+        match self {
+            Type::Struct(_) | Type::Array(_) | Type::Vector(_) | Type::Matrix(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -667,6 +679,7 @@ pub enum Func {
     IndirectDispatchSetKernel,
 
     Load,
+    AddressOf,
 
     Cast,
     Bitcast,
@@ -832,6 +845,8 @@ pub enum Func {
     BufferWrite,
     /// buffer -> uint: returns buffer size in *elements*
     BufferSize,
+    /// buffer -> u64: returns address of the buffer
+    BufferAddress,
     /// (buffer, index_bytes) -> value
     ByteBufferRead,
     /// (buffer, index_bytes, value) -> void
@@ -888,6 +903,8 @@ pub enum Func {
     BindlessBufferWrite,
     /// (bindless_array, index: uint, stride: uint) -> uint: returns the size of the buffer in *elements*
     BindlessBufferSize,
+    /// (bindless_array, index: uint) -> u64: returns the address of the buffer
+    BindlessBufferAddress,
     // (bindless_array, index: uint) -> u64: returns the type of the buffer
     BindlessBufferType,
     // (bindless_array, index: uint, offset_bytes: uint) -> T
@@ -936,11 +953,13 @@ pub enum Func {
     Unknown0,
     Unknown1,
 }
+
 impl Func {
     pub fn discriminant(&self) -> u32 {
         unsafe { *<*const _>::from(self).cast::<u32>() }
     }
 }
+
 #[derive(Clone, Debug, Serialize)]
 #[repr(C)]
 pub enum Const {
@@ -984,77 +1003,84 @@ impl std::fmt::Display for Const {
 }
 
 impl Const {
-    pub fn get_i32(&self) -> i32 {
+    pub fn try_get_i32(&self) -> Option<i32> {
         match self {
-            Const::Int8(v) => *v as i32,
-            Const::Uint8(v) => *v as i32,
-            Const::Int16(v) => *v as i32,
-            Const::Uint16(v) => *v as i32,
-            Const::Int32(v) => *v,
-            Const::Uint32(v) => *v as i32,
-            Const::Int64(v) => *v as i32,
-            Const::Uint64(v) => *v as i32,
+            Const::Int8(v) => Some(*v as i32),
+            Const::Uint8(v) => Some(*v as i32),
+            Const::Int16(v) => Some(*v as i32),
+            Const::Uint16(v) => Some(*v as i32),
+            Const::Int32(v) => Some(*v as i32),
+            Const::Uint32(v) => Some(*v as i32),
+            Const::Int64(v) => Some(*v as i32),
+            Const::Uint64(v) => Some(*v as i32),
             Const::One(t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                1
+                if t.is_primitive() && t.is_int() {
+                    Some(1)
+                } else {
+                    None
+                }
             }
             Const::Zero(t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                0
+                if t.is_primitive() && t.is_int() {
+                    Some(0)
+                } else {
+                    None
+                }
             }
             Const::Generic(slice, t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                assert_eq!(slice.len(), 4, "invalid slice length for i32");
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(slice);
-                i32::from_le_bytes(buf)
+                if t.is_primitive() && t.is_int() {
+                    let slice = slice.as_ref();
+                    match slice.len() {
+                        1 => Some(slice[0] as i32),
+                        2 => Some(i16::from_le_bytes(slice.try_into().unwrap()) as i32),
+                        4 => Some(i32::from_le_bytes(slice.try_into().unwrap())),
+                        8 => Some(i64::from_le_bytes(slice.try_into().unwrap()) as i32),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
             }
             _ => panic!("cannot convert to i32"),
         }
     }
-    pub fn get_bool(&self) -> bool {
+
+    pub fn get_i32(&self) -> i32 {
+        self.try_get_i32().unwrap()
+    }
+
+    pub fn try_get_bool(&self) -> Option<bool> {
         match self {
-            Const::Bool(v) => *v,
+            Const::Bool(v) => Some(*v),
             Const::One(t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                true
+                if t.is_primitive() && t.is_bool() {
+                    Some(true)
+                } else {
+                    None
+                }
             }
             Const::Zero(t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                false
+                if t.is_primitive() && t.is_bool() {
+                    Some(false)
+                } else {
+                    None
+                }
             }
             Const::Generic(slice, t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                assert_eq!(slice.len(), 1, "invalid slice length for bool");
-                slice[0] != 0
+                if t.is_primitive() && t.is_bool() {
+                    Some(slice[0] != 0)
+                } else {
+                    None
+                }
             }
             _ => panic!("cannot convert to bool"),
         }
     }
+
+    pub fn get_bool(&self) -> bool {
+        self.try_get_bool().unwrap()
+    }
+
     pub fn type_(&self) -> CArc<Type> {
         match self {
             Const::Zero(ty) => ty.clone(),
@@ -1532,6 +1558,7 @@ pub struct BasicBlock {
     pub(crate) first: NodeRef,
     pub(crate) last: NodeRef,
 }
+
 impl BasicBlock {
     pub fn first(&self) -> NodeRef {
         self.first
@@ -1767,7 +1794,7 @@ impl NodeRef {
             _ => false,
         }
     }
-    pub fn is_refernece_argument(&self) -> bool {
+    pub fn is_reference_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { by_value } => !*by_value,
             _ => false,
@@ -1782,7 +1809,7 @@ impl NodeRef {
     pub fn is_phi(&self) -> bool {
         self.get().instruction.is_phi()
     }
-    pub fn get<'a>(&'a self) -> &'a Node {
+    pub fn get(&self) -> &Node {
         assert!(self.valid());
         unsafe { &*(self.0 as *const Node) }
     }
@@ -1893,12 +1920,25 @@ bitflags! {
         const REQUIRES_FWD_AD_TRANSFORM = 2;
     }
 }
+bitflags! {
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct CurveBasisSet : u32 {
+        const NONE = 0;
+        const PIECEWISE_LINEAR = 1;
+        const CUBIC_BSPLINE = 2;
+        const CATMULL_ROM = 4;
+        const BEZIER = 8;
+    }
+}
 #[repr(C)]
 #[derive(Debug, Serialize)]
 pub struct Module {
     pub kind: ModuleKind,
     pub entry: Pooled<BasicBlock>,
     pub flags: ModuleFlags,
+    pub curve_basis_set: CurveBasisSet,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
 }
@@ -2084,6 +2124,17 @@ impl NodeCollector {
                 for SwitchCase { value: _, block } in cases.as_ref().iter() {
                     self.visit_block(*block);
                 }
+            }
+            Instruction::AdDetach(body) => {
+                self.visit_block(*body);
+            }
+            Instruction::RayQuery {
+                ray_query: _,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                self.visit_block(*on_triangle_hit);
+                self.visit_block(*on_procedural_hit);
             }
             _ => {}
         }
@@ -2459,6 +2510,7 @@ impl ModuleDuplicator {
             entry: dup_entry,
             pools: module.pools.clone(),
             flags: module.flags,
+            curve_basis_set: module.curve_basis_set,
         }
     }
 }

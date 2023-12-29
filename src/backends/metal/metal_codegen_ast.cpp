@@ -137,6 +137,8 @@ static void collect_types_in_function(Function f,
                 for (auto m : t->members()) {
                     self(self, m);
                 }
+            } else if (t->is_coroframe()) {
+                self(self, t->corotype());
             }
         }
     };
@@ -344,6 +346,9 @@ void MetalCodegenAST::_emit_type_name(const Type *type, Usage usage) noexcept {
             }
             break;
         }
+        case Type::Tag::COROFRAME:
+            _emit_type_name(type->corotype());
+            break;
     }
 }
 
@@ -665,6 +670,20 @@ void MetalCodegenAST::_emit_constant(const Function::Constant &c) noexcept {
 void MetalCodegenAST::emit(Function kernel, luisa::string_view native_include) noexcept {
 
     _uses_printing = kernel.requires_printing();
+
+    // curve basis
+    if (auto bases = kernel.required_curve_bases(); bases.any()) {
+        _scratch << "#define LUISA_ENABLE_CURVE\n";
+        if (bases.count() > 1u) {
+            _scratch << "#define LUISA_ENABLE_CURVE_MULTIPLE\n";
+        }
+        for (auto i = 0u; i < curve_basis_count; i++) {
+            if (auto basis = static_cast<CurveBasis>(i); bases.test(basis)) {
+                _scratch << "#define LUISA_ENABLE_CURVE_" << luisa::to_string(basis) << "\n";
+            }
+        }
+        _scratch << "\n";
+    }
 
     // emit device library
     _scratch << luisa::string_view{luisa_metal_builtin_metal_device_lib,
@@ -1084,6 +1103,8 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::WARP_READ_LANE: _scratch << "lc_warp_read_lane"; break;
         case CallOp::WARP_READ_FIRST_ACTIVE_LANE: _scratch << "lc_warp_read_first_active_lane"; break;
         case CallOp::SHADER_EXECUTION_REORDER: _scratch << "lc_shader_execution_reorder"; break;
+        case CallOp::CORO_ID: _scratch << "lc_coro_id"; break;
+        case CallOp::CORO_TOKEN: _scratch << "lc_coro_token"; break;
     }
     _scratch << "(";
     if (auto op = expr->op(); is_atomic_operation(op)) {
@@ -1129,7 +1150,9 @@ void MetalCodegenAST::visit(const TypeIDExpr *expr) noexcept {
 }
 
 void MetalCodegenAST::visit(const StringIDExpr *expr) noexcept {
-    LUISA_NOT_IMPLEMENTED();
+    _scratch << "(static_cast<";
+    _emit_type_name(expr->type());
+    _scratch << luisa::format(">(0x{:016x}ull))", luisa::hash_value(expr->data()));
 }
 
 void MetalCodegenAST::visit(const CastExpr *expr) noexcept {

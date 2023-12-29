@@ -197,6 +197,7 @@ int main(int argc, char *argv[]) {
         auto ry = lcg(state);
         auto pixel = (make_float2(coord) + make_float2(rx, ry)) / frame_size * 2.0f - 1.0f;
         auto radiance = def(make_float3(0.0f));
+        $suspend("before tracing");
         $for (i, spp_per_dispatch) {
             auto ray = generate_ray(pixel * make_float2(1.0f, -1.0f));
             auto beta = def(make_float3(1.0f));
@@ -208,7 +209,7 @@ int main(int argc, char *argv[]) {
             auto light_area = length(cross(light_u, light_v));
             auto light_normal = normalize(cross(light_u, light_v));
             $for (depth, max_depth) {
-                $suspend("1, trace");
+                // $suspend("1, trace");
 
                 // trace
                 auto hit = accel.trace_closest(ray);
@@ -223,7 +224,7 @@ int main(int argc, char *argv[]) {
                 $if (cos_wo < 1e-4f) { $break; };
                 auto material = material_buffer->read(hit.inst);
 
-                $suspend("2, hit light");
+                // $suspend("2, hit light");
 
                 // hit light
                 $if (hit.inst == static_cast<uint>(meshes.size() - 1u)) {
@@ -238,7 +239,7 @@ int main(int argc, char *argv[]) {
                     $break;
                 };
 
-                $suspend("3, sample light");
+                // $suspend("3, sample light");
 
                 // sample light
                 auto ux_light = lcg(state);
@@ -260,7 +261,7 @@ int main(int argc, char *argv[]) {
                     radiance += beta * bsdf * mis_weight * light_emission / max(pdf_light, 1e-4f);
                 };
 
-                $suspend("4, sample BSDF");
+                // $suspend("4, sample BSDF");
 
                 // sample BSDF
                 Var<Onb> onb = make_onb(n);
@@ -273,7 +274,7 @@ int main(int argc, char *argv[]) {
                 pdf_bsdf = cos_wi * inv_pi;
                 beta *= material.albedo;// * cos_wi * inv_pi / pdf_bsdf => * 1.f
 
-                $suspend("5, rr");
+                // $suspend("5, rr");
 
                 // rr
                 auto l = dot(make_float3(0.212671f, 0.715160f, 0.072169f), beta);
@@ -284,6 +285,7 @@ int main(int argc, char *argv[]) {
                 beta *= 1.0f / q;
             };
         };
+        $suspend("write to image");
         radiance /= static_cast<float>(spp_per_dispatch);
         seed_image.write(coord, make_uint4(state));
         $if (any(dsl::isnan(radiance))) { radiance = make_float3(0.0f); };
@@ -298,7 +300,7 @@ int main(int argc, char *argv[]) {
         auto coord = dispatch_id().xy();
         auto coord_1d = coord.y * resolution.y + coord.x;
         auto frame = frame_buffer->read(coord_1d);
-        initialize_coroframe(frame, dispatch_id());
+        // initialize_coroframe(frame, dispatch_id());
         raytracing_coro(frame, image, seed_image, accel, resolution);
         frame_buffer->write(coord_1d, frame);
     };

@@ -1,12 +1,10 @@
 #include "hlsl_codegen.h"
 #include <luisa/vstl/string_utility.h>
-#include "variant_util.h"
 #include <luisa/ast/constant_data.h>
 #include <luisa/ast/type_registry.h>
 #include <luisa/ast/function_builder.h>
 #include "struct_generator.h"
 #include "codegen_stack_data.h"
-#include <luisa/vstl/pdqsort.h>
 #include <luisa/core/dynamic_module.h>
 #include <luisa/core/logging.h>
 #include <luisa/ast/external_function.h>
@@ -112,11 +110,7 @@ static size_t AddHeader(CallOpSet const &ops, luisa::BinaryIO const *internalDat
     if (!isRaster && (ops.test(CallOp::DDX) || ops.test(CallOp::DDY))) {
         builder << CodegenUtility::ReadInternalHLSLFile("compute_quad", internalDataPath);
     }
-    if (ops.test(CallOp::GRADIENT) ||
-        ops.test(CallOp::ACCUMULATE_GRADIENT) ||
-        ops.test(CallOp::REQUIRES_GRADIENT) ||
-        ops.test(CallOp::GRADIENT_MARKER) ||
-        ops.test(CallOp::DETACH)) {
+    if (ops.uses_autodiff()) {
         builder << CodegenUtility::ReadInternalHLSLFile("auto_diff", internalDataPath);
     }
     if (ops.test(CallOp::REDUCE_MAX) ||
@@ -1564,7 +1558,6 @@ v2p o;
         result << retName
                << " r=vert(vt);\n"sv;
         for (auto i : vstd::range(retType->members().size())) {
-            auto member = retType->members()[i];
             auto num = vstd::to_string(i);
             result << "o.v"sv << num << "=r.v"sv << num;
             result << ";\n"sv;
@@ -1824,44 +1817,37 @@ namespace detail {
 }
 }// namespace detail
 
-void CodegenUtility::PostprocessCodegenProperties(vstd::StringBuilder &finalResult) {
+void CodegenUtility::PostprocessCodegenProperties(vstd::StringBuilder &finalResult, bool use_autodiff) {
     if (!opt->customStruct.empty()) {
-        vstd::fixed_vector<StructGenerator *, 16> customStructVector;
-        customStructVector.reserve(opt->customStruct.size());
-        for (auto &&i : opt->customStruct) {
-            customStructVector.emplace_back(i.second.get());
-        }
-        pdqsort(customStructVector.begin(), customStructVector.end(), [](auto lhs, auto rhs) noexcept {
-            return lhs->GetType()->index() < rhs->GetType()->index();
-        });
-        for (auto v : customStructVector) {
+        for (auto v : opt->customStructVector) {
             finalResult << "struct " << v->GetStructName() << "{\n"
                         << v->GetStructDesc() << "};\n";
-            finalResult << "#ifdef _GRAD\n";
-            auto accum_grad = [&s = finalResult](luisa::string_view access, const Type *t) noexcept {
-                if (t->is_structure() || t->is_array()) {
-                    s << luisa::format("_accum_grad_{:016X}(x_grad{}, dx{});\n", t->hash(), access, access);
-                } else {
-                    s << luisa::format("_accum_grad(x_grad{}, dx{});\n", access, access);
-                }
-            };
-            if (auto t = v->GetType(); t->is_structure() || t->is_array()) {
-                finalResult << luisa::format("void _accum_grad_{:016X}(inout {} x_grad, {} dx){{\n",
-                                             t->hash(), v->GetStructName(), v->GetStructName());
-                if (t->is_structure()) {
-                    for (auto i = 0u; i < t->members().size(); i++) {
-                        if (auto m = t->members()[i]; detail::can_accum_grad(m)) {
-                            accum_grad(luisa::format(".v{}", i), m);
-                        }
+            // accum grad while using autodiff
+            if (use_autodiff) {
+                auto accum_grad = [&s = finalResult](luisa::string_view access, const Type *t) noexcept {
+                    if (t->is_structure() || t->is_array()) {
+                        s << luisa::format("_accum_grad_{:016X}(x_grad{}, dx{});\n", t->hash(), access, access);
+                    } else {
+                        s << luisa::format("_accum_grad(x_grad{}, dx{});\n", access, access);
                     }
-                } else if (detail::can_accum_grad(t->element())) {
-                    finalResult << luisa::format("for(uint i=0;i<{};++i){{", t->dimension());
-                    accum_grad(luisa::format(".v[i]"), t->element());
+                };
+                if (auto t = v->GetType(); t->is_structure() || t->is_array()) {
+                    finalResult << luisa::format("void _accum_grad_{:016X}(inout {} x_grad, {} dx){{\n",
+                                                 t->hash(), v->GetStructName(), v->GetStructName());
+                    if (t->is_structure()) {
+                        for (auto i = 0u; i < t->members().size(); i++) {
+                            if (auto m = t->members()[i]; detail::can_accum_grad(m)) {
+                                accum_grad(luisa::format(".v{}", i), m);
+                            }
+                        }
+                    } else if (detail::can_accum_grad(t->element())) {
+                        finalResult << luisa::format("for(uint i=0;i<{};++i){{", t->dimension());
+                        accum_grad(luisa::format(".v[i]"), t->element());
+                        finalResult << "}\n";
+                    }
                     finalResult << "}\n";
                 }
-                finalResult << "}\n";
             }
-            finalResult << "#endif\n";
         }
     }
     for (auto &&kv : opt->sharedVariable) {
@@ -1874,6 +1860,11 @@ void CodegenUtility::PostprocessCodegenProperties(vstd::StringBuilder &finalResu
         vstd::to_string(i.type()->dimension(), finalResult);
         finalResult << "];\n"sv;
     }
+}
+uint CodegenUtility::AddPrinter(vstd::string_view name, Type const* structType){
+    auto z = opt->printer.size();
+    opt->printer.emplace_back(name, structType);
+    return z;
 }
 void CodegenUtility::CodegenProperties(
     CodegenResult::Properties &properties,
@@ -1891,7 +1882,6 @@ void CodegenUtility::CodegenProperties(
         return (static_cast<uint>(kernel.variable_usage(v.uid())) & static_cast<uint>(Usage::WRITE)) != 0;
     };
     auto args = kernel.arguments();
-    size_t uavArgCount = 0;
     for (auto &&i : vstd::ptr_range(args.data() + offset, args.size() - offset)) {
         auto print = [&] {
             GetTypeName(*i.type(), varData, kernel.variable_usage(i.uid()));
@@ -1907,9 +1897,6 @@ void CodegenUtility::CodegenProperties(
             varData << "Inst"sv;
         };
         auto genArg = [&]<RegisterType regisT, bool rtBuffer = false, bool writable = false>(ShaderVariableType sT, char v) {
-            if constexpr (regisT == RegisterType::UAV) {
-                uavArgCount += 1;
-            }
             auto &&r = registerCount.get((uint8_t)regisT);
             Property prop = {
                 .type = sT,
@@ -1978,10 +1965,33 @@ void CodegenUtility::CodegenProperties(
             default: break;
         }
     }
-    if (uavArgCount > 64) [[unlikely]] {
-        LUISA_WARNING("Writable resources' count greater than 8 may cause crash.");
-    } else if (uavArgCount > 64) [[unlikely]] {
-        LUISA_ERROR("Writable resources' count must be less than 64.");
+    if (kernel.requires_printing()) {
+        auto &&r = registerCount.get((uint8_t)RegisterType::UAV);
+        {
+            Property prop = {
+                .type = ShaderVariableType::RWStructuredBuffer,
+                .space_index = 0,
+                .register_index = r,
+                .array_size = 1};
+            properties.emplace_back(prop);
+            varData << "RWStructuredBuffer<uint> _printCounter:register(u"sv;
+            vstd::to_string(r, varData);
+            varData << ");\n"sv;
+            r += 1;
+        }
+        {
+            Property prop = {
+                .type = ShaderVariableType::RWStructuredBuffer,
+                .space_index = 0,
+                .register_index = r,
+                .array_size = 1};
+            properties.emplace_back(prop);
+            varData << "RWByteAddressBuffer _printBuffer:register(u"sv;
+            vstd::to_string(r, varData);
+            varData << ");\n"sv;
+            r += 1;
+        }
+        bind_count += 4;
     }
 }
 vstd::MD5 CodegenUtility::GetTypeMD5(vstd::span<Type const *const> types) {
@@ -2057,7 +2067,7 @@ uint4 dsp_c;
     RegisterIndexer &indexer = isSpirV ? static_cast<RegisterIndexer &>(spvRegisters) : static_cast<RegisterIndexer &>(dxilRegisters);
     PreprocessCodegenProperties(properties, varData, indexer, internalDataPath, nonEmptyCbuffer, false, isSpirV, bind_count);
     CodegenProperties(properties, varData, kernel, 0, indexer, bind_count);
-    PostprocessCodegenProperties(finalResult);
+    PostprocessCodegenProperties(finalResult, kernel.requires_autodiff());
     finalResult << varData << incrementalFunc << codegenData;
     if (bind_count >= 64) [[unlikely]] {
         LUISA_ERROR("Arguments binding size: {} exceeds 64 32-bit units not supported by hardware device. Try to use bindless instead.", bind_count);
@@ -2068,6 +2078,7 @@ uint4 dsp_c;
     }
     return {
         std::move(finalResult),
+        std::move(opt->printer),
         std::move(properties),
         opt->useTex2DBindless,
         opt->useTex3DBindless,
@@ -2241,7 +2252,7 @@ uint iid:SV_INSTANCEID;
     PreprocessCodegenProperties(properties, varData, indexer, internalDataPath, nonEmptyCbuffer, true, isSpirV, bind_count);
     CodegenProperties(properties, varData, vertFunc, 1, indexer, bind_count);
     CodegenProperties(properties, varData, pixelFunc, 1, indexer, bind_count);
-    PostprocessCodegenProperties(finalResult);
+    PostprocessCodegenProperties(finalResult, false);
     finalResult << varData << incrementalFunc << codegenData;
     if (bind_count >= 64) [[unlikely]] {
         LUISA_ERROR("Arguments binding size: {} exceeds 64 32-bit units not supported by hardware device. Try to use bindless instead.", bind_count);
@@ -2252,6 +2263,7 @@ uint iid:SV_INSTANCEID;
     }
     return {
         std::move(finalResult),
+        std::move(opt->printer),
         std::move(properties),
         opt->useTex2DBindless,
         opt->useTex3DBindless,

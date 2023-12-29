@@ -128,7 +128,7 @@ impl DisplayIR {
         }
     }
 
-    fn get(&self, node: &NodeRef) -> usize {
+    pub fn get(&self, node: &NodeRef) -> usize {
         if node.valid() {
             self.map
                 .get(&node.0)
@@ -218,7 +218,7 @@ impl DisplayIR {
             }
             Instruction::Local { init } => {
                 let temp = format!(
-                    "${}: {} = ${} [init]",
+                    "${}: {} = Local [init = ${}]",
                     self.get_or_insert(&node),
                     type_,
                     self.get_or_insert(init)
@@ -413,9 +413,12 @@ impl DisplayIR {
                 self.output += "}";
             }
             Instruction::Comment(msg) => {
-                let msg = msg.as_ref();
-                let msg = std::str::from_utf8(msg).unwrap();
-                self.output += format!("// {}", msg).as_str();
+                for (i, line) in msg.to_string().lines().enumerate() {
+                    if i != 0 {
+                        self.output += "\n";
+                    }
+                    self.output += format!("// {}", line).as_str();
+                }
                 // self.output += "Comment: ...";
             }
             Instruction::CoroSplitMark { token } => {

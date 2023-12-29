@@ -549,8 +549,7 @@ struct luisa_compute_extension {};
     private:                                                                                                         \
         SOA(ByteBuffer buffer, size_t size) noexcept                                                                 \
             : _buffer{std::move(buffer)},                                                                            \
-              SOAView<S> { &buffer, 0u, size, 0u, size }                                                             \
-        {                                                                                                            \
+              SOAView<S>{&buffer, 0u, size, 0u, size} {                                                              \
             this->_bufferview = &_buffer;                                                                            \
         }                                                                                                            \
                                                                                                                      \
@@ -559,9 +558,10 @@ struct luisa_compute_extension {};
             *this = std::move(x);                                                                                    \
             this->_bufferview = &_buffer;                                                                            \
         }                                                                                                            \
-        SOA operator=(SOA &&x) {                                                                                     \
+        SOA &operator=(SOA &&x) noexcept {                                                                           \
             *this = std::move(x);                                                                                    \
             this->_bufferview = &_buffer;                                                                            \
+            return *this;                                                                                            \
         }                                                                                                            \
         SOA() noexcept = default;                                                                                    \
         SOA(Device &device, size_t elem_count) noexcept                                                              \

@@ -1,761 +1,511 @@
-// Active var: Fail
+// This file implements the coroutine frame analysis, which computes the layout of the frame structure
+// and determine which fields should be loaded and saved for each subroutine.
+// We use the following auxiliary sets to help the analysis:
+// - Load: the set of nodes that are loaded at the beginning of the subroutine (from CoroTransferGraph)
+// - Save: the set of nodes that are saved to the frame at each suspension point (from CoroTransferGraph)
+// The analysis also computes a stable ordering (not changed between runs) of the nodes in the module by their
+// appearing order in the subroutines sorted by the suspend token. This is important to maintain a consistent
+// hash value for the generated code.
 
-use crate::analysis::frame_token_manager::FrameTokenManager;
-use crate::context::is_type_equal;
-use crate::display::DisplayIR;
+// TODO: support designated states
+
+use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
+use crate::analysis::coro_transfer_graph::CoroTransferGraph;
+use crate::analysis::utility::{AccessChainIndex, AccessTree, AccessTreeNodeRef};
 use crate::ir::{
-    BasicBlock, CallableModule, Instruction, NodeRef, SwitchCase, Type,
+    BasicBlock, Const, Func, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF,
 };
-use crate::{CBoxedSlice, Pooled};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use crate::{CArc, CBoxedSlice, TypeOf};
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::format;
 
-#[derive(Debug)]
-pub(crate) struct Continuation {
-    pub(crate) token: u32,
-    pub(crate) prev: HashSet<u32>,
-    pub(crate) next: HashSet<u32>,
+#[derive(Debug, Clone)]
+pub(crate) struct CoroFrameField {
+    type_: Primitive,
+    root: NodeRef,
+    chain: Vec<usize>,
 }
 
-impl Eq for Continuation {}
-impl Ord for Continuation {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.token.cmp(&other.token)
+#[derive(Clone)]
+pub(crate) struct CoroFrame<'a> {
+    pub graph: &'a CoroGraph,
+    pub transfer_graph: &'a CoroTransferGraph,
+    pub interface_type: CArc<Type>,
+    pub fields: Vec<CoroFrameField>,
+}
+
+impl<'a> CoroFrame<'a> {
+    fn _try_add_child(
+        &mut self,
+        child_type: &Type,
+        child_index: usize,
+        tree_node: Option<AccessTreeNodeRef>,
+        root: NodeRef,
+        chain: &mut Vec<usize>,
+    ) {
+        chain.push(child_index);
+        if let Some(tree_node) = tree_node {
+            let i = AccessChainIndex::Static(child_index as i32);
+            if tree_node.has_child(i) {
+                self.add_node(child_type, tree_node.child(i), root, chain);
+            }
+        } else {
+            self.add_node(child_type, None, root, chain);
+        }
+        let popped = chain.pop();
+        assert_eq!(popped, Some(child_index));
     }
-}
 
-impl PartialEq<Self> for Continuation {
-    fn eq(&self, other: &Self) -> bool {
-        self.token == other.token
-    }
-}
-impl PartialOrd<Self> for Continuation {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.token.cmp(&other.token))
-    }
-}
-
-impl Continuation {
-    pub(crate) fn new(token: u32) -> Self {
-        Self {
-            token,
-            prev: HashSet::new(),
-            next: HashSet::new(),
+    fn add_node(
+        &mut self,
+        t: &Type,
+        tree_node: Option<AccessTreeNodeRef>,
+        root: NodeRef,
+        chain: &mut Vec<usize>,
+    ) {
+        match t {
+            Type::Void => unreachable!("void type in coroutine frame"),
+            Type::UserData => unreachable!("user data type in coroutine frame"),
+            Type::Primitive(p) => {
+                self.fields.push(CoroFrameField {
+                    type_: p.clone(),
+                    root,
+                    chain: chain.clone(),
+                });
+            }
+            Type::Vector(v) => {
+                let elem = v.element.to_type();
+                for i in 0..v.length {
+                    self._try_add_child(&elem, i as usize, tree_node, root, chain);
+                }
+            }
+            Type::Matrix(m) => {
+                let elem = m.column();
+                for i in 0..m.dimension {
+                    self._try_add_child(&elem, i as usize, tree_node, root, chain);
+                }
+            }
+            Type::Struct(s) => {
+                for (i, field) in s.fields.iter().enumerate() {
+                    self._try_add_child(field, i, tree_node, root, chain);
+                }
+            }
+            Type::Array(a) => {
+                let elem = &a.element;
+                for i in 0..a.length {
+                    self._try_add_child(elem, i, tree_node, root, chain);
+                }
+            }
+            Type::Opaque(_) => unimplemented!("opaque type in coroutine frame"),
         }
     }
-}
 
-#[derive(Clone, Copy)]
-pub(crate) struct VisitState {
-    pub(crate) bb: *const Pooled<BasicBlock>,
-    pub(crate) start: NodeRef,
-    pub(crate) end: NodeRef,
-    pub(crate) present: NodeRef,
-}
-
-impl VisitState {
-    pub(crate) fn new(
-        bb: &Pooled<BasicBlock>,
-        start: Option<NodeRef>,
-        end: Option<NodeRef>,
-        present: Option<NodeRef>,
+    fn _build(
+        graph: &'a CoroGraph,
+        transfer_graph: &'a CoroTransferGraph,
+        stable_indices: &HashMap<NodeRef, u32>,
+        for_aggregates: bool,
     ) -> Self {
-        let start = if let Some(node_ref_start) = start {
-            node_ref_start
-        } else {
-            bb.first.get().next
+        let mut desc = CoroFrame {
+            graph,
+            transfer_graph,
+            interface_type: CArc::null(),
+            fields: Vec::new(),
         };
-        let end = if let Some(node_ref_end) = end {
-            node_ref_end
+        for (&node, &tree_node) in transfer_graph.union_states.nodes.iter() {
+            if for_aggregates == !node.type_().is_primitive() {
+                desc.add_node(
+                    node.type_().as_ref(),
+                    Some(AccessTreeNodeRef::new(
+                        &transfer_graph.union_states,
+                        tree_node,
+                    )),
+                    node,
+                    &mut Vec::new(),
+                );
+            }
+        }
+        if for_aggregates {
+            desc.fields.sort_by_key(|field| {
+                let node_index = stable_indices[&field.root];
+                let field_size = match field.type_ {
+                    Primitive::Bool => 1,
+                    _ => field.type_.size() * 8,
+                };
+                (node_index, usize::MAX - field_size)
+            });
         } else {
-            bb.last
-        };
-        let present = if let Some(node_ref_present) = present {
-            node_ref_present
-        } else {
-            start
-        };
-        Self {
-            bb: bb as *const Pooled<BasicBlock>,
-            start,
-            end,
-            present,
+            desc.fields.sort_by_key(|field| {
+                let node_index = stable_indices[&field.root];
+                let field_size = match field.type_ {
+                    Primitive::Bool => 1,
+                    _ => field.type_.size() * 8,
+                };
+                (usize::MAX - field_size, node_index)
+            });
         }
-    }
-    pub(crate) fn new_whole(bb: &Pooled<BasicBlock>) -> Self {
-        Self::new(bb, None, None, None)
-    }
-    pub(crate) fn get_bb_ref(&self) -> &Pooled<BasicBlock> {
-        unsafe { &*self.bb }
-    }
-}
-
-#[derive(Debug)]
-struct FrameBuilder {
-    token: u32,
-    finished: bool,
-}
-
-impl FrameBuilder {
-    fn new(token: u32) -> Self {
-        Self {
-            token,
-            finished: false,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct VisitResult {
-    split_possibly: bool,
-    result: Vec<FrameBuilder>,
-}
-
-impl VisitResult {
-    fn new() -> Self {
-        Self {
-            split_possibly: true,
-            result: vec![],
-        }
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct SplitPossibility {
-    pub(crate) possibly: bool,
-    pub(crate) directly: bool,
-    pub(crate) definitely: bool,
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct ActiveVar {
-    pub(crate) token: u32,
-
-    pub(crate) defined: HashSet<NodeRef>,
-    pub(crate) used: HashSet<NodeRef>,
-
-    pub(crate) def_b: HashSet<NodeRef>,
-    pub(crate) use_b: HashSet<NodeRef>,
-
-    pub(crate) input: HashSet<NodeRef>,
-    pub(crate) output: HashSet<NodeRef>,
-}
-impl Ord for ActiveVar {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.token.cmp(&other.token)
-    }
-}
-impl PartialOrd<Self> for ActiveVar {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.token.cmp(&other.token))
-    }
-}
-
-impl ActiveVar {
-    fn new(token: u32) -> Self {
-        Self {
-            token,
-            defined: HashSet::new(),
-            used: HashSet::new(),
-            def_b: HashSet::new(),
-            use_b: HashSet::new(),
-            input: HashSet::new(),
-            output: HashSet::new(),
-        }
+        desc
     }
 
-    fn record_use(&mut self, node: NodeRef) {
-        self.used.insert(node);
-        if !self.defined.contains(&node) {
-            self.use_b.insert(node);
-        }
-    }
-    fn record_def(&mut self, node: NodeRef) {
-        self.defined.insert(node);
-        if !self.used.contains(&node) {
-            self.def_b.insert(node);
-        }
-    }
-
-    pub(crate) fn display(&self, display_ir: &DisplayIR) -> String {
-        let mut output = format!("{:-^40}\n", format!(" ActiveVar of {} ", self.token));
-        output += &format!(
-            "defined: {}\n",
-            display_ir.display_existent_nodes(&self.defined)
-        );
-        output += &format!(
-            "used: {}\n",
-            display_ir.display_existent_nodes(&self.used));
-        output += &format!(
-            "def_b: {}\n",
-            display_ir.display_existent_nodes(&self.def_b)
-        );
-        output += &format!(
-            "use_b: {}\n",
-            display_ir.display_existent_nodes(&self.use_b)
-        );
-        output += &format!(
-            "input: {}\n",
-            display_ir.display_existent_nodes(&self.input)
-        );
-        output += &format!(
-            "output: {}\n",
-            display_ir.display_existent_nodes(&self.output)
-        );
-        output += &"-".repeat(40);
-        output += "\n";
-        output
-    }
-}
-
-pub(crate) struct CoroFrameAnalyser {
-    pub(crate) continuations: HashMap<u32, Continuation>,
-    pub(crate) active_vars: HashMap<u32, ActiveVar>,
-    pub(crate) split_possibility: HashMap<*const BasicBlock, SplitPossibility>,
-    visited_coro_split_mark: HashSet<NodeRef>,
-    pub(crate) entry_token: u32,
-}
-
-impl CoroFrameAnalyser {
-    pub(crate) fn new() -> Self {
-        Self {
-            continuations: HashMap::new(),
-            active_vars: HashMap::new(),
-            split_possibility: HashMap::new(),
-            visited_coro_split_mark: HashSet::new(),
-            entry_token: u32::MAX,
-        }
-    }
-
-    pub(crate) fn analyse_callable(&mut self, callable: &CallableModule) {
-        self.preprocess_bb(&callable.module.entry);
-
-        let entry_token = FrameTokenManager::get_new_token();
-        self.entry_token = entry_token;
-        let active_var = self
-            .active_vars
-            .entry(entry_token)
-            .or_insert(ActiveVar::new(entry_token));
-
-        for arg in callable.args.as_ref() {
-            active_var.record_def(*arg);
-        }
-        for capture in callable.captures.as_ref() {
-            active_var.record_def(capture.node);
-        }
-
-        let visit_state = VisitState::new_whole(&callable.module.entry);
-        let _ = self.visit_bb(FrameBuilder::new(entry_token), visit_state);
-
-        self.calculate_frame();
-    }
-
-    pub(crate) fn display_active_vars(&self, display_ir: &DisplayIR) -> String {
-        let mut output = String::new();
-        let active_vars = BTreeSet::from_iter(self.active_vars.values());
-        let active_var_str: Vec<_> = active_vars
+    fn _compute_interface_type(&mut self) {
+        let mut fields = vec![
+            Type::vector(Primitive::Uint32, 3), // coro id
+            <u32 as TypeOf>::type_(),           // target coro token
+        ];
+        fields.extend(self.fields.iter().map(|field| field.type_.to_type()));
+        let alignment = self
+            .fields
             .iter()
-            .map(|active_var| active_var.display(display_ir))
-            .collect();
-        output += &active_var_str.join("\n");
-        output
+            .fold(16, |acc, field| std::cmp::max(acc, field.type_.size()));
+        self.interface_type = Type::struct_of(alignment as u32, fields);
     }
 
-    pub(crate) fn display_continuations(&self) -> String {
-        let mut output = String::from("Continuations: {\n");
-        let mut continuations = Vec::from_iter(self.continuations.values());
-        // format for display
-        continuations.sort();
-        let continuation_str: Vec<_> = continuations.iter().map(|continuation| {
-            let prev = BTreeSet::from_iter(continuation.prev.iter());
-            let next = BTreeSet::from_iter(continuation.next.iter());
-            format!("    {:?} => {} => {:?}", prev, continuation.token, next)
-        }).collect();
-        output += &continuation_str.join("\n");
-        output += "\n}";
-        output
+    fn new(
+        graph: &'a CoroGraph,
+        transfer_graph: &'a CoroTransferGraph,
+        stable_indices: &HashMap<NodeRef, u32>,
+    ) -> Self {
+        let agg_desc = Self::_build(graph, transfer_graph, stable_indices, true);
+        let prim_desc = Self::_build(graph, transfer_graph, stable_indices, false);
+        let mut desc = CoroFrame {
+            graph,
+            transfer_graph,
+            interface_type: CArc::null(),
+            fields: [agg_desc.fields, prim_desc.fields].concat(),
+        };
+        desc._compute_interface_type();
+        desc
     }
+}
 
-    fn calculate_frame(&mut self) {
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for continuation in self.continuations.values() {
-                let mut active_var = self.active_vars.get(&continuation.token).unwrap().clone();
-                active_var.output.clear();
-                let mut to_self = false;
-                // OUT[B] = U IN[S] for all S in next[B]
-                for token_next in continuation.next.iter() {
-                    if continuation.token == *token_next {
-                        to_self = true;
-                    } else {
-                        let active_var_next = self.active_vars.get_mut(&token_next).unwrap();
-                        active_var.output.extend(active_var_next.input.iter());
-                    }
-                }
-                if to_self {
-                    active_var.output.extend(active_var.input.iter());
-                }
-                // IN[B] = use[B] U (OUT[B] - def[B])
-                active_var.input = active_var.use_b.clone();
-                let mut out_minus_def = active_var.output.clone();
-                out_minus_def.retain(|node_ref| !active_var.def_b.contains(node_ref));
-                active_var.input.extend(out_minus_def);
-
-                // check if changed
-                if active_var != *self.active_vars.get(&continuation.token).unwrap() {
-                    changed = true;
-                    self.active_vars.insert(continuation.token, active_var);
-                }
-            }
-        }
-        let args = &callable.args.as_ref().iter()
-            .map(|arg| *arg).collect::<HashSet<_>>();
-        let captures = &callable.captures.as_ref().iter()
-            .map(|capture| capture.node).collect::<HashSet<_>>();
-        for (token, active_var) in self.active_vars.iter_mut() {
-            let mut input_var = active_var.input.clone();
-            input_var = input_var.difference(args).cloned().collect::<HashSet<_>>();
-            input_var = input_var.difference(captures).cloned().collect::<HashSet<_>>();
-            active_var.input = input_var;
-        }
-    }
-    fn preprocess_bb(&mut self, bb: &Pooled<BasicBlock>) {
-        let mut split_poss = self
-            .split_possibility
-            .entry(bb.as_ptr())
-            .or_default()
-            .clone();
-        for node_ref_present in bb.iter() {
-            let node = node_ref_present.get();
-            let instruction = node.instruction.as_ref();
-            match instruction {
-                Instruction::Buffer
-                | Instruction::Bindless
-                | Instruction::Texture2D
-                | Instruction::Texture3D
-                | Instruction::Accel
-                | Instruction::Shared
-                | Instruction::Uniform
-                | Instruction::Argument { .. } => {
-                    unreachable!("{:?} should not appear in basic block", instruction)
-                }
-                Instruction::Invalid => {
-                    unreachable!("Invalid node should not appear in non-sentinel nodes")
-                }
-
-                Instruction::CoroSplitMark { token } => {
-                    FrameTokenManager::register_frame_token(*token);
-                    split_poss.possibly = true;
-                    split_poss.directly = true;
-                    split_poss.definitely = true;
-                }
-                // 3 Instructions after CCF
-                Instruction::Loop { body, cond } => {
-                    self.preprocess_bb(body);
-                    let split_poss_body = self.split_possibility.get(&body.as_ptr()).unwrap();
-                    split_poss.possibly |= split_poss_body.possibly;
-                    split_poss.definitely |= split_poss_body.definitely;
-                }
-                Instruction::If {
-                    cond,
-                    true_branch,
-                    false_branch,
-                } => {
-                    self.preprocess_bb(true_branch);
-                    self.preprocess_bb(false_branch);
-                    let split_poss_true =
-                        self.split_possibility.get(&true_branch.as_ptr()).unwrap();
-                    let split_poss_false =
-                        self.split_possibility.get(&false_branch.as_ptr()).unwrap();
-                    split_poss.possibly |= split_poss_true.possibly || split_poss_false.possibly;
-                    split_poss.definitely |= split_poss_true.definitely && split_poss_false.definitely;
-                }
-                Instruction::Switch {
-                    value: _,
-                    default,
-                    cases,
-                } => {
-                    let mut split_poss_cases = SplitPossibility {
-                        possibly: false,
-                        directly: false,
-                        definitely: true,
-                    };
-                    for SwitchCase { value: _, block } in cases.as_ref().iter() {
-                        self.preprocess_bb(block);
-                        let split_poss_case = self.split_possibility.get(&block.as_ptr()).unwrap();
-                        split_poss_cases.possibly |= split_poss_case.possibly;
-                        split_poss_cases.definitely &= split_poss_case.definitely;
-                    }
-                    self.preprocess_bb(default);
-                    let split_poss_default = self
-                        .split_possibility
-                        .get(&default.as_ptr())
-                        .unwrap()
-                        .clone();
-                    split_poss.possibly |= split_poss_default.possibly || split_poss_cases.possibly;
-                    split_poss.definitely |= split_poss_default.definitely && split_poss_cases.definitely;
-                }
-
-                Instruction::CoroSuspend { .. }
-                | Instruction::CoroResume { .. } => unreachable!("{:?} should not be defined as statement directly", instruction),
-                Instruction::CoroRegister { token, value, var } => {}
-                Instruction::Return(_) => {
-                    // TODO
-                }
-                Instruction::GenericLoop { .. }
-                | Instruction::Break
-                | Instruction::Continue => {
-                    // TODO
-                    unreachable!("{:?} should no longer exist after CCF", instruction)
-                }
-
-                Instruction::Local { .. }
-                | Instruction::UserData(_)
-                | Instruction::Const(_)
-                | Instruction::Update { .. }
-                | Instruction::Call(_, _)
-                | Instruction::Phi(_)
-                | Instruction::RayQuery { .. }
-                | Instruction::Print { .. }
-                | Instruction::Comment(_) => {}
-
-                Instruction::AdDetach(_)
-                | Instruction::AdScope { .. } => unimplemented!("Auto-differentiate is not compatible with Coroutine"),
-            }
-        }
-        self.split_possibility.insert(bb.as_ptr(), split_poss);
-    }
-
-    fn visit_coro_split_mark(
-        &mut self,
-        mut fb_before: FrameBuilder,
-        token_next: u32,
-        node_ref: NodeRef,
-    ) -> Vec<FrameBuilder> {
-        let visited = self.visited_coro_split_mark.contains(&node_ref);
-        self.visited_coro_split_mark.insert(node_ref);
-        fb_before.finished = true;
-
-        // record continuation
-        self.continuations.entry(fb_before.token).or_insert(Continuation::new(fb_before.token)).next.insert(token_next);
-        self.continuations.entry(token_next).or_insert(Continuation::new(token_next)).prev.insert(fb_before.token);
-
-        if visited {
-            // coro suspend
-            vec![fb_before]
-        } else {
-            // coro split mark
-            // create a new frame builder for the next scope
-            let fb_next = FrameBuilder::new(token_next);
-            vec![fb_before, fb_next]
-        }
-    }
-    fn visit_branch_split(
-        &mut self,
-        frame_token: u32,
-        branch: &Pooled<BasicBlock>,
-        sb_after_vec: &mut Vec<FrameBuilder>,
-    ) -> FrameBuilder {
-        let frame_builder = FrameBuilder::new(frame_token);
-        let mut sb_vec = self.visit_bb(frame_builder, VisitState::new_whole(branch));
-        let sb_before_split = sb_vec.remove(0);
-        sb_after_vec.extend(sb_vec);
-        sb_before_split
-    }
-    fn visit_loop(
-        &mut self,
-        mut frame_builder: FrameBuilder,
-        visit_state: VisitState,
-        body: &Pooled<BasicBlock>,
-        cond: &NodeRef,
-    ) -> VisitResult {
-        let mut visit_result = VisitResult::new();
-        let mut fb_after_vec = vec![];
-
-        let fb_body = self.visit_branch_split(frame_builder.token, body, &mut fb_after_vec);
-        assert_eq!(
-            fb_body.finished,
-            self.split_possibility
-                .get(&body.as_ptr())
-                .unwrap()
-                .definitely
-        );
-        frame_builder.finished |= fb_body.finished;
-        if !frame_builder.finished {    // FIXME: consistent with coroutine::visit_loop
-            self.active_vars
-                .get_mut(&frame_builder.token)
-                .unwrap()
-                .record_use(*cond);
-        }
-
-        // process next bb
-        fb_after_vec.insert(0, frame_builder);
-
-        let mut visit_state_after = visit_state.clone();
-        visit_state_after.present = visit_state.present.get().next;
-        for mut fb_after in fb_after_vec {
-            if fb_after.finished {
-                visit_result.result.push(fb_after);
-            } else {
-                let mut temp_vec = vec![];
-                fb_after = self.visit_branch_split(fb_after.token, body, &mut temp_vec);
-                assert_eq!(temp_vec.len(), 0);
-                if fb_after.finished {
-                    visit_result.result.push(fb_after);
+impl<'a> CoroFrame<'a> {
+    pub fn resume(
+        &self,
+        scope: CoroScopeRef,
+        frame: NodeRef,
+        b: &mut IrBuilder,
+    ) -> HashMap<NodeRef, NodeRef> {
+        b.comment(CBoxedSlice::from("coro resume".to_string()));
+        let mut mapping = HashMap::new();
+        let load_tree = &self.transfer_graph.nodes[&scope].union_states_to_load;
+        for (field_index, field) in self.fields.iter().enumerate() {
+            let root = field.root;
+            let chain: Vec<_> = field
+                .chain
+                .iter()
+                .map(|i| AccessChainIndex::Static(*i as i32))
+                .collect();
+            if load_tree.contains(root, &chain) {
+                let mapped = mapping
+                    .entry(root)
+                    .or_insert_with(|| b.local_zero_init(root.type_().clone()))
+                    .clone();
+                let field_index = b.const_(Const::Uint32(
+                    2/* skip coro_id and token */ + field_index as u32,
+                ));
+                let field_type = field.type_.to_type();
+                let p_value = b.gep(frame, &[field_index], field_type.clone());
+                let value = b.load(p_value);
+                let p_mapped = if field.chain.is_empty() {
+                    mapped
                 } else {
-                    visit_result
-                        .result
-                        .extend(self.visit_bb(fb_after, visit_state_after.clone()));
-                }
+                    let chain: Vec<_> = field
+                        .chain
+                        .iter()
+                        .map(|&i| b.const_(Const::Uint32(i as u32)))
+                        .collect();
+                    b.gep(mapped, chain.as_slice(), field_type.clone())
+                };
+                b.update(p_mapped, value);
             }
         }
-        visit_result
+        mapping
     }
-    fn visit_if(
-        &mut self,
-        mut frame_builder: FrameBuilder,
-        visit_state: VisitState,
-        true_branch: &Pooled<BasicBlock>,
-        false_branch: &Pooled<BasicBlock>,
-        cond: &NodeRef,
-    ) -> VisitResult {
-        // cond
-        let active_var = self.active_vars.get_mut(&frame_builder.token).unwrap();
-        active_var.record_use(*cond);
 
-        let mut visit_result = VisitResult::new();
-
-        let split_poss_true = self.split_possibility.get(&true_branch.as_ptr()).unwrap().clone();
-        let split_poss_false = self.split_possibility.get(&false_branch.as_ptr()).unwrap().clone();
-
-        // split in true/false_branch
-        visit_result.split_possibly = split_poss_true.possibly || split_poss_false.possibly;
-        let mut fb_after_vec = vec![];
-
-        let mut all_branches_finished = true;
-        // process true branch
-        let fb_true = self.visit_branch_split(frame_builder.token, true_branch, &mut fb_after_vec);
-        assert_eq!(fb_true.finished, split_poss_true.definitely,
-                   "If true.finished = {}, split_poss_true.definitely = {}",
-                   fb_true.finished, split_poss_true.definitely);
-        all_branches_finished &= fb_true.finished;
-        // process false branch
-        let fb_false = self.visit_branch_split(frame_builder.token, false_branch, &mut fb_after_vec);
-        assert_eq!(fb_false.finished, split_poss_false.definitely,
-                   "If false.finished = {}, split_poss_false.definitely = {}",
-                   fb_false.finished, split_poss_false.definitely);
-        all_branches_finished &= fb_false.finished;
-        frame_builder.finished |= all_branches_finished;
-
-        // process next bb
-        fb_after_vec.insert(0, frame_builder);
-
-        let mut visit_state_after = visit_state.clone();
-        visit_state_after.present = visit_state.present.get().next;
-        for fb_after in fb_after_vec {
-            if fb_after.finished {
-                visit_result.result.push(fb_after);
-            } else {
-                visit_result
-                    .result
-                    .extend(self.visit_bb(fb_after, visit_state_after.clone()));
+    pub fn suspend(
+        &self,
+        scope: CoroScopeRef,
+        target_token: u32,
+        frame: NodeRef,
+        b: &mut IrBuilder,
+        mapping: &HashMap<NodeRef, NodeRef>,
+    ) {
+        b.comment(CBoxedSlice::from(format!(
+            "coro suspend (target = {})",
+            target_token
+        )));
+        // get the save tree
+        let save_tree = &self.transfer_graph.nodes[&scope].outlets[&target_token].states_to_save;
+        // update target coro token
+        let t_u32 = <u32 as TypeOf>::type_();
+        let target_token = b.const_(Const::Uint32(target_token));
+        let one = b.const_(Const::One(t_u32.clone()));
+        let p_token = b.gep(frame, &[one], t_u32.clone());
+        b.update(p_token, target_token);
+        // save fields
+        for (field_index, field) in self.fields.iter().enumerate() {
+            let root = field.root;
+            let chain: Vec<_> = field
+                .chain
+                .iter()
+                .map(|i| AccessChainIndex::Static(*i as i32))
+                .collect();
+            if save_tree.contains(root, &chain) {
+                let mapped = mapping[&root].clone();
+                let p_mapped = if field.chain.is_empty() {
+                    mapped
+                } else {
+                    let chain: Vec<_> = field
+                        .chain
+                        .iter()
+                        .map(|&i| b.const_(Const::Uint32(i as u32)))
+                        .collect();
+                    b.gep(mapped, chain.as_slice(), field.type_.to_type())
+                };
+                let value = b.load(p_mapped);
+                let field_index = b.const_(Const::Uint32(
+                    2/* skip coro_id and token */ + field_index as u32,
+                ));
+                let p_field = b.gep(frame, &[field_index], field.type_.to_type());
+                b.update(p_field, value);
             }
         }
-        visit_result
+        // return
+        b.return_(INVALID_REF);
     }
-    fn visit_switch(
-        &mut self,
-        mut frame_builder: FrameBuilder,
-        visit_state: VisitState,
-        value: &NodeRef,
-        cases: &CBoxedSlice<SwitchCase>,
-        default: &Pooled<BasicBlock>,
-    ) -> VisitResult {
-        // value
-        let active_var = self.active_vars.get_mut(&frame_builder.token).unwrap();
-        active_var.record_use(*value);
 
-        let mut visit_result = VisitResult::new();
-        let mut fb_after_vec = vec![];
+    pub fn terminate(&self, scope: CoroScopeRef, frame: NodeRef, b: &mut IrBuilder) {
+        b.comment(CBoxedSlice::from("coro terminate".to_string()));
+        let t_u32 = <u32 as TypeOf>::type_();
+        let one = b.const_(Const::One(t_u32.clone()));
+        let gep = b.gep(frame, &[one], <u32 as TypeOf>::type_());
+        const TERMINATE_TOKEN: u32 = i32::MAX as u32;
+        let terminate_token = b.const_(Const::Uint32(TERMINATE_TOKEN));
+        b.update(gep, terminate_token);
+        // TODO: store designated states if any
+        b.return_(INVALID_REF);
+    }
 
-        // process cases
-        let mut all_branches_finished = true;
-        cases.as_ref().iter().enumerate().for_each(|(i, case)| {
-            let fb_case =
-                self.visit_branch_split(frame_builder.token, &case.block, &mut fb_after_vec);
-            assert_eq!(
-                fb_case.finished,
-                self.split_possibility
-                    .get(&case.block.as_ptr())
-                    .unwrap()
-                    .definitely
-            );
-            all_branches_finished &= fb_case.finished;
-        });
-        // process default
-        let fb_default = self.visit_branch_split(frame_builder.token, default, &mut fb_after_vec);
-        assert_eq!(
-            fb_default.finished,
-            self.split_possibility
-                .get(&default.as_ptr())
-                .unwrap()
-                .definitely
-        );
-        all_branches_finished &= fb_default.finished;
-        frame_builder.finished |= all_branches_finished;
+    pub fn read_coro_id(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
+        let t_u32 = <u32 as TypeOf>::type_();
+        let t_v = Type::vector_of(t_u32.clone(), 3);
+        let zero = b.const_(Const::Zero(t_u32.clone()));
+        let p_id = b.gep(frame.clone(), &[zero], t_v);
+        b.load(p_id)
+    }
 
-        // process next bb
-        fb_after_vec.insert(0, frame_builder);
+    pub fn read_target_token(&self, frame: NodeRef, b: &mut IrBuilder) -> NodeRef {
+        let t_u32 = <u32 as TypeOf>::type_();
+        let one = b.const_(Const::One(t_u32.clone()));
+        let gep = b.gep(frame, &[one], t_u32);
+        b.load(gep)
+    }
 
-        let mut visit_state_after = visit_state.clone();
-        visit_state_after.present = visit_state.present.get().next;
-        for fb_after in fb_after_vec {
-            if fb_after.finished {
-                visit_result.result.push(fb_after);
-            } else {
-                visit_result
-                    .result
-                    .extend(self.visit_bb(fb_after, visit_state_after.clone()));
-            }
+    pub fn dump(&self) {
+        println!("=========================== CoroFrame ===========================");
+        for (i, field) in self.fields.iter().enumerate() {
+            println!("Field {}: {:?}", i, field);
         }
-        visit_result
+        println!("Total Size = {}", self.interface_type.size());
     }
-    fn visit_bb(&mut self, frame_builder: FrameBuilder, mut visit_state: VisitState) -> Vec<FrameBuilder> {
-        while visit_state.present != visit_state.end {
-            let node = visit_state.present.get();
-            let type_ = &node.type_;
-            let instruction = node.instruction.as_ref();
-            // println!("Token {}, Visit noderef {:?} : {:?}", frame_builder.token, visit_state.present.0, instruction);
+}
 
-            let active_var = self
-                .active_vars
-                .entry(frame_builder.token)
-                .or_insert(ActiveVar::new(frame_builder.token));
+struct CoroFrameBuilder<'a> {
+    graph: &'a CoroGraph,
+    transfer_graph: &'a CoroTransferGraph,
+}
 
-            match instruction {
-                Instruction::Buffer
-                | Instruction::Bindless
-                | Instruction::Texture2D
-                | Instruction::Texture3D
-                | Instruction::Accel
-                | Instruction::Shared
-                | Instruction::Uniform
-                | Instruction::Argument { .. } => {
-                    unreachable!("{:?} should not appear in basic block", instruction)
+fn check_is_btree_map<K, V>(_: &BTreeMap<K, V>) {}
+
+impl<'a> CoroFrameBuilder<'a> {
+    fn compute_stable_node_indices(&mut self) -> HashMap<NodeRef, u32> {
+        let mut nodes = HashMap::new();
+        check_is_btree_map(&self.graph.tokens);
+        self._collect_nodes_in_scope(self.graph.entry, &mut nodes);
+        for scope in self.graph.tokens.values() {
+            self._collect_nodes_in_scope(*scope, &mut nodes);
+        }
+        nodes
+    }
+
+    fn _collect_nodes_in_scope(&mut self, scope: CoroScopeRef, nodes: &mut HashMap<NodeRef, u32>) {
+        let scope = &self.graph.get_scope(scope);
+        self._collect_nodes_in_block(&scope.instructions, nodes);
+    }
+
+    fn _collect_nodes_in_block(
+        &self,
+        block: &Vec<CoroInstrRef>,
+        nodes: &mut HashMap<NodeRef, u32>,
+    ) {
+        for &instr_ref in block {
+            let instr = self.graph.get_instr(instr_ref);
+            match instr {
+                CoroInstruction::Simple(node) => {
+                    self._collect_nodes_in_simple(node, nodes);
                 }
-                Instruction::Invalid => {
-                    unreachable!("Invalid node should not appear in non-sentinel nodes")
+                CoroInstruction::ConditionStackReplay { items } => {
+                    for item in items.iter() {
+                        self._collect_nodes_in_simple(&item.node, nodes);
+                    }
                 }
-
-                Instruction::CoroSplitMark { token: token_next } => {
-                    let mut fb_vec =
-                        self.visit_coro_split_mark(frame_builder, *token_next, visit_state.present);
-                    return if fb_vec.len() == 2 {
-                        // coro split mark
-                        let visit_state_after =
-                            VisitState::new(visit_state.get_bb_ref(), Some(node.next), None, None);
-                        let fb_after = fb_vec.pop().unwrap();
-                        let fb_before = fb_vec.pop().unwrap();
-                        let mut fb_vec = self.visit_bb(fb_after, visit_state_after);
-                        fb_vec.insert(0, fb_before);
-                        println!("fb_vec = {:?}", fb_vec);
-                        fb_vec
+                CoroInstruction::MakeFirstFlag | CoroInstruction::ClearFirstFlag(_) => {}
+                CoroInstruction::SkipIfFirstFlag { body, .. } => {
+                    self._collect_nodes_in_block(body, nodes);
+                }
+                CoroInstruction::Loop { cond, body } => {
+                    if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
+                        self._collect_nodes_in_simple(cond, nodes);
                     } else {
-                        // coro suspend
-                        assert_eq!(fb_vec.len(), 1);
-                        fb_vec
-                    };
+                        unreachable!("unexpected loop condition");
+                    }
+                    self._collect_nodes_in_block(body, nodes);
                 }
-
-                // 3 Instructions after CCF
-                Instruction::Loop { body, cond } => {
-                    return self
-                        .visit_loop(frame_builder, visit_state.clone(), body, cond)
-                        .result;
-                }
-                Instruction::If {
+                CoroInstruction::If {
                     cond,
                     true_branch,
                     false_branch,
                 } => {
-                    return self
-                        .visit_if(
-                            frame_builder,
-                            visit_state.clone(),
-                            true_branch,
-                            false_branch,
-                            cond,
-                        )
-                        .result;
+                    if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
+                        self._collect_nodes_in_simple(cond, nodes);
+                    } else {
+                        unreachable!("unexpected if condition");
+                    }
+                    self._collect_nodes_in_block(true_branch, nodes);
+                    self._collect_nodes_in_block(false_branch, nodes);
                 }
-                Instruction::Switch {
-                    value: value,
-                    default,
+                CoroInstruction::Switch {
+                    cond,
                     cases,
+                    default,
                 } => {
-                    return self
-                        .visit_switch(frame_builder, visit_state.clone(), value, cases, default)
-                        .result;
-                }
-
-                Instruction::Local { init } => {
-                    active_var.record_use(*init);
-                    active_var.record_def(visit_state.present);
-                }
-                Instruction::UserData(_) => todo!(),
-                Instruction::Const(_) => {
-                    active_var.record_def(visit_state.present);
-                }
-
-                // FIXME: 3 instructions: var undefined
-                Instruction::Update { var, value } => {
-                    active_var.record_use(*value);
-                    active_var.record_def(*var);
-                }
-                Instruction::Call(func, args) => {
-                    for arg in args.as_ref() {
-                        active_var.record_use(*arg);
+                    if let CoroInstruction::Simple(cond) = self.graph.get_instr(*cond) {
+                        self._collect_nodes_in_simple(cond, nodes);
+                    } else {
+                        unreachable!("unexpected switch condition");
                     }
-                    if !is_type_equal(type_, &Type::void()) {
-                        active_var.record_def(visit_state.present);
+                    for case in cases.iter() {
+                        self._collect_nodes_in_block(&case.body, nodes);
                     }
+                    self._collect_nodes_in_block(default, nodes);
                 }
-                Instruction::Phi(phi) => {
-                    for phi_incoming in phi.as_ref() {
-                        active_var.record_use(phi_incoming.value);
-                    }
-                    active_var.record_def(visit_state.present);
-                }
-
-                Instruction::Return(value) => {
-                    if !is_type_equal(type_, &Type::void()) {
-                        active_var.record_use(*value);
-                    }
-                }
-                Instruction::GenericLoop { .. } => todo!(),
-                Instruction::RayQuery { .. } => todo!(),
-
-                Instruction::Break => {}
-                Instruction::Continue => {}
-                Instruction::AdScope { .. } => {}
-                Instruction::AdDetach(_) => {}
-                Instruction::Comment(_) => {}
-                Instruction::Print { .. } => {}
-                Instruction::CoroRegister { token, value, var } => {
-                    // var <-> frame[token][index] <-> value
-                    let active_var_next = self
-                        .active_vars
-                        .entry(*token)
-                        .or_insert(ActiveVar::new(*token));
-                    active_var_next.record_use(*value);
-                }
-                Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => unreachable!(
-                    "{:?} should not be defined as statement directly",
-                    instruction
-                ),
+                CoroInstruction::Suspend { .. } => {}
+                CoroInstruction::Terminate => {}
+                _ => unreachable!("unexpected instruction in coroutine"),
             }
-            visit_state.present = node.next;
         }
-        vec![frame_builder]
+    }
+
+    fn _collect_nodes_in_basic_block(&self, block: &BasicBlock, nodes: &mut HashMap<NodeRef, u32>) {
+        for node in block.iter() {
+            self._collect_nodes_in_simple(&node, nodes);
+        }
+    }
+
+    fn _collect_nodes_in_simple(&self, simple: &NodeRef, nodes: &mut HashMap<NodeRef, u32>) {
+        if nodes.contains_key(&simple) {
+            return;
+        }
+        nodes.insert(simple.clone(), nodes.len() as u32);
+        match simple.get().instruction.as_ref() {
+            Instruction::Local { init } => {
+                self._collect_nodes_in_simple(init, nodes);
+            }
+            Instruction::Update { var, value } => {
+                self._collect_nodes_in_simple(var, nodes);
+                self._collect_nodes_in_simple(value, nodes);
+            }
+            Instruction::Call(_, args) => {
+                for arg in args.iter() {
+                    self._collect_nodes_in_simple(arg, nodes);
+                }
+            }
+            Instruction::Phi(incomings) => {
+                for incoming in incomings.iter() {
+                    self._collect_nodes_in_simple(&incoming.value, nodes);
+                }
+            }
+            Instruction::Return(value) => {
+                if value.valid() {
+                    self._collect_nodes_in_simple(value, nodes);
+                }
+            }
+            Instruction::Loop { body, cond } => {
+                self._collect_nodes_in_basic_block(body, nodes);
+                self._collect_nodes_in_simple(cond, nodes);
+            }
+            Instruction::GenericLoop {
+                prepare,
+                body,
+                update,
+                cond,
+            } => {
+                self._collect_nodes_in_basic_block(prepare, nodes);
+                self._collect_nodes_in_basic_block(body, nodes);
+                self._collect_nodes_in_basic_block(update, nodes);
+                self._collect_nodes_in_simple(cond, nodes);
+            }
+            Instruction::If {
+                cond,
+                true_branch,
+                false_branch,
+            } => {
+                self._collect_nodes_in_simple(cond, nodes);
+                self._collect_nodes_in_basic_block(true_branch, nodes);
+                self._collect_nodes_in_basic_block(false_branch, nodes);
+            }
+            Instruction::Switch {
+                value,
+                default,
+                cases,
+            } => {
+                self._collect_nodes_in_simple(value, nodes);
+                self._collect_nodes_in_basic_block(default, nodes);
+                for case in cases.iter() {
+                    self._collect_nodes_in_basic_block(&case.block, nodes);
+                }
+            }
+            Instruction::AdScope { body, .. } => {
+                self._collect_nodes_in_basic_block(body, nodes);
+            }
+            Instruction::RayQuery {
+                ray_query,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                self._collect_nodes_in_simple(ray_query, nodes);
+                self._collect_nodes_in_basic_block(on_triangle_hit, nodes);
+                self._collect_nodes_in_basic_block(on_procedural_hit, nodes);
+            }
+            Instruction::Print { args, .. } => {
+                for arg in args.iter() {
+                    self._collect_nodes_in_simple(arg, nodes);
+                }
+            }
+            Instruction::AdDetach(body) => {
+                self._collect_nodes_in_basic_block(body, nodes);
+            }
+            Instruction::CoroRegister { value, .. } => {
+                self._collect_nodes_in_simple(value, nodes);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<'a> CoroFrameBuilder<'a> {
+    fn build(graph: &'a CoroGraph, transfer_graph: &'a CoroTransferGraph) -> CoroFrame<'a> {
+        let mut builder = CoroFrameBuilder {
+            graph,
+            transfer_graph,
+        };
+        let stable_node_indices = builder.compute_stable_node_indices();
+        CoroFrame::new(graph, transfer_graph, &stable_node_indices)
+    }
+}
+
+impl<'a> CoroFrame<'a> {
+    pub fn build(graph: &'a CoroGraph, transfer_graph: &'a CoroTransferGraph) -> CoroFrame<'a> {
+        CoroFrameBuilder::build(graph, transfer_graph)
     }
 }

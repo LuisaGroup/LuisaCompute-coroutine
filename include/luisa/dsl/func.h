@@ -563,10 +563,11 @@ public:
         auto builder = _sub_callables.find(index);
         LUISA_ASSERT(builder != _sub_callables.end(), "coroutine index out of range");
         return builder->second;
-    };
-    auto operator[](luisa::string &&index) const noexcept {
-        return (*this)[function_builder()->coro_tokens()[index]];
-    };
+    }
+    auto operator[](luisa::string_view index) const noexcept {
+        auto coro_token = function_builder()->coro_tokens().at(index);
+        return (*this)[coro_token];
+    }
 };
 namespace detail {
 

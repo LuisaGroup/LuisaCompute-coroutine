@@ -15,7 +15,12 @@ impl ReplayableValueAnalysis {
             return result;
         }
         let result = match node.get().instruction.as_ref() {
-            Instruction::Uniform => true,
+            Instruction::Uniform
+            | Instruction::Buffer
+            | Instruction::Bindless
+            | Instruction::Texture2D
+            | Instruction::Texture3D
+            | Instruction::Accel => true,
             Instruction::Argument { by_value } => {
                 *by_value || self.args.get(&node).unwrap_or(by_value).clone()
             }

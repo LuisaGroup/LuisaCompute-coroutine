@@ -229,6 +229,10 @@ impl Primitive {
             Primitive::Float64 => 8,
         }
     }
+
+    pub fn to_type(&self) -> CArc<Type> {
+        context::register_type(Type::Primitive(*self))
+    }
 }
 
 impl VectorType {
@@ -1805,7 +1809,7 @@ impl NodeRef {
     pub fn is_phi(&self) -> bool {
         self.get().instruction.is_phi()
     }
-    pub fn get<'a>(&'a self) -> &'a Node {
+    pub fn get(&self) -> &Node {
         assert!(self.valid());
         unsafe { &*(self.0 as *const Node) }
     }
@@ -2120,6 +2124,17 @@ impl NodeCollector {
                 for SwitchCase { value: _, block } in cases.as_ref().iter() {
                     self.visit_block(*block);
                 }
+            }
+            Instruction::AdDetach(body) => {
+                self.visit_block(*body);
+            }
+            Instruction::RayQuery {
+                ray_query: _,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                self.visit_block(*on_triangle_hit);
+                self.visit_block(*on_procedural_hit);
             }
             _ => {}
         }

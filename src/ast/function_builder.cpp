@@ -121,7 +121,8 @@ void FunctionBuilder::check_is_coroutine() noexcept {
 uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
     check_is_coroutine();
     uint token = _coro_tokens.size() + 1;
-    _coro_tokens.insert(std::make_pair(desc, token));
+    auto [_, success] = _coro_tokens.insert(std::make_pair(desc, token));
+    LUISA_ASSERT(success, "Duplicated suspend token '{}' description.", desc);
     _create_and_append_statement<SuspendStmt>(token);
     return token;
 }
@@ -246,7 +247,7 @@ inline const RefExpr *FunctionBuilder::_builtin(const Type *type, Variable::Tag 
     Variable v{type, tag, _next_variable_uid()};
     _builtin_variables.emplace_back(v);
     // for callables, builtin variables are treated like arguments
-    if (_tag == Function::Tag::CALLABLE || _tag == Function::Tag::COROUTINE) [[unlikely]] {
+    if (_tag == Function::Tag::CALLABLE) [[unlikely]] {
         _arguments.emplace_back(v);
         _bound_arguments.emplace_back();
     }

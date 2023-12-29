@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hasher;
-use std::process::exit;
 use sha2::digest::DynDigest;
 use crate::analysis::coro_frame_v4::{CoroFrameAnalyser, CoroFrameAnalysis};
 // use crate::analysis::coro_graph::CoroPreliminaryGraph;
@@ -13,6 +12,9 @@ use crate::display::DisplayIR;
 use crate::ir::{BasicBlock, CallableModule, CallableModuleRef, Capture, Const, Func, Instruction, INVALID_REF, IrBuilder, Module, ModuleFlags, ModuleKind, ModulePools, new_node, Node, NodeRef, PhiIncoming, Primitive, SwitchCase, Type};
 use crate::transform::Transform;
 
+use crate::analysis::coro_frame::CoroFrame;
+use crate::analysis::coro_transfer_graph::CoroTransferGraph;
+use crate::analysis::coro_use_def::CoroUseDefAnalysis;
 
 #[derive(Clone)]
 struct VisitState {
@@ -58,7 +60,6 @@ struct New2OldMap {
     blocks: HashMap<*const BasicBlock, *const BasicBlock>,
 }
 
-
 struct SplitManager {
     callable: CallableModule,
     graph: CoroGraph,
@@ -73,7 +74,11 @@ struct SplitManager {
 }
 
 impl SplitManager {
-    fn split(callable: CallableModule, graph: CoroGraph, frame_analyser: CoroFrameAnalyser) -> CallableModule {
+    fn split(
+        callable: CallableModule,
+        graph: CoroGraph,
+        frame_analyser: CoroFrameAnalyser,
+    ) -> CallableModule {
         let mut manager = Self {
             callable,
             graph,
@@ -786,14 +791,17 @@ impl SplitManager {
             binding: capture.binding.clone(),
         }
     }
-    fn duplicate_captures(&mut self, frame_token: u32, captures: &CBoxedSlice<Capture>) -> Vec<Capture> {
+    fn duplicate_captures(
+        &mut self,
+        frame_token: u32,
+        captures: &CBoxedSlice<Capture>,
+    ) -> Vec<Capture> {
         let dup_captures: Vec<Capture> = captures
             .iter()
             .map(|capture| self.duplicate_capture(frame_token, capture))
             .collect();
         dup_captures
     }
-
 
     fn record_node_mapping(&mut self, frame_token: u32, old: NodeRef, new: NodeRef) {
         let mut old_original = old;
@@ -838,6 +846,14 @@ impl Transform for SplitCoro {
         println!("SplitCoro::transform_module");
         let graph = CoroGraph::from(&callable.module);
         graph.dump();
+        let coro_use_def = CoroUseDefAnalysis::analyze(&graph);
+        coro_use_def.dump();
+        let transfer_graph = CoroTransferGraph::build(&graph, &coro_use_def);
+        transfer_graph.dump();
+        let coro_frame = CoroFrame::build(&graph, &transfer_graph);
+        println!("=============================== CoroFrame ===============================");
+        println!("{:#?}", coro_frame.interface_type.as_ref());
+        // TODO
         let frame_analyser = CoroFrameAnalysis::analyse(&graph, &callable);
         let coroutine_entry = SplitManager::split(callable, graph, frame_analyser);
 

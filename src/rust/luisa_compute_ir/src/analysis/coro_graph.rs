@@ -5,7 +5,8 @@
 // through all the reachable instructions until the next split mark is encountered.
 // Note: this analysis only works on a single module without recurse into its callees.
 
-use crate::ir::{BasicBlock, Func, Instruction, Module, NodeRef};
+use crate::ir::{collect_nodes, BasicBlock, Func, Instruction, Module, NodeRef};
+use crate::safe;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -255,7 +256,29 @@ impl CoroPreliminaryGraph {
         known.insert(*instr_ref, result);
     }
 
+    fn check_no_duplicate_suspend_tokens(module: &Module) {
+        let nodes = collect_nodes(module.entry);
+        let mut suspend_tokens: Vec<_> = nodes
+            .iter()
+            .filter_map(|node| {
+                if let Instruction::CoroSplitMark { token } = node.get().instruction.as_ref() {
+                    Some(*token)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        suspend_tokens.sort();
+        let size_before = suspend_tokens.len();
+        suspend_tokens.dedup();
+        let size_after = suspend_tokens.len();
+        assert_eq!(size_before, size_after, "Duplicate suspend tokens.");
+    }
+
     fn from(module: &Module) -> Self {
+        // make sure that the input module is valid
+        Self::check_no_duplicate_suspend_tokens(module);
+        // start the translation
         let mut instructions = Vec::new();
         let mut node_to_instr = HashMap::new();
         let mut entry_scope =
@@ -292,10 +315,10 @@ impl CoroPreliminaryGraph {
 // This struct is the final coroutine graph after splitting the coroutine scopes.
 #[derive(Debug)]
 pub(crate) struct CoroGraph {
-    pub scopes: Vec<CoroScope>,              // all the scopes in the graph
-    pub entry: CoroScopeRef,                 // the index of the entry scope (the root scope)
+    pub scopes: Vec<CoroScope>, // all the scopes in the graph including the root scope
+    pub entry: CoroScopeRef,    // the index of the entry scope (the root scope)
     pub tokens: BTreeMap<u32, CoroScopeRef>, // map from split mark token to scope index
-    pub instructions: Vec<CoroInstruction>,  // all the instructions in the graph
+    pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
 }
 
 // Method:
@@ -905,7 +928,7 @@ impl CoroGraph {
 
     fn remove_unreachable_from_instructions(graph: &mut CoroGraph, instr: CoroInstrRef) -> bool /* whether the block is terminated */
     {
-        unsafe {
+        safe! {
             // Sorry, Rust, but this is really safe.
             let p_graph = &mut *(graph as *mut CoroGraph);
             match p_graph.instr_mut(instr) {
@@ -1195,7 +1218,11 @@ impl CoroGraph {
                 }
                 _ => {
                     print_indent!(indent);
-                    println!("${} = Simple({:?})", instr_ref.0, node);
+                    if node.type_().is_void() {
+                        println!("Simple({:?})", node);
+                    } else {
+                        println!("${} = Simple({:?})", instr_ref.0, node);
+                    }
                 }
             },
             CoroInstruction::ConditionStackReplay { items } => {
@@ -1289,11 +1316,11 @@ impl CoroGraph {
         let preliminary_graph = CoroPreliminaryGraph::from(module);
         Self::build(preliminary_graph)
     }
-    
+
     pub fn get_scope(&self, scope: CoroScopeRef) -> &CoroScope {
         &self.scopes[scope.0]
     }
-    
+
     pub fn get_instr(&self, instr: CoroInstrRef) -> &CoroInstruction {
         &self.instructions[instr.0]
     }

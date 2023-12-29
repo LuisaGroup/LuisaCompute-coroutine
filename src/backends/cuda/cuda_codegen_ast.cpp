@@ -1433,7 +1433,9 @@ void CUDACodegenAST::_emit_function(Function f) noexcept {
     _emit_variable_declarations(f);
     _indent = 0;
     _emit_statements(f.body()->statements());
-    _scratch << "}\n\n";
+    _scratch << "}\n"
+             << "/* end custom_" << hash_to_string(f.hash()) << " */"
+             << "\n\n";
 
     if (_allow_indirect_dispatch) {
         // generate meta-function that launches the kernel with dynamic parallelism

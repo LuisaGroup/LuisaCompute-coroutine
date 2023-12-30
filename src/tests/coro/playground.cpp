@@ -19,15 +19,21 @@ int main(int argc, char *argv[]) {
     Stream stream = device.create_stream();
 
     Coroutine coro = [&](Var<CoroFrame> &frame) noexcept {
-        auto x = def(0);
+        auto x = def(0u);
         $loop {
-            $if (x == 5) { $break; };
             $suspend("bad");
-            // $comment("bad");
-            $if (x == 5) {
-                device_log("token = {}, x = {}", coro_token(), x);
+            $if (x == 5u) { $break; };
+            $switch (x) {
+                for (auto i = 0u; i < 5u; i++) {
+                    $case (i) {
+                        device_log("x = {}", x);
+                    };
+                }
+                $default {
+                    unreachable();
+                };
             };
-            x = 5;
+            x += 1u;
         };
     };
 

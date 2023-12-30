@@ -318,15 +318,19 @@ impl<'a> CoroScopeMaterializer<'a> {
     }
 
     fn try_replay(&self, old_node: NodeRef, ctx: &mut CoroScopeMaterializerCtx) -> Option<NodeRef> {
-        if !ctx.replayable.detect(old_node) {
-            None
-        } else if let Some(defined) = ctx.mappings.get(&old_node) {
-            // if already defined, simply return it
-            Some(defined.clone())
+        if old_node.is_unreachable() {
+            ctx.mappings.get(&old_node).cloned()
         } else {
-            let replayed = self.replay_value(old_node, ctx);
-            ctx.mappings.insert(old_node, replayed.clone());
-            Some(replayed)
+            if !ctx.replayable.detect(old_node) {
+                None
+            } else if let Some(defined) = ctx.mappings.get(&old_node) {
+                // if already defined, simply return it
+                Some(defined.clone())
+            } else {
+                let replayed = self.replay_value(old_node, ctx);
+                ctx.mappings.insert(old_node, replayed.clone());
+                Some(replayed)
+            }
         }
     }
 
@@ -425,11 +429,20 @@ impl<'a> CoroScopeMaterializer<'a> {
                 );
                 process_return!(call)
             }
+            // replayable but need special handling
+            Func::Unreachable(_) => {
+                let call = state.builder.call(func.clone(), &[], ret.type_().clone());
+                match call.type_().as_ref() {
+                    Type::Void => {}
+                    _ => {
+                        ctx.mappings.insert(ret, call);
+                    }
+                }
+            }
             // always replayable functions, should not appear here
             Func::CoroId
             | Func::CoroToken
             | Func::ZeroInitializer
-            | Func::Unreachable(_)
             | Func::ThreadId
             | Func::BlockId
             | Func::WarpSize
@@ -703,7 +716,7 @@ impl<'a> CoroScopeMaterializer<'a> {
         ctx: &mut CoroScopeMaterializerCtx,
         state: &mut CoroScopeMaterializerState,
     ) {
-        if ctx.replayable.detect(node) {
+        if ctx.replayable.detect(node) && !node.is_unreachable() {
             self.replay_value(node.clone(), ctx);
             return;
         }

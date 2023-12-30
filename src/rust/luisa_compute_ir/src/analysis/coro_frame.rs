@@ -11,19 +11,16 @@
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transfer_graph::CoroTransferGraph;
-use crate::analysis::utility::{AccessChainIndex, AccessTree, AccessTreeNodeRef};
-use crate::ir::{
-    BasicBlock, Const, Func, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF,
-};
+use crate::analysis::utility::{AccessChainIndex, AccessTreeNodeRef};
+use crate::ir::{BasicBlock, Const, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF};
 use crate::{CArc, CBoxedSlice, TypeOf};
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::format;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CoroFrameField {
-    type_: Primitive,
-    root: NodeRef,
-    chain: Vec<usize>,
+    pub type_: Primitive,
+    pub root: NodeRef,
+    pub chain: Vec<usize>,
 }
 
 #[derive(Clone)]

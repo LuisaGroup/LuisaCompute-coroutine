@@ -15,6 +15,7 @@
 #include <luisa/dsl/resource.h>
 #include <luisa/core/stl/unordered_map.h>
 #include <luisa/dsl/stmt.h>
+#include <luisa/coro/coro_graph.h>
 
 namespace luisa::compute {
 
@@ -150,7 +151,7 @@ class FunctionBuilder;
 transform_function(Function callable) noexcept;
 
 [[nodiscard]] LC_DSL_API luisa::shared_ptr<const FunctionBuilder>
-transform_coroutine(Type *corotype, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function callable) noexcept;
+transform_coroutine(Type *corotype, coro::CoroGraph &graph, luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders, Function callable) noexcept;
 
 }// namespace detail
 
@@ -502,12 +503,12 @@ private:
     luisa::unordered_map<CoroID, Callable<void(FrameType, Args...)>> _sub_callables;
     uint _uniform_size;
     luisa::unordered_map<luisa::string, uint> _coro_tokens;
-
+    coro::CoroGraph _coro_graph;
 public:
     template<typename Def>
         requires std::negation_v<is_callable<std::remove_cvref_t<Def>>> &&
                  std::negation_v<is_kernel<std::remove_cvref_t<Def>>>
-    Coroutine(Def &&f) noexcept {
+    Coroutine(Def &&f) noexcept : _coro_graph{0, Type::of<expr_value_t<FrameType>>()} {
         auto ast = detail::FunctionBuilder::define_coroutine([&f] {
             static_assert(std::is_invocable_v<Def, detail::prototype_to_creation_t<FrameType>, detail::prototype_to_creation_t<Args>...>);
             auto create = []<size_t... i>(auto &&def, std::index_sequence<i...>) noexcept {
@@ -529,7 +530,7 @@ public:
         _coro_tokens = ast->coro_tokens();
         Type *frame = const_cast<Type *>(Type::of<expr_value_t<FrameType>>());
         auto sub_builder = luisa::unordered_map<uint, luisa::shared_ptr<const detail::FunctionBuilder>>{};
-        _builder = detail::transform_coroutine(frame, sub_builder, ast->function());
+        _builder = detail::transform_coroutine(frame, _coro_graph, sub_builder, ast->function());
         _sub_callables.clear();
         _uniform_size = ShaderDispatchCmdEncoder::compute_uniform_size(_builder->function().unbound_arguments());
         for (auto v : sub_builder) {
@@ -543,6 +544,7 @@ public:
     [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
     [[nodiscard]] auto const suspend_count() noexcept { return _coro_tokens.size(); }
     [[nodiscard]] auto const coro_tokens() noexcept { return _coro_tokens; }
+    [[nodiscard]] auto const &graph() noexcept { return _coro_graph; }
     //Call from start of coroutine
     auto operator()(detail::prototype_to_callable_invocation_t<FrameType> type,
                     detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {

@@ -7,10 +7,10 @@
 
 namespace luisa::compute::inline coro {
 
-class LC_CORO_API CoroGraph : public concepts::Noncopyable {
+class LC_CORO_API CoroGraph {
 
 private:
-    luisa::unordered_map<uint /* token */, luisa::unique_ptr<CoroNode>> _nodes;
+    luisa::unordered_map<uint /* token */, CoroNode> _nodes;
     uint _entry;
     const Type *_state_type;
     luisa::unordered_map<luisa::string, uint> _designated_state_members;

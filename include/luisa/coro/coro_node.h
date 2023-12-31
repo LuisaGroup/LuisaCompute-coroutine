@@ -8,7 +8,7 @@ namespace luisa::compute::inline coro {
 
 class CoroGraph;
 
-class LC_CORO_API CoroNode : public concepts::Noncopyable {
+class LC_CORO_API CoroNode {
 
     friend class CoroGraph;
 
@@ -18,19 +18,17 @@ public:
 private:
     const CoroGraph *_graph;
     Func _function;
-    luisa::vector<CoroTransition> _transitions;
 
 protected:
     CoroNode(const CoroGraph *graph, Func function) noexcept;
 
 public:
-    // for construction only
-    void add_transition(CoroTransition transition) noexcept;
+    luisa::vector<uint> input_state_members;
+    luisa::vector<uint> output_state_members;
 
 public:
     [[nodiscard]] auto graph() const noexcept { return _graph; }
     [[nodiscard]] auto function() const noexcept { return _function->function(); }
-    [[nodiscard]] auto transitions() const noexcept { return luisa::span{_transitions}; }
 };
 
 }// namespace luisa::compute::inline coro

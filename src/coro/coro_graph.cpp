@@ -11,14 +11,14 @@ const CoroNode *CoroGraph::node(uint token) const noexcept {
     auto iter = _nodes.find(token);
     LUISA_ASSERT(iter != _nodes.cend(),
                  "Coroutine node (token = {}) not found.", token);
-    return iter->second.get();
+    return &(iter->second);
 }
 
 CoroNode *CoroGraph::add_node(uint token, CoroNode::Func f) noexcept {
-    auto node = luisa::make_unique<CoroNode>(CoroNode{this, std::move(f)});
+    auto node = CoroNode{this, std::move(f)};
     auto [iter, success] = _nodes.emplace(token, std::move(node));
     LUISA_ASSERT(success, "Coroutine node (token = {}) already exists.", token);
-    return iter->second.get();
+    return &(iter->second);
 }
 
 uint CoroGraph::designated_state_member(luisa::string_view name) const noexcept {

@@ -4,20 +4,10 @@
 /// https://arxiv.org/abs/2206.01784
 #include <luisa/luisa-compute.h>
 #include <luisa/coro/coro_dispatcher.h>
+#include <luisa/coro/radix_sort.h>
 using namespace luisa;
 using namespace luisa::compute;
 
-const uint BIT = 7;
-const uint DIGIT = 1 << BIT;
-const uint HIST_BLOCK_SIZE = 128;
-const uint SM_COUNT = 256;
-const uint ONESWEEP_BLOCK_SIZE = 256;
-const uint ONESWEEP_ITEM_COUNT = 32;
-const uint WARP_LOG = 5;
-const uint WARP_SIZE = 1 << WARP_LOG;
-const uint WARP_MASK = WARP_SIZE - 1;
-const uint ALL_MASK = 0xffff'ffff;
-static_assert(ONESWEEP_BLOCK_SIZE % WARP_SIZE == 0);
 Buffer<uint> hist_buffer;
 Buffer<uint> bin_buffer;
 Buffer<uint> launch_count;
@@ -30,6 +20,7 @@ Buffer<uint> guard;
 const uint BIN_LOCAL_MASK = 0x4000'0000;
 const uint BIN_GLOBAL_MASK = 0x8000'0000;
 const uint BIN_VAL_MASK = 0x3fff'ffff;
+const uint BIN = 6;
 inline uint ceil_div(uint x, uint y) {
     return (x + y - 1) / y;
 }
@@ -49,16 +40,19 @@ int main(int argc, char *argv[]) {
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = luisa::vector<uint>(n, 0u);
     auto x_rank = luisa::vector<uint>(n, 0u);
-    auto x_bin = luisa::vector<uint>(DIGIT, 0u);
+    auto x_order = luisa::vector<uint>(n, 0u);
+    auto x_kv = luisa::vector<std::pair<uint, uint>>(n);
     for (int i = 0; i < n; ++i) {
-        auto val = rand();
+        auto val = rand() % BIN;
         x_vec[i] = val;
         x_rank[i] = -1;
+        x_kv[i] = std::make_pair(val, i);
         //LUISA_INFO("x[{}]:{}",i,val);
     }
     stream << x_buffer.copy_from(x_vec.data());
     stream << synchronize();
-    eastl::sort(x_vec.begin(), x_vec.end());
+    eastl::sort(x_kv.begin(), x_kv.end());
+    /*
     auto low_bit = 0u;
     auto high_bit = 31;
     for (int i = low_bit; i <= high_bit; i += BIT) {
@@ -68,6 +62,7 @@ int main(int argc, char *argv[]) {
     hist_buffer = device.create_buffer<uint>(HIST_GROUP * DIGIT);
     launch_count = device.create_buffer<uint>(1u);
     bin_buffer = device.create_buffer<uint>(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
+     */
     rank = device.create_buffer<uint>(n);
     key_out = device.create_buffer<uint>(n);
     guard = device.create_buffer<uint>(n);
@@ -264,16 +259,18 @@ int main(int argc, char *argv[]) {
     Callable id = [&](UInt index) {
         return index;
     };
-    auto sort_instance = radix_sort(device, n, &get_x, &id);
+    auto _sort_temp_storage = radix_sort::temp_storage(device, n, 128u);
+
+    auto sort_instance = radix_sort{device, n, _sort_temp_storage, &get_x, &id, &get_x, 1, BIN};
     Clock clock;
     stream << synchronize();
     clock.tic();
-    for (int i = 0; i < test_case; ++i) {
+    for (int i = 0; i < 1; ++i) {
         sort_instance.sort(stream, order_in, rank, key_out, order_out, n);
     }
     auto gpu_time = clock.toc();
-    LUISA_INFO("sort total {} token for {} times with bit [{},{}] used {} ms. Performance: {} G token/s", n, test_case, low_bit, high_bit, gpu_time, (double)n * test_case / gpu_time * 1000 / 1024 / 1024 / 1024);
     stream << key_out.copy_to(x_rank.data());
+    stream << order_out.copy_to(x_order.data());
     stream << synchronize();
     int pre = 0;
     /*
@@ -287,7 +284,8 @@ printf("%u ",x_vec[i]);
     printf("\n");
     */
     for (int i = 0; i < n; ++i) {
-        LUISA_ASSERT(x_rank[i] == x_vec[i], "not same as eastl::sort! at {},std:{},our:{}", i, x_vec[i], x_rank[i]);
+        LUISA_ASSERT(x_rank[i] == x_kv[i].first, "not same as eastl::sort! at {},std:{},our:{}", i, x_kv[i].first, x_rank[i]);
+        LUISA_ASSERT(x_order[i] == x_kv[i].second, "not same as eastl::sort! at {},std:{},our:{}", i, x_kv[i].second, x_order[i]);
         LUISA_ASSERT(pre <= x_rank[i], "sort failed at:{},pre:{},cur:{}", i, pre, x_rank[i]);
         pre = x_rank[i];
     }

@@ -446,7 +446,28 @@ struct luisa_compute_extension {};
             }                                                                                                        \
             return Var<S>{ret};                                                                                      \
         }                                                                                                            \
-                                                                                                                     \
+        template<typename I>                                                                                         \
+        [[nodiscard]] auto read(I &&index, luisa::vector<uint> members) const noexcept {                             \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            auto ret = builder->local(Type::of<S>());                                                                \
+            auto member_index = 0u;                                                                                  \
+            for (auto r_mem = 0u; r_mem < members.size(); ++r_mem) {                                                 \
+                auto i = members[r_mem];                                                                             \
+                auto &mem = type->members()[i];                                                                      \
+                uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                                    \
+                auto id = dsl::def(std::forward<I>(index));                                                          \
+                auto data = builder->call(                                                                           \
+                    mem, CallOp::BYTE_BUFFER_READ,                                                                   \
+                    {_buffer.expression(),                                                                           \
+                     detail::extract_expression((_member_offsets[i] +                                                \
+                                                 (id + _element_offset) * stride) *                                  \
+                                                (uint)sizeof(uint))});                                               \
+                builder->assign(builder->member(mem, ret, i), data);                                                 \
+                member_index += mem->size();                                                                         \
+            }                                                                                                        \
+            return Var<S>{ret};                                                                                      \
+        }                                                                                                            \
         template<typename I>                                                                                         \
         void write(I &&index, Expr<S> value) const noexcept {                                                        \
             auto builder = detail::FunctionBuilder::current();                                                       \
@@ -549,7 +570,8 @@ struct luisa_compute_extension {};
     private:                                                                                                         \
         SOA(ByteBuffer buffer, size_t size) noexcept                                                                 \
             : _buffer{std::move(buffer)},                                                                            \
-              SOAView<S>{&buffer, 0u, size, 0u, size} {                                                              \
+              SOAView<S> { &buffer, 0u, size, 0u, size }                                                             \
+        {                                                                                                            \
             this->_bufferview = &_buffer;                                                                            \
         }                                                                                                            \
                                                                                                                      \

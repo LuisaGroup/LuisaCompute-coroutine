@@ -30,7 +30,8 @@ public:
         Buffer<uint> launch_count;
         Buffer<uint> hist_buffer;
         temp_storage(Device device, uint maxn, uint max_digit) noexcept
-            : bin_buffer{device.create_buffer<uint>(ceil_div(maxn, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * max_digit)},
+            : bin_buffer{device.create_buffer<uint>(
+                  ceil_div(maxn, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * max_digit)},
               launch_count{device.create_buffer<uint>(1u)},
               hist_buffer{device.create_buffer<uint>(32 * max_digit)} {}
         temp_storage() noexcept = default;
@@ -50,10 +51,14 @@ private:
     luisa::vector<uint> bit_split;
     Shader1D<Buffer<uint> /*hist_buffer*/, uint /*item_count*/, uint /*n*/> hist_shader;
     Shader1D<Buffer<uint> /*hist_buffer*/> accum_shader;
-    Shader1D<Buffer<uint>, Buffer<uint> /*key_out*/, Buffer<uint>, Buffer<uint> /*val_out*/, Buffer<uint> /*launch_counter*/, Buffer<uint> /*hist_buffer*/,
+    Shader1D<Buffer<uint>, Buffer<uint> /*key_out*/,
+             Buffer<uint>, Buffer<uint> /*val_out*/,
+             Buffer<uint> /*launch_counter*/, Buffer<uint> /*hist_buffer*/,
              Buffer<uint> /*bin*/, uint /*low_bit*/, uint /*n*/>
         onesweep_first_shader;
-    Shader1D<Buffer<uint> /*key_in*/, Buffer<uint> /*key_out*/, Buffer<uint> /*val_in*/, Buffer<uint> /*val_out*/, Buffer<uint> /*launch_counter*/, Buffer<uint> /*hist_buffer*/,
+    Shader1D<Buffer<uint> /*key_in*/, Buffer<uint> /*key_out*/,
+             Buffer<uint> /*val_in*/, Buffer<uint> /*val_out*/,
+             Buffer<uint> /*launch_counter*/, Buffer<uint> /*hist_buffer*/,
              Buffer<uint> /*bin*/, uint /*low_bit*/, uint /*n*/>
         onesweep_shader;
     Shader1D<Buffer<uint> /*v*/> clear_shader;
@@ -79,7 +84,8 @@ public:
     ///@param low_bit: lowest bit of radix sort, will use bit in [low_bit,high_bit]
     ///@param high_bit: highest bit of radix sort
     radix_sort(Device device, uint maxn, temp_storage &temp,
-               Callable<uint(uint)> *get_key, Callable<uint(uint)> *get_val, Callable<uint(uint)> *get_key_set = nullptr,
+               Callable<uint(uint)> *get_key, Callable<uint(uint)> *get_val,
+               Callable<uint(uint)> *get_key_set = nullptr,
                uint mode = 0, uint digit = 128, uint low_bit = 0, uint high_bit = 31) noexcept
         : DIGIT{digit}, low_bit{low_bit}, high_bit{high_bit}, MAXN{maxn}, _temp{temp} {
         LUISA_ASSERT(mode == 0 || mode == 1, "mode should be 0 for radix sort and 1 for bucket sort!");
@@ -141,8 +147,10 @@ public:
         ExternalCallable<void()> thread_fence{"([] { __threadfence(); })"};
         ExternalCallable<uint(uint)> match_any{"([](unsigned int x) { return __match_any_sync(0xffff'ffff,x); })"};
         uint ONESWEEP_TOT_BLOCK = ceil_div(MAXN, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT);
-        bool is_first = 1;
-        auto onesweep_base = [&](BufferUInt key_in, BufferUInt key_out, BufferUInt val_in, BufferUInt val_out, BufferUInt launch_counter, BufferUInt hist_buffer,
+        bool is_first = true;
+        auto onesweep_base = [&](BufferUInt key_in, BufferUInt key_out,
+                                 BufferUInt val_in, BufferUInt val_out,
+                                 BufferUInt launch_counter, BufferUInt hist_buffer,
                                  BufferUInt bin, UInt low_bit, UInt n) {
             /// break_up:
             /// block(0,(warp(id=0,item=0)(0, 1, 2, ..., WARP_SIZE) warp(0,1) warp(0,2) ... | warp(1,0) ...| warp(2,0) ... | ...) block(1) block(2) ...
@@ -279,12 +287,14 @@ public:
         if (thread_count >= n) {
             stream << hist_shader(_temp.hist_buffer, 1, n).dispatch(ceil_div(n, HIST_BLOCK_SIZE) * HIST_BLOCK_SIZE);
         } else {
-            stream << hist_shader(_temp.hist_buffer, ceil_div(n, SM_COUNT * HIST_BLOCK_SIZE), n).dispatch(SM_COUNT * HIST_BLOCK_SIZE);
+            stream << hist_shader(_temp.hist_buffer, ceil_div(n, SM_COUNT * HIST_BLOCK_SIZE), n)
+                          .dispatch(SM_COUNT * HIST_BLOCK_SIZE);
         }
         stream << accum_shader(_temp.hist_buffer).dispatch(HIST_GROUP * 32);
     }
     ///standard sort, output to a certain array
-    void sort(Stream &stream, BufferView<uint> temp_key, BufferView<uint> temp_val, BufferView<uint> key_out, BufferView<uint> val_out, uint n) {
+    void sort(Stream &stream, BufferView<uint> temp_key, BufferView<uint> temp_val,
+              BufferView<uint> key_out, BufferView<uint> val_out, uint n) {
         LUISA_ASSERT(n <= MAXN, "array size too large");
         build_histogram(stream, n);
         BufferView<uint> keys[2] = {temp_key, key_out};
@@ -294,9 +304,11 @@ public:
             stream << clear_shader(_temp.launch_count).dispatch(1u);
             stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
             if (i == 0) {
+                //stream << synchronize();
                 stream << onesweep_first_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                                 _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
                               .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
+                //stream << synchronize();
             } else {
                 stream << onesweep_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                           _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)

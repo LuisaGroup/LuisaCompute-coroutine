@@ -132,7 +132,6 @@ int main(int argc, char *argv[]) {
             seed_image.write(coord, make_uint4(tea(coord.x, coord.y)));
             accum_image.write(coord, make_float4(make_float3(0.0f), 1.0f));
         };
-        $suspend("1");
 
         Float aspect_ratio = resolution.x / resolution.y;
         Float3 pos = def(camera_pos);
@@ -154,10 +153,18 @@ int main(int argc, char *argv[]) {
             next_hit(closest, normal, c, pos, d);
             Float dist_to_light = intersect_light(pos, d);
             $if (dist_to_light < closest) {
+                $if (depth == 0) {
+                    device_log("xxxxxcoord {} {}", coord.x, coord.y);
+                };
                 hit_light = 1.0f;
                 $break;
             };
-            $if (length_squared(normal) == 0.0f) { $break; };
+            $if (length_squared(normal) == 0.0f) {
+                $if (depth == 0) {
+                    device_log("coord {} {}", coord.x, coord.y);
+                };
+                $break;
+            };
             Float3 hit_pos = pos + closest * d;
             d = out_dir(normal, seed);
             pos = hit_pos + 1e-4f * d;
@@ -206,8 +213,8 @@ int main(int argc, char *argv[]) {
 
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
     //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
-    //coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y / 3, {}, false};
-    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 256u, 2u, false};
+    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
+    //coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 256u, 2u, false};
     stream << clear_shader().dispatch(resolution)
            << synchronize();
     /*for (auto i = 0u; i < 100u; i++) {

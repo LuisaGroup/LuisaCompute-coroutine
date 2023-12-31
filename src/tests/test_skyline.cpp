@@ -8,9 +8,13 @@
 #include <luisa/dsl/syntax.h>
 #include <luisa/gui/window.h>
 #include <luisa/dsl/sugar.h>
+#include <luisa/coro/coro_dispatcher.h>
 using namespace luisa;
 using namespace luisa::compute;
-
+struct alignas(4) Skyline {
+};
+const bool SHOW = false;
+LUISA_COROFRAME_STRUCT(Skyline){};
 int main(int argc, char *argv[]) {
 
     Context context{argv[0]};
@@ -27,18 +31,19 @@ int main(int argc, char *argv[]) {
     using vec3 = Float3;
     using vec2 = Float2;
     using vec4 = Float4;
-    Callable RayTrace = [&](Float2 fragCoord, Float localTime) {
-        Float seed = 1.0;
+    bool is_coroutine = false;
+    auto RayTrace = [&](Float2 fragCoord, Float localTime) {
+        Float seed = 1.0f;
 
         // Animation variables
         Float fade = 1.0f;
         vec3 sunDir;
         vec3 sunCol;
-        Float exposure = 1.0;
+        Float exposure = 1.0f;
         vec3 skyCol, horizonCol;
 
         // other
-        float marchCount = 0.0;
+        float marchCount = 0.0f;
 
         // ---- noise functions ----
         Callable v31 = [](vec3 a) {
@@ -141,7 +146,7 @@ int main(int argc, char *argv[]) {
             vec3 finalColor = GetEnvMap(rayDir, sunDir);
 
             // Make a skyscraper skyline reflection.
-            auto radial = atan2(rayDir.z, rayDir.x) * 4.0f;
+            Float radial = atan2(rayDir.z, rayDir.x) * 4.0f;
             auto skyline = floor((sin(5.3456f * radial) + sin(1.234f * radial) + sin(2.177f * radial)) * 0.6f);
             radial *= 4.0f;
             skyline += floor((sin(5.0f * radial) + sin(1.234f * radial) + sin(2.177f * radial)) * 0.6f) * 0.1f;
@@ -198,7 +203,7 @@ int main(int argc, char *argv[]) {
             wMirror.z = abs(wMirror.z) - 0.02f;
             Float wheels = cylCap((wMirror).zyx(), 0.004f, 0.0135f);
             // Set materials
-            vec2 distAndMat = vec2(wheels, 3.0);// car wheels
+            vec2 distAndMat = make_float2(wheels, 3.0f);// car wheels
             // Car material is some big number that's unique to each car
             // so I can have each car be a different color
             distAndMat = matmin(distAndMat, vec2(car, 100000.0f + unique));// car
@@ -206,7 +211,7 @@ int main(int argc, char *argv[]) {
         };
 
         // How much space between voxel borders and geometry for voxel ray march optimization
-        float voxelPad = 0.2;
+        float voxelPad = 0.2f;
         // p should be in [0..1] range on xz plane
         // pint is an integer pair saying which city block you are on
         Callable CityBlock = [&](vec3 p, vec2 pint) {
@@ -277,9 +282,9 @@ int main(int argc, char *argv[]) {
             //d = max(d, p.y);  // flatten the city for debugging cars
 
             // Need to make a material variable.
-            vec2 distAndMat = vec2(d, 0.0);
+            vec2 distAndMat = make_float2(d, 0.0f);
             // sidewalk box with material
-            distAndMat = matmin(distAndMat, vec2(sdBox(baseCenter, make_float3(0.35, 0.005, 0.35)), 1.0));
+            distAndMat = matmin(distAndMat, make_float2(sdBox(baseCenter, make_float3(0.35, 0.005, 0.35)), 1.0f));
 
             return distAndMat;
         };
@@ -300,7 +305,7 @@ int main(int argc, char *argv[]) {
             vec3 p2 = p;
             rep = p2;
             Float carTime = localTime * 0.2f;// Speed of car driving
-            Float crossStreet = 1.0;         // whether we are north/south or east/west
+            Float crossStreet = 1.0f;        // whether we are north/south or east/west
             Float repeatDist = 0.25;         // Car density bumper to bumper
             // If we are going north/south instead of east/west (?) make cars that are
             // stopped in the street so we don't have collisions.
@@ -341,14 +346,14 @@ int main(int argc, char *argv[]) {
             vec3 hue = make_float3(Hash21(block) * 0.8f, Hash21(block * 7.89f) * 0.4f, Hash21(block * 37.89f) * 0.5f);
             texColor += hue * 0.4f;
             texColor *= 0.75f;
-            Float window = 0.0;
+            Float window = 0.0f;
             window = max(window, mix(0.2f, 1.0f, floor(fract(pos.y * 20.0f - 0.35f) * 2.0f + 0.1f)));
             $if (pos.y < 0.05f) {
-                window = 1.0;
+                window = 1.0f;
             };
             Float winWidth = Hash21(block * 4.321f) * 2.0f;
             $if ((winWidth < 1.3f) & (winWidth >= 1.0f)) {
-                winWidth = 1.3;
+                winWidth = 1.3f;
             };
             window = max(window, mix(0.2f, 1.0f, floor(fract(pos.x * 40.0f + 0.05f) * winWidth)));
             window = max(window, mix(0.2f, 1.0f, floor(fract(pos.z * 40.0f + 0.05f) * winWidth)));
@@ -368,12 +373,12 @@ int main(int argc, char *argv[]) {
 
         // Input is UV coordinate of pixel to render.
         // Output is RGB color.
-        marchCount = 0.0;
+        marchCount = 0.0f;
         // -------------------------------- animate ---------------------------------------
-        sunCol = make_float3(258.0, 248.0, 200.0) / 3555.0f;
-        sunDir = normalize(make_float3(0.93, 1.0, 1.0));
-        horizonCol = make_float3(1.0, 0.95, 0.85) * 0.9f;
-        skyCol = make_float3(0.3, 0.5, 0.95);
+        sunCol = make_float3(258.0f, 248.0f, 200.0f) / 3555.0f;
+        sunDir = normalize(make_float3(0.93f, 1.0f, 1.0f));
+        horizonCol = make_float3(1.0f, 0.95f, 0.85f) * 0.9f;
+        skyCol = make_float3(0.3f, 0.5f, 0.95f);
         exposure = def<float>(1.0f);
 
         vec3 camPos, camUp, camLookat;
@@ -405,8 +410,8 @@ int main(int argc, char *argv[]) {
             auto alpha = time / (t1 - t0);
             fade = saturate(time);
             fade *= saturate(t1 - localTime);
-            camPos = make_float3(13.0, 3.3, -3.5);
-            camPos.x -= smoothstep(0.0, 1.0, alpha) * 4.8f;
+            camPos = make_float3(13.0f, 3.3f, -3.5f);
+            camPos.x -= smoothstep(0.0f, 1.0f, alpha) * 4.8f;
             camUp = make_float3(0, 1, 0);
             camLookat = make_float3(0, 1.5, 1.5);
         }
@@ -463,15 +468,15 @@ int main(int argc, char *argv[]) {
                             sunCol = make_float3(258.0, 148.0, 60.0) / 3555.0f;
                             localTime *= 16.0f;
                             exposure *= 0.4f;
-                            horizonCol = make_float3(1.0, 0.5, 0.35) * 2.0f;
-                            skyCol = make_float3(0.75, 0.5, 0.95);
+                            horizonCol = make_float3(1.0f, 0.5f, 0.35f) * 2.0f;
+                            skyCol = make_float3(0.75f, 0.5f, 0.95f);
                         }
                         $else {
                             $if (localTime < t6) {
-                                fade = 0.0;
-                                camPos = make_float3(26.0, 100.0, 2.0);
+                                fade = 0.0f;
+                                camPos = make_float3(26.0f, 100.0f, 2.0f);
                                 camUp = make_float3(0, 1, 0);
-                                camLookat = make_float3(0.3, 0.15, 0.0);
+                                camLookat = make_float3(0.3f, 0.15f, 0.0f);
                             };
                         };
                     };
@@ -488,15 +493,16 @@ int main(int argc, char *argv[]) {
         vec3 rayVec = normalize(worldPix - camPos);
 
         // ----------------------------- Ray march the scene ------------------------------
-        vec2 distAndMat;            // Distance and material
-        Float t = 0.05;             // + Hash2d(uv)*0.1;	// random dither-fade things close to the camera
-        const float maxDepth = 45.0;// farthest distance rays will travel
-        vec3 pos = make_float3(0.0);
+        vec2 distAndMat;             // Distance and material
+        Float t = 0.05f;             // + Hash2d(uv)*0.1;	// random dither-fade things close to the camera
+        const float maxDepth = 45.0f;// farthest distance rays will travel
+        vec3 pos = make_float3(0.0f);
         const float smallVal = 0.00000625;
         // ray marching time
         $for (i, 0, 500)// This is the count of the max times the ray actually marches.
         {
-            marchCount += 1.0;
+            //if (is_coroutine) $suspend("ray_march");
+            marchCount += 1.0f;
             // Step along the ray.
             pos = (camPos + rayVec * t);
             // This is _the_ function that defines the "distance field".
@@ -533,16 +539,15 @@ int main(int argc, char *argv[]) {
                 $break;
             };
         };
-
         // Ray trace a ground plane to infinity
         auto alpha = -camPos.y / rayVec.y;
         $if ((t > maxDepth) & (rayVec.y < -0.0f)) {
             pos.x = camPos.x + rayVec.x * alpha;
             pos.z = camPos.z + rayVec.z * alpha;
-            pos.y = -0.0;
+            pos.y = -0.0f;
             t = alpha;
-            distAndMat.y = 0.0;
-            distAndMat.x = 0.0;
+            distAndMat.y = 0.0f;
+            distAndMat.x = 0.0f;
         };
         // --------------------------------------------------------------------------------
         // Now that we have done our ray marching, let's put some color on this geometry.
@@ -550,6 +555,7 @@ int main(int argc, char *argv[]) {
 
         // If a ray actually hit the object, let's light it.
         $if ((t <= maxDepth) | (t == alpha)) {
+            if (is_coroutine) $suspend("hit_object");
             auto dist = distAndMat.x;
             // calculate the normal from the distance field. The distance field is a volume, so if you
             // sample the current point and neighboring points, you can use the difference to get
@@ -580,10 +586,11 @@ int main(int argc, char *argv[]) {
             vec3 ref = reflect(rayVec, normal);
 
             // Trace a ray toward the sun for sun shadows
-            auto sunShadow = def<float>(1.0);
-            auto iter = def<float>(0.01);
+            auto sunShadow = def<float>(1.0f);
+            auto iter = def<float>(0.01f);
             vec3 nudgePos = pos + normal * 0.002f;// don't start tracing too close or inside the object
             $for (i, 0, 40) {
+                //if (is_coroutine) $suspend("sun");
                 vec3 shadowPos = nudgePos + sunDir * iter;
                 auto tempDist = DistanceToObject(shadowPos).x;
                 sunShadow *= saturate(tempDist * 150.0f);// Shadow hardness
@@ -623,11 +630,12 @@ int main(int argc, char *argv[]) {
 
             // ------ Calculate texture color  ------
             vec2 block = floor(pos.xz());
-            vec3 texColor = make_float3(0.95, 1.0, 1.0);
+            vec3 texColor = make_float3(0.95f, 1.0f, 1.0f);
             texColor *= 0.8f;
-            auto windowRef = def<float>(0.0);
+            auto windowRef = def<float>(0.0f);
             // texture map the sides of buildings
             $if ((normal.y < 0.1f) & (distAndMat.y == 0.0f)) {
+                if (is_coroutine) $suspend("building");
                 vec3 posdx = make_float3(0.0f);
                 vec3 posdy = make_float3(0.0f);
                 vec3 posGrad = posdx * Hash21(uv) + posdy * Hash21(uv * 7.6543f);
@@ -662,6 +670,7 @@ int main(int argc, char *argv[]) {
                 normal = normalize(normal + nTemp * 0.2f);
             }
             $else {
+                if (is_coroutine) $suspend("road");
                 // Draw the road
                 Float xroad = abs(fract(pos.x + 0.5f) - 0.5f);
                 Float zroad = abs(fract(pos.z + 0.5f) - 0.5f);
@@ -702,7 +711,7 @@ int main(int argc, char *argv[]) {
 
                 {
                     // sidewalk cracks
-                    Float sidewalk = 1.0;
+                    Float sidewalk = 1.0f;
                     vec2 blockSize = make_float2(100.0f);
                     $if (pos.y > 0.1f) {
                         blockSize = make_float2(10.0, 50);
@@ -716,6 +725,7 @@ int main(int argc, char *argv[]) {
                     texColor *= sidewalk;
                 }
             };
+            //if (is_coroutine) $suspend("after");
             // Car tires are almost black to not call attention to their ugly.
             $if (distAndMat.y == 3.0f) {
                 texColor = make_float3(0.05);
@@ -726,7 +736,7 @@ int main(int argc, char *argv[]) {
             texColor *= 0.7f;
             texColor = saturate(texColor);
 
-            Float windowMask = 0.0;
+            Float windowMask = 0.0f;
             $if (distAndMat.y >= 100.0f) {
                 // car texture and windows
                 texColor = make_float3(Hash11(distAndMat.y) * 1.0f, Hash11(distAndMat.y * 8.765f), Hash11(distAndMat.y * 17.731f)) * 0.1f;
@@ -792,9 +802,24 @@ int main(int argc, char *argv[]) {
         // output the final color without gamma correction - will do gamma later.
         return make_float3(saturate(finalColor) * saturate(fade + 0.2f));
     };
+    is_coroutine = false;
+    Stream stream = device.create_stream(StreamTag::GRAPHICS);
+    Window window{"Display", make_uint2(width, height)};
+    Swapchain swap_chain{device.create_swapchain(
+        window.native_handle(),
+        stream,
+        window.size(),
+        false, true, 2)};
+    Image<float> device_image = device.create_image<float>(swap_chain.backend_storage(), width, height);
     Kernel2D main_kernel = [&](ImageFloat image, Float time) noexcept {
+        set_block_size(128, 1, 1);
         auto xy = dispatch_id().xy();
         image.write(xy, make_float4(sqrt(RayTrace(make_float2(xy), time)), 1.0f));
+    };
+    is_coroutine = true;
+    Coroutine coro = [&](Var<Skyline> &frame, Float time) noexcept {
+        auto xy = make_uint2(coro_id().x % width, coro_id().x / width);
+        device_image->write(xy, make_float4(sqrt(RayTrace(make_float2(xy), time)), 1.0f));
     };
     Kernel2D clear_kernel = [](ImageVar<float> image) noexcept {
         Var coord = dispatch_id().xy();
@@ -808,23 +833,48 @@ int main(int argc, char *argv[]) {
     Shader2D<Image<float>> clear = device.compile(clear_kernel);
     Shader2D<Image<float>, float> shader = device.compile(k);
 
-    Stream stream = device.create_stream(StreamTag::GRAPHICS);
-    Window window{"Display", make_uint2(width, height)};
-    Swapchain swap_chain{device.create_swapchain(
-        window.native_handle(),
-        stream,
-        window.size(),
-        false, true, 2)};
-    Image<float> device_image = device.create_image<float>(swap_chain.backend_storage(), width, height);
-
     stream << clear(device_image).dispatch(width, height);
 
     Clock clock;
-    while (!window.should_close()) {
+    //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, width * height};
+    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 96u, 2u, false};
+    /*while (!window.should_close()) {
         window.poll_events();
         float time = static_cast<float>(clock.toc() * 1e-3);
-        stream << shader(device_image, time).dispatch(width, height)
-               << swap_chain.present(device_image);
+        //stream << shader(device_image, time).dispatch(width, height)
+        Wdispatcher(device_image, time, width * height);
+        stream
+            << Wdispatcher.await_all()
+            << swap_chain.present(device_image);
+    }*/
+    float time = 0;
+    int count = 0;
+    float length = 6;
+    clock.tic();
+    while (time < length) {
+        time = static_cast<float>(clock.toc() * 1e-3);
+        count += 1;
+        stream << shader(device_image, time).dispatch(width, height);
+        if (SHOW) {
+            stream << swap_chain.present(device_image);
+        }
     }
+    time = 0;
+    stream << synchronize();
+    LUISA_INFO("FPS: {}.", count / (clock.toc() * 1e-3));
+    count = 0;
+    clock.tic();
+    while (time < length) {
+        time = static_cast<float>(clock.toc() * 1e-3);
+        count += 1;
+        Wdispatcher(time, width * height);
+        stream << Wdispatcher.await_all();
+        if (SHOW) {
+            stream << swap_chain.present(device_image);
+        }
+    }
+    stream << synchronize();
+    LUISA_INFO("FPS: {}.", count / (clock.toc() * 1e-3));
+
     stream << synchronize();
 }

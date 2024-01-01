@@ -3,6 +3,7 @@
 // Reference paper: [2013] Simple and Efficient Construction of Static Single Assignment Form
 
 use std::collections::{HashMap, HashSet};
+use std::process::exit;
 use crate::ir::{ArrayType, BasicBlock, CallableModule, Func, Instruction, IrBuilder, MatrixType, Module, new_node, Node, NodeRef, PhiIncoming, Primitive, StructType, Type, VectorType};
 use crate::{CArc, CBoxedSlice, Pooled};
 use crate::analysis::utility::{DISPLAY_IR_DEBUG, is_primitives_read_only_function};
@@ -41,6 +42,7 @@ impl Mem2RegImpl {
         self.scan_argument_by_ref(self.module_original);
     }
     fn scan_argument_by_ref(&mut self, block: Pooled<BasicBlock>) {
+        // if block.is_empty() { return; }
         let mut node = block.first.get().next;
         while node != block.last {
             let type_ = node.type_().as_ref();
@@ -81,11 +83,28 @@ impl Mem2RegImpl {
     }
 
     fn keep_unchanged(&self, var: NodeRef) -> bool {
-        !var.is_local_primitive() || self.node_by_ref.contains(&var)
+        let is_local_phi_primitive = var.is_primitive() && (var.is_local() || var.is_phi());
+        let is_load_removable_func = match var.get().instruction.as_ref() {
+            Instruction::Call(func, args) => {
+                match func {
+                    Func::Load => {
+                        assert_eq!(args.len(), 1);
+                        let arg = args[0];
+                        if !arg.is_gep() && !arg.is_local() {
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        self.node_by_ref.contains(&var) || !(is_local_phi_primitive || is_load_removable_func)
     }
     fn record_def(&mut self, block: Pooled<BasicBlock>, var: NodeRef, value: NodeRef) {
         if self.keep_unchanged(var) { return; }
-        let var_index = unsafe { DISPLAY_IR_DEBUG.get() }.get(&var);   // for DEBUG
 
         // some PhiIncomings are killed by this def
         let incomings = self.node_definition.entry(var).or_default().entry(block).or_default();
@@ -108,7 +127,6 @@ impl Mem2RegImpl {
     /// Otherwise, return the original value.
     fn record_use(&mut self, block: Pooled<BasicBlock>, var: NodeRef, insert_before: NodeRef) -> NodeRef {
         if self.keep_unchanged(var) { return var; }
-        let var_index = unsafe { DISPLAY_IR_DEBUG.get() }.get(&var);   // for DEBUG
 
         // record use
         let incomings = self.node_definition.get(&var).unwrap().get(&block).unwrap();
@@ -149,14 +167,19 @@ impl Mem2RegImpl {
 
         for branch in branches.iter() {
             // add node updated by inner to outer
-            let node_updated = self.node_updated.remove(branch).unwrap();
+            let contain = self.node_updated.contains_key(branch);
+            let node_updated = self.node_updated.remove(branch);
+            if node_updated.is_none() {
+                println!("node_updated = {:?}", node_updated);
+                println!("branch = {:?}", branch);
+                panic!();
+            }
+            let node_updated = node_updated.unwrap();
             node_updated_branch.extend(node_updated);
         }
 
         for branch in branches {
             for node in node_updated_branch.iter() {
-                let var_index = unsafe { DISPLAY_IR_DEBUG.get() }.get(&node);   // for DEBUG
-
                 let incoming_branch_merge = incomings_branch.entry(*node).or_insert(
                     IncomingInfo {
                         defined_locally: HashSet::new(),
@@ -177,8 +200,6 @@ impl Mem2RegImpl {
 
         // update outer
         for node in node_updated_branch {
-            let var_index = unsafe { DISPLAY_IR_DEBUG.get() }.get(&node);   // for DEBUG
-
             self.node_updated.entry(outer).or_default().insert(node);
             let incoming_branch = incomings_branch.remove(&node).unwrap();
             let incoming_outer = self.node_definition.entry(node).or_default().entry(outer).or_default();
@@ -212,6 +233,8 @@ impl Mem2RegImpl {
 
     fn process_block(&mut self, block: Pooled<BasicBlock>) {
         println!("Process block {:?}", block.ptr);
+        // if block.is_empty() { return; }
+
         let mut node = block.first.get().next;
         while node != block.last {
             let type_ = node.type_().as_ref();
@@ -220,6 +243,7 @@ impl Mem2RegImpl {
             println!("{:?}", node);
             match instruction {
                 Instruction::Invalid => {
+                    println!("\n{}", unsafe { DISPLAY_IR_DEBUG.get().display_ir_bb(&block, 0, false) });
                     unreachable!("Invalid node should not appear in non-sentinel nodes");
                 }
                 Instruction::Buffer
@@ -251,6 +275,8 @@ impl Mem2RegImpl {
                     true_branch,
                     false_branch
                 } => {
+                    let var_index = unsafe { DISPLAY_IR_DEBUG.get().get(cond) };
+
                     // record use of cond
                     let cond_new = self.record_use(block, *cond, node);
                     if cond_new != *cond {
@@ -357,8 +383,7 @@ impl Mem2RegImpl {
                     self.record_def(block, node, node);
                 }
                 Instruction::Call(func, args) => {
-                    // record def of return value
-                    self.record_def(block, node, node);
+                    let mut args = args.clone();
 
                     // record use of args
                     let mut changed = false;
@@ -372,7 +397,26 @@ impl Mem2RegImpl {
                     }
                     if changed {
                         let args_new = CBoxedSlice::new(args_new);
+                        args = args_new.clone();
                         node.get_mut().instruction = CArc::new(Instruction::Call(func.clone(), args_new));
+                    }
+
+                    // record def of return value
+                    let mut return_value_recorded = false;
+                    match func {
+                        Func::Load => {
+                            assert_eq!(args.len(), 1);
+                            let arg = args[0];
+                            if !arg.is_gep() && !arg.is_local() {
+                                node.remove();
+                                self.record_def(block, node, arg);
+                                return_value_recorded = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                    if !return_value_recorded {
+                        self.record_def(block, node, node);
                     }
                 }
                 Instruction::Print { fmt, args } => {
@@ -417,10 +461,7 @@ impl Mem2RegImpl {
                 }
                 Instruction::UserData(_) => {}
                 Instruction::Comment(_) => {}
-                Instruction::CoroSplitMark { .. } => {
-                    // do nothing
-                    println!("aaa");
-                }
+                Instruction::CoroSplitMark { .. } => {}
                 Instruction::CoroSuspend { .. }
                 | Instruction::CoroResume { .. } => {
                     unreachable!("{:?} unreachable in Mem2Reg", instruction);

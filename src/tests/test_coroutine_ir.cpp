@@ -73,21 +73,23 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer) noexcept {
         auto coro_id_ = coro_id().x;
         auto a = def(0u);
-        $for (i, 2u) {
+        // $for (i, 2u) {
             // $suspend("Suspend(1)");
             // x_buffer.write(coro_id_, coro_id_);
 
-            auto a = def(234u);
+            // a = def(234u);
             // $suspend("2");
 
-            $if (i == 0u) {
+            $if (1u == 0u) {
                 a = def(7u);
             };
 
             $suspend("Suspend(2)");
 
             x_buffer.write(coro_id_, a);
-        };
+        // };
+
+
 
         //        auto coro_id_ = coro_id().x;
         //        UInt a;

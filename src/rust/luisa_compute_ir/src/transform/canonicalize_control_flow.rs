@@ -14,6 +14,7 @@ use crate::ir::{
 use crate::transform::Transform;
 use crate::{CArc, CBoxedSlice, Pooled, TypeOf};
 use std::collections::{HashMap, HashSet};
+use crate::transform::remove_phi::RemovePhi;
 
 pub struct CanonicalizeControlFlow;
 
@@ -1131,46 +1132,10 @@ impl LowerEarlyReturn {
     }
 }
 
-impl CanonicalizeControlFlow {
-    fn remove_phis_recursive(module: &Module, visited: &mut HashSet<*const BasicBlock>) {
-        if visited.insert(module.entry.as_ptr()) {
-            let nodes = collect_nodes(module.entry.clone());
-            for node in nodes {
-                match node.get().instruction.as_ref() {
-                    Instruction::Phi(incomings) => {
-                        let mut b = IrBuilder::new_without_bb(module.pools.clone());
-                        b.set_insert_point(module.entry.first);
-                        let local = b.local_zero_init(node.type_().clone());
-                        for incoming in incomings.iter() {
-                            b.set_insert_point(incoming.block.last.get().prev);
-                            b.update(local, incoming.value);
-                        }
-                        b.set_insert_point(node);
-                        let load = b.load(local);
-                        load.remove();
-                        node.replace_with(load.get());
-                    }
-                    Instruction::Call(func, args) => {
-                        if let Func::Callable(callable) = func {
-                            Self::remove_phis_recursive(&callable.0.module, visited);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    fn remove_phis(module: &Module) {
-        let mut visited = HashSet::new();
-        Self::remove_phis_recursive(module, &mut visited);
-    }
-}
-
 impl Transform for CanonicalizeControlFlow {
     fn transform_module(&self, module: Module) -> Module {
         // 0. Remove all the Phi's so we won't mess the scopes
-        CanonicalizeControlFlow::remove_phis(&module);
+        let module = RemovePhi.transform_module(module);
         // 1. Lower generic loops to do-while loops.
         // println!(
         //     "Before LowerGenericLoops::transform:\n{}",

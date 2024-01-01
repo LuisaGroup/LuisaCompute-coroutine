@@ -29,6 +29,7 @@ use crate::ir::{BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
 use crate::transform::Transform;
 use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};
+use crate::transform::remove_phi::RemovePhi;
 
 pub struct DemoteLocals;
 
@@ -612,6 +613,7 @@ impl DemoteLocals {
 
 impl Transform for DemoteLocals {
     fn transform_module(&self, module: Module) -> Module {
+        let module = RemovePhi.transform_module(module);
         InitializationNormalizer::normalize(&module);
         let scope_tree = ScopeTree::from(&module);
         let propagation = VariablePropagator::propagate(&scope_tree);

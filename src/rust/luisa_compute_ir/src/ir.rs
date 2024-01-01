@@ -1818,10 +1818,13 @@ impl NodeRef {
         }
     }
     pub fn is_primitive(&self) -> bool {
-        match self.type_().as_ref() { 
+        match self.type_().as_ref() {
             Type::Primitive(..) => true,
             _ => false,
         }
+    }
+    pub fn is_local_primitive(&self) -> bool {
+        self.is_primitive() && self.is_local()
     }
     pub fn is_reference_argument(&self) -> bool {
         match self.get().instruction.as_ref() {

@@ -22,6 +22,7 @@ pub mod defer_load;
 pub mod inliner;
 pub mod materialize_coro;
 pub mod split_coro;
+pub mod remove_phi;
 
 use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
 

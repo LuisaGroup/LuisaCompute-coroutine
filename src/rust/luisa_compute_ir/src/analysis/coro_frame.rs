@@ -11,19 +11,16 @@
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transfer_graph::CoroTransferGraph;
-use crate::analysis::utility::{AccessChainIndex, AccessTree, AccessTreeNodeRef};
-use crate::ir::{
-    BasicBlock, Const, Func, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF,
-};
+use crate::analysis::utility::{AccessChainIndex, AccessTreeNodeRef};
+use crate::ir::{BasicBlock, Const, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF};
 use crate::{CArc, CBoxedSlice, TypeOf};
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::format;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CoroFrameField {
-    type_: Primitive,
-    root: NodeRef,
-    chain: Vec<usize>,
+    pub type_: Primitive,
+    pub root: NodeRef,
+    pub chain: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -279,7 +276,7 @@ impl<'a> CoroFrame<'a> {
         let t_u32 = <u32 as TypeOf>::type_();
         let one = b.const_(Const::One(t_u32.clone()));
         let gep = b.gep(frame, &[one], <u32 as TypeOf>::type_());
-        const TERMINATE_TOKEN: u32 = i32::MAX as u32;
+        const TERMINATE_TOKEN: u32 = 0x8000_0000u32;
         let terminate_token = b.const_(Const::Uint32(TERMINATE_TOKEN));
         b.update(gep, terminate_token);
         // TODO: store designated states if any

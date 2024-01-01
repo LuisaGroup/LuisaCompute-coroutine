@@ -6,7 +6,6 @@
  * 3. Lower early-return nodes.
  */
 
-use crate::ir::debug::dump_ir_human_readable;
 use crate::ir::{
     collect_nodes, BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModulePools, NodeRef,
     Type, INVALID_REF,
@@ -173,7 +172,7 @@ impl LowerGenericLoops {
                     }
                 }
                 Instruction::Continue => {
-                    if let Some(generic_loop_break) = self.generic_loop_break {
+                    if let Some(_) = self.generic_loop_break {
                         // continue => { break; }
                         let mut builder = IrBuilder::new(self.pools.clone());
                         builder.set_insert_point(node.get().prev);
@@ -757,7 +756,7 @@ struct LowerEarlyReturn {
 impl LowerEarlyReturn {
     fn glob_early_return_in_block(bb: &Pooled<BasicBlock>, is_top_level: bool) -> bool {
         bb.iter().any(|node| match node.get().instruction.as_ref() {
-            Instruction::Return(ret) => {
+            Instruction::Return(_) => {
                 // remove all nodes after the return node as they are unreachable
                 while !node.get().next.is_sentinel() {
                     node.get().next.remove();

@@ -3,8 +3,6 @@ pub mod usage_detect;
 pub mod callable_arg_usages;
 pub mod const_eval;
 pub mod coro_frame;
-pub mod coro_frame_v3;
-pub mod coro_frame_v4;
 pub mod coro_graph;
 pub mod coro_transfer_graph;
 pub mod coro_use_def;

@@ -5,7 +5,7 @@ set(LUISA_COMPUTE_CORO_SOURCES
         coro_node.cpp)
 
 add_library(luisa-compute-coro SHARED ${LUISA_COMPUTE_CORO_SOURCES})
-target_link_libraries(luisa-compute-coro PUBLIC luisa-compute-dsl)
+target_link_libraries(luisa-compute-coro PUBLIC luisa-compute-ast luisa-compute-ir)
 target_precompile_headers(luisa-compute-coro PRIVATE pch.h)
 
 target_compile_definitions(luisa-compute-coro PRIVATE LC_CORO_EXPORT_DLL=1)

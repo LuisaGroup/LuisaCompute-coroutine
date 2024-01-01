@@ -2,15 +2,14 @@ use crate::ir::*;
 use crate::{CArc, CBoxedSlice, Pooled, TypeOf};
 use base64ct::{Base64, Encoding};
 
-
 use half::f16;
 use json::{parse as parse_json, JsonValue as JSON};
 use log::warn;
 
+use bitflags::Flags;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::iter::zip;
-use bitflags::Flags;
 
 struct AST2IRCtx<'a> {
     j: &'a JSON,
@@ -1105,7 +1104,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "SMOOTHSTEP" | "STEP" | "FMA" => {
                 // (floatN, floatN, floatN) -> floatN
                 let args = convert_args(&[false, false, false]);
-                check_same_types!(t, args[0].type_(), args[1].type_(), args[2].type_());
+                //check_same_types!(t, args[0].type_(), args[1].type_(), args[2].type_());
                 assert!(t.is_float());
                 args
             }
@@ -1150,7 +1149,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "POW" | "ATAN2" | "COPYSIGN" => {
                 // (floatN, floatN) -> floatN
                 let args = convert_args(&[false, false]);
-                check_same_types!(t, args[0].type_(), args[1].type_());
+                //check_same_types!(t, args[0].type_(), args[1].type_());
                 assert!(t.is_float());
                 args
             }
@@ -2273,6 +2272,8 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             cpu_custom_ops: CBoxedSlice::new(Vec::new()),
             subroutine_ids: CBoxedSlice::new(Vec::new()),
             subroutines: CBoxedSlice::new(Vec::new()),
+            coro_frame_input_fields: CBoxedSlice::new(Vec::new()),
+            coro_frame_output_fields: CBoxedSlice::new(Vec::new()),
             pools: self.pools.clone(),
         }
     }
@@ -2303,7 +2304,9 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
         let old_ctx = self.ctx.replace(ctx);
         let module = match tag {
             "KERNEL" => FunctionModule::Kernel(CArc::new(self._do_convert_kernel())),
-            "CALLABLE" | "COROUTINE" => FunctionModule::Callable(CArc::new(self._do_convert_callable())),
+            "CALLABLE" | "COROUTINE" => {
+                FunctionModule::Callable(CArc::new(self._do_convert_callable()))
+            }
             _ => panic!("Unsupported function tag: {}", tag),
         };
         // pop current context

@@ -378,169 +378,256 @@ struct luisa_compute_extension {};
     }                                                                                        \
     }
 
-#define LUISA_DERIVE_COROFRAME_SOA(S)                                                                  \
-    namespace luisa::compute {                                                                         \
-    template<>                                                                                         \
-    class SOA<S>;                                                                                      \
-    template<>                                                                                         \
-    class SOAView<S>;                                                                                  \
-                                                                                                       \
-    template<>                                                                                         \
-    struct Expr<SOA<S>> {                                                                              \
-    private:                                                                                           \
-        Expr<ByteBuffer> _buffer;                                                                      \
-        Expr<uint> _soa_offset;                                                                        \
-        Expr<uint> _soa_size;                                                                          \
-        Expr<uint> _element_offset;                                                                    \
-        luisa::vector<Expr<uint>> _member_offsets;                                                     \
-    public:                                                                                            \
-        Expr(Expr<ByteBuffer> buffer,                                                                  \
-             Expr<uint> soa_offset,                                                                    \
-             Expr<uint> soa_size,                                                                      \
-             Expr<uint> element_offset) noexcept                                                       \
-            : _buffer{buffer},                                                                         \
-              _soa_offset{soa_offset},                                                                 \
-              _soa_size{soa_size},                                                                     \
-              _element_offset{element_offset} {                                                        \
-            auto type = Type::of<S>()->corotype();                                                     \
-            auto tot_size = dsl::def(soa_offset);                                                      \
-            for (auto &mem : type->members()) {                                                        \
-                _member_offsets.push_back(dsl::def(tot_size));                                         \
-                uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                      \
-                auto member_size = soa_size * stride;                                                  \
-                member_size = align_to_soa_cache_line(member_size);                                    \
-                tot_size += member_size;                                                               \
-            }                                                                                          \
-        }                                                                                              \
-        [[nodiscard]] auto buffer() const noexcept { return _buffer; }                                 \
-        [[nodiscard]] auto soa_offset() const noexcept { return _soa_offset; }                         \
-        [[nodiscard]] auto soa_size() const noexcept { return _soa_size; }                             \
-        [[nodiscard]] auto element_offset() const noexcept { return _element_offset; }                 \
-    private:                                                                                           \
-        using this_type = S;                                                                           \
-                                                                                                       \
-    public:                                                                                            \
-                                                                                                       \
-        Expr(SOAView<S> soa) noexcept;                                                                 \
-                                                                                                       \
-        Expr(const SOA<S> &soa) noexcept;                                                              \
-                                                                                                       \
-        template<typename I>                                                                           \
-        [[nodiscard]] auto read(I &&index) const noexcept {                                            \
-            auto builder = detail::FunctionBuilder::current();                                         \
-            auto type = Type::of<S>()->corotype();                                                     \
-            auto ret = builder->local(Type::of<S>());                                                  \
-            auto member_index = 0u;                                                                    \
-            for (auto i = 0u; i < type->members().size(); ++i) {                                       \
-                auto &mem = type->members()[i];                                                        \
-                uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                      \
-                auto id = dsl::def(std::forward<I>(index));                                            \
-                auto data = builder->call(                                                             \
-                    mem, CallOp::BYTE_BUFFER_READ,                                                     \
-                    {_buffer.expression(),                                                             \
-                     detail::extract_expression((_member_offsets[i] +                                  \
-                                                 (id + _element_offset) * stride) *                    \
-                                                (uint)sizeof(uint))});                                 \
-                builder->assign(builder->member(mem, ret, i), data);                                   \
-                member_index += mem->size();                                                           \
-            }                                                                                          \
-            return Var<S>{ret};                                                                        \
-        }                                                                                              \
-                                                                                                       \
-        template<typename I>                                                                           \
-        void write(I &&index, Expr<S> value) const noexcept {                                          \
-            auto builder = detail::FunctionBuilder::current();                                         \
-            auto type = Type::of<S>()->corotype();                                                     \
-            auto member_index = 0u;                                                                    \
-            for (auto i = 0u; i < type->members().size(); ++i) {                                       \
-                auto &mem = type->members()[i];                                                        \
-                auto stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                      \
-                auto id = dsl::def(std::forward<I>(index));                                            \
-                _buffer.write((_member_offsets[i] +                                                    \
-                               (id + _element_offset) * stride) *                                      \
-                                  sizeof(uint),                                                        \
-                              builder->member(mem, value.expression(), i));                            \
-                member_index += mem->size();                                                           \
-            }                                                                                          \
-        }                                                                                              \
-                                                                                                       \
-        [[nodiscard]] auto operator->() const noexcept { return this; }                                \
-    };                                                                                                 \
-    template<>                                                                                         \
-    class SOAView<S> {                                                                                 \
-    private:                                                                                           \
-        using View = SOAView<S>;                                                                       \
-                                                                                                       \
-    private:                                                                                           \
-        ByteBuffer *_bufferview{nullptr};                                                              \
-        uint _soa_offset{};                                                                            \
-        uint _soa_size{};                                                                              \
-        uint _elem_offset{};                                                                           \
-        uint _elem_size{};                                                                             \
-    public:                                                                                            \
-        static constexpr auto element_stride = 0;                                                      \
-        SOAView() noexcept = default;                                                                  \
-        SOAView(ByteBuffer *buffer,                                                                    \
-                size_t soa_offset,                                                                     \
-                size_t soa_size,                                                                       \
-                size_t elem_offset,                                                                    \
-                size_t elem_size) noexcept                                                             \
-            : _bufferview{buffer},                                                                     \
-              _soa_offset{static_cast<uint>(soa_offset)},                                              \
-              _soa_size{static_cast<uint>(soa_size)},                                                  \
-              _elem_offset{static_cast<uint>(elem_offset)},                                            \
-              _elem_size{static_cast<uint>(elem_size)} {}                                              \
-        [[nodiscard]] auto bufferview() const noexcept { return _bufferview; }                         \
-        [[nodiscard]] auto soa_offset() const noexcept { return _soa_offset; }                         \
-        [[nodiscard]] auto soa_size() const noexcept { return _soa_size; }                             \
-        [[nodiscard]] auto element_offset() const noexcept { return _elem_offset; }                    \
-        [[nodiscard]] auto element_size() const noexcept { return _elem_size; }                        \
-        [[nodiscard]] auto operator->() const noexcept { return Expr<View>{*this}; }                   \
-        [[nodiscard]] auto subview(size_t offset, size_t size) const noexcept {                        \
-            if (!(offset + size <= this->element_size())) [[unlikely]] {                               \
-                LUISA_ERROR_WITH_LOCATION("SOAView::subview out of range.");                           \
-            }                                                                                          \
-            return View{this->bufferview(),                                                            \
-                        this->soa_offset(),                                                            \
-                        this->soa_size(),                                                              \
-                        this->element_offset() + offset,                                               \
-                        size};                                                                         \
-        }                                                                                              \
-                                                                                                       \
-    public:                                                                                            \
-        [[nodiscard]] static auto compute_soa_size(auto soa_size) noexcept {                           \
-            auto type = Type::of<S>()->corotype();                                                     \
-            size_t tot_size = 0u;                                                                      \
-            for (auto mem : type->members()) {                                                         \
-                tot_size += align_to_soa_cache_line(soa_size *                                         \
-                                                   ((mem->size() + sizeof(uint) - 1u) / sizeof(uint)));\
-            }                                                                                          \
-            return tot_size;                                                                           \
-        }                                                                                              \
-    };                                                                                                 \
-    template<>                                                                                         \
-    class SOA<S> : public SOAView<S> {                                                                 \
-                                                                                                       \
-    private:                                                                                           \
-        ByteBuffer _buffer;                                                                            \
-                                                                                                       \
-    private:                                                                                           \
-        SOA(ByteBuffer buffer, size_t size) noexcept                                                   \
-            : _buffer{std::move(buffer)},                                                              \
-              SOAView<S>{&_buffer, 0u, size, 0u, size} {}                                              \
-                                                                                                       \
-    public:                                                                                            \
-        SOA() noexcept = default;                                                                      \
-        SOA(Device &device, size_t elem_count) noexcept                                                \
-            : SOA{device.create_byte_buffer(SOAView<S>::compute_soa_size(elem_count) * sizeof(uint)),  \
-                  elem_count} {}                                                                       \
-        [[nodiscard]] auto view() const noexcept { return SOAView<S>{*this}; }                         \
-    };                                                                                                 \
-    Expr<SOA<S>>::Expr(SOAView<S> soa) noexcept                                                        \
-        : Expr{*soa.bufferview(), soa.soa_offset(), soa.soa_size(), soa.element_offset()} {}           \
-                                                                                                       \
-    Expr<SOA<S>>::Expr(const SOA<S> &soa) noexcept                                                     \
-        : Expr{soa.view()} {}                                                                          \
+#define LUISA_DERIVE_COROFRAME_SOA(S)                                                                                \
+    namespace luisa::compute {                                                                                       \
+    template<>                                                                                                       \
+    class SOA<S>;                                                                                                    \
+    template<>                                                                                                       \
+    class SOAView<S>;                                                                                                \
+                                                                                                                     \
+    template<>                                                                                                       \
+    struct Expr<SOA<S>> {                                                                                            \
+    private:                                                                                                         \
+        Expr<ByteBuffer> _buffer;                                                                                    \
+        Expr<uint> _soa_offset;                                                                                      \
+        Expr<uint> _soa_size;                                                                                        \
+        Expr<uint> _element_offset;                                                                                  \
+        luisa::vector<Expr<uint>> _member_offsets;                                                                   \
+    public:                                                                                                          \
+        Expr(Expr<ByteBuffer> buffer,                                                                                \
+             Expr<uint> soa_offset,                                                                                  \
+             Expr<uint> soa_size,                                                                                    \
+             Expr<uint> element_offset) noexcept                                                                     \
+            : _buffer{buffer},                                                                                       \
+              _soa_offset{soa_offset},                                                                               \
+              _soa_size{soa_size},                                                                                   \
+              _element_offset{element_offset} {                                                                      \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            auto tot_size = dsl::def(soa_offset);                                                                    \
+            for (auto &mem : type->members()) {                                                                      \
+                _member_offsets.push_back(dsl::def(tot_size));                                                       \
+                uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                                    \
+                auto member_size = soa_size * stride;                                                                \
+                member_size = align_to_soa_cache_line(member_size);                                                  \
+                tot_size += member_size;                                                                             \
+            }                                                                                                        \
+        }                                                                                                            \
+        [[nodiscard]] auto buffer() const noexcept { return _buffer; }                                               \
+        [[nodiscard]] auto soa_offset() const noexcept { return _soa_offset; }                                       \
+        [[nodiscard]] auto soa_size() const noexcept { return _soa_size; }                                           \
+        [[nodiscard]] auto element_offset() const noexcept { return _element_offset; }                               \
+    private:                                                                                                         \
+        using this_type = S;                                                                                         \
+                                                                                                                     \
+    public:                                                                                                          \
+                                                                                                                     \
+        Expr(SOAView<S> soa) noexcept;                                                                               \
+                                                                                                                     \
+        Expr(const SOA<S> &soa) noexcept;                                                                            \
+                                                                                                                     \
+        template<typename I>                                                                                         \
+        [[nodiscard]] auto read(I &&index) const noexcept {                                                          \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            auto ret = builder->local(Type::of<S>());                                                                \
+            auto member_index = 0u;                                                                                  \
+            for (auto i = 0u; i < type->members().size(); ++i) {                                                     \
+                auto &mem = type->members()[i];                                                                      \
+                uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                                    \
+                auto id = dsl::def(std::forward<I>(index));                                                          \
+                auto data = builder->call(                                                                           \
+                    mem, CallOp::BYTE_BUFFER_READ,                                                                   \
+                    {_buffer.expression(),                                                                           \
+                     detail::extract_expression((_member_offsets[i] +                                                \
+                                                 (id + _element_offset) * stride) *                                  \
+                                                (uint)sizeof(uint))});                                               \
+                builder->assign(builder->member(mem, ret, i), data);                                                 \
+                member_index += mem->size();                                                                         \
+            }                                                                                                        \
+            return Var<S>{ret};                                                                                      \
+        }                                                                                                            \
+        template<typename I>                                                                                         \
+        [[nodiscard]] auto read(I &&index, luisa::vector<uint> members) const noexcept {                             \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            auto ret = builder->local(Type::of<S>());                                                                \
+            auto member_index = 0u;                                                                                  \
+            for (auto r_mem = 0u; r_mem < members.size(); ++r_mem) {                                                 \
+                auto i = members[r_mem];                                                                             \
+                auto &mem = type->members()[i];                                                                      \
+                uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                                    \
+                auto id = dsl::def(std::forward<I>(index));                                                          \
+                auto data = builder->call(                                                                           \
+                    mem, CallOp::BYTE_BUFFER_READ,                                                                   \
+                    {_buffer.expression(),                                                                           \
+                     detail::extract_expression((_member_offsets[i] +                                                \
+                                                 (id + _element_offset) * stride) *                                  \
+                                                (uint)sizeof(uint))});                                               \
+                builder->assign(builder->member(mem, ret, i), data);                                                 \
+                member_index += mem->size();                                                                         \
+            }                                                                                                        \
+            return Var<S>{ret};                                                                                      \
+        }                                                                                                            \
+        template<typename I>                                                                                         \
+        void write(I &&index, Expr<S> value) const noexcept {                                                        \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            auto member_index = 0u;                                                                                  \
+            for (auto i = 0u; i < type->members().size(); ++i) {                                                     \
+                auto &mem = type->members()[i];                                                                      \
+                auto stride = (((uint)mem->size() + (uint)sizeof(uint) - 1u) / (uint)sizeof(uint));                  \
+                auto id = dsl::def(std::forward<I>(index));                                                          \
+                builder->call(CallOp::BYTE_BUFFER_WRITE,                                                             \
+                              {_buffer.expression(),                                                                 \
+                               detail::extract_expression((_member_offsets[i] +                                      \
+                                                           (id + _element_offset) * stride) *                        \
+                                                          (uint)sizeof(uint)),                                       \
+                               builder->member(mem, value.expression(), i)});                                        \
+                member_index += mem->size();                                                                         \
+            }                                                                                                        \
+        }                                                                                                            \
+        template<typename I>                                                                                         \
+        void write(I &&index, Expr<S> value, luisa::vector<uint> members) const noexcept {                           \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            auto member_index = 0u;                                                                                  \
+            for (auto w_mem = 0u; w_mem < members.size(); ++w_mem) {                                                 \
+                auto i = members[w_mem];                                                                             \
+                auto &mem = type->members()[i];                                                                      \
+                auto stride = (((uint)mem->size() + (uint)sizeof(uint) - 1u) / (uint)sizeof(uint));                  \
+                auto id = dsl::def(std::forward<I>(index));                                                          \
+                builder->call(CallOp::BYTE_BUFFER_WRITE,                                                             \
+                              {_buffer.expression(),                                                                 \
+                               detail::extract_expression((_member_offsets[i] +                                      \
+                                                           (id + _element_offset) * stride) *                        \
+                                                          (uint)sizeof(uint)),                                       \
+                               builder->member(mem, value.expression(), i)});                                        \
+                member_index += mem->size();                                                                         \
+            }                                                                                                        \
+        }                                                                                                            \
+        [[nodiscard]] auto operator->() const noexcept { return this; }                                              \
+    };                                                                                                               \
+    template<>                                                                                                       \
+    class SOAView<S> {                                                                                               \
+    protected:                                                                                                       \
+        ByteBuffer *_bufferview{nullptr};                                                                            \
+    private:                                                                                                         \
+        using View = SOAView<S>;                                                                                     \
+                                                                                                                     \
+    private:                                                                                                         \
+        uint _soa_offset{};                                                                                          \
+        uint _soa_size{};                                                                                            \
+        uint _elem_offset{};                                                                                         \
+        uint _elem_size{};                                                                                           \
+    public:                                                                                                          \
+        static constexpr auto element_stride = 0;                                                                    \
+        SOAView() noexcept = default;                                                                                \
+        SOAView(ByteBuffer *buffer,                                                                                  \
+                size_t soa_offset,                                                                                   \
+                size_t soa_size,                                                                                     \
+                size_t elem_offset,                                                                                  \
+                size_t elem_size) noexcept                                                                           \
+            : _bufferview{buffer},                                                                                   \
+              _soa_offset{static_cast<uint>(soa_offset)},                                                            \
+              _soa_size{static_cast<uint>(soa_size)},                                                                \
+              _elem_offset{static_cast<uint>(elem_offset)},                                                          \
+              _elem_size{static_cast<uint>(elem_size)} {}                                                            \
+        [[nodiscard]] auto &buffer() const noexcept { return *_bufferview; }                                         \
+        [[nodiscard]] auto bufferview() const noexcept { return _bufferview; }                                       \
+        [[nodiscard]] auto soa_offset() const noexcept { return _soa_offset; }                                       \
+        [[nodiscard]] auto soa_size() const noexcept { return _soa_size; }                                           \
+        [[nodiscard]] auto element_offset() const noexcept { return _elem_offset; }                                  \
+        [[nodiscard]] auto element_size() const noexcept { return _elem_size; }                                      \
+        [[nodiscard]] auto operator->() const noexcept { return Expr<View>{*this}; }                                 \
+        [[nodiscard]] auto subview(size_t offset, size_t size) const noexcept {                                      \
+            if (!(offset + size <= this->element_size())) [[unlikely]] {                                             \
+                LUISA_ERROR_WITH_LOCATION("SOAView::subview out of range.");                                         \
+            }                                                                                                        \
+            return View{this->bufferview(),                                                                          \
+                        this->soa_offset(),                                                                          \
+                        this->soa_size(),                                                                            \
+                        this->element_offset() + offset,                                                             \
+                        size};                                                                                       \
+        }                                                                                                            \
+                                                                                                                     \
+    public:                                                                                                          \
+        [[nodiscard]] static auto compute_soa_size(auto soa_size) noexcept {                                         \
+            auto type = Type::of<S>() -> corotype();                                                                 \
+            size_t tot_size = 0u;                                                                                    \
+            for (auto mem : type->members()) {                                                                       \
+                tot_size += align_to_soa_cache_line(soa_size *                                                       \
+                                                    ((mem->size() + (uint)sizeof(uint) - 1u) / (uint)sizeof(uint))); \
+            }                                                                                                        \
+            return tot_size;                                                                                         \
+        }                                                                                                            \
+    };                                                                                                               \
+    template<>                                                                                                       \
+    class SOA<S> : public SOAView<S> {                                                                               \
+                                                                                                                     \
+    private:                                                                                                         \
+        ByteBuffer _buffer;                                                                                          \
+                                                                                                                     \
+    private:                                                                                                         \
+        SOA(ByteBuffer buffer, size_t size) noexcept                                                                 \
+            : _buffer{std::move(buffer)},                                                                            \
+              SOAView<S> { &buffer, 0u, size, 0u, size }                                                             \
+        {                                                                                                            \
+            this->_bufferview = &_buffer;                                                                            \
+        }                                                                                                            \
+                                                                                                                     \
+    public:                                                                                                          \
+        SOA(SOA &&x) noexcept {                                                                                      \
+            *this = std::move(x);                                                                                    \
+            this->_bufferview = &_buffer;                                                                            \
+        }                                                                                                            \
+        SOA &operator=(SOA &&x) noexcept {                                                                           \
+            *this = std::move(x);                                                                                    \
+            this->_bufferview = &_buffer;                                                                            \
+            return *this;                                                                                            \
+        }                                                                                                            \
+        SOA() noexcept = default;                                                                                    \
+        SOA(Device &device, size_t elem_count) noexcept                                                              \
+            : SOA{device.create_byte_buffer(SOAView<S>::compute_soa_size(elem_count) * sizeof(uint)),                \
+                  elem_count} {}                                                                                     \
+        [[nodiscard]] auto view() const noexcept { return SOAView<S>{*this}; }                                       \
+    };                                                                                                               \
+    Expr<SOA<S>>::Expr(SOAView<S> soa) noexcept                                                                      \
+        : Expr{*soa.bufferview(), soa.soa_offset(), soa.soa_size(), soa.element_offset()} {}                         \
+                                                                                                                     \
+    Expr<SOA<S>>::Expr(const SOA<S> &soa) noexcept                                                                   \
+        : Expr{soa.view()} {}                                                                                        \
+                                                                                                                     \
+    template<>                                                                                                       \
+    struct Var<SOA<S>> : public Expr<SOA<S>> {                                                                       \
+                                                                                                                     \
+    private:                                                                                                         \
+        using Base = Expr<SOA<S>>;                                                                                   \
+                                                                                                                     \
+        Var(Expr<ByteBuffer> buffer,                                                                                 \
+            Expr<uint> soa_offset,                                                                                   \
+            Expr<uint> soa_size,                                                                                     \
+            Expr<uint> elem_offset) noexcept                                                                         \
+            : Base{buffer, soa_offset, soa_size, elem_offset} {}                                                     \
+                                                                                                                     \
+        Var(Expr<ByteBuffer> buffer,                                                                                 \
+            Expr<uint> soa_offset,                                                                                   \
+            Expr<uint> soa_size) noexcept                                                                            \
+            : Var{buffer, soa_offset, soa_size,                                                                      \
+                  Var<uint>{detail::ArgumentCreation{}}} {}                                                          \
+                                                                                                                     \
+        Var(Expr<ByteBuffer> buffer,                                                                                 \
+            Expr<uint> soa_offset) noexcept                                                                          \
+            : Var{buffer, soa_offset,                                                                                \
+                  Var<uint>{detail::ArgumentCreation{}}} {}                                                          \
+                                                                                                                     \
+        Var(Expr<ByteBuffer> buffer) noexcept                                                                        \
+            : Var{buffer,                                                                                            \
+                  Var<uint>{detail::ArgumentCreation{}}} {}                                                          \
+                                                                                                                     \
+    public:                                                                                                          \
+        Var(detail::ArgumentCreation) noexcept                                                                       \
+            : Var{Var<ByteBuffer>{detail::ArgumentCreation{}}} {}                                                    \
+    };                                                                                                               \
     }// namespace luisa::compute
 #define LUISA_COROFRAME_STRUCT(S)          \
     LUISA_COROFRAME_STRUCT_REFLECT(S, #S); \

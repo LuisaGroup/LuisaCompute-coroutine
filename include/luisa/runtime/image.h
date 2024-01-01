@@ -161,6 +161,8 @@ public:
           _level{level}, _storage{storage} {}
 
     ImageView(const Image<T> &image) noexcept : ImageView{image.view(0u)} {}
+    ImageView() noexcept : ImageView{0, PixelStorage::FLOAT4, 0, uint2(0, 0)} {}
+
     // properties
     [[nodiscard]] auto handle() const noexcept { return _handle; }
     [[nodiscard]] auto size() const noexcept { return _size; }

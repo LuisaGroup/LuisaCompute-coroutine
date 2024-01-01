@@ -12,8 +12,6 @@ pub mod mem2reg;
 
 use bitflags::Flags;
 
-pub mod coroutine;
-
 pub mod extract_loop_cond;
 
 pub mod demote_locals;
@@ -21,7 +19,6 @@ pub mod demote_locals;
 pub mod defer_load;
 pub mod inliner;
 pub mod materialize_coro;
-pub mod split_coro;
 pub mod remove_phi;
 
 use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
@@ -122,20 +119,12 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = reg2mem::Reg2Mem;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
-        "coroutine" => {
-            let transform = coroutine::CoroutineSplit;
-            unsafe { (*pipeline).add_transform(Box::new(transform)) };
-        }
         "extract_loop_cond" => {
             let transform = extract_loop_cond::ExtractLoopCond;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         "demote_locals" => {
             let transform = demote_locals::DemoteLocals;
-            unsafe { (*pipeline).add_transform(Box::new(transform)) };
-        }
-        "split_coro" => {
-            let transform = split_coro::SplitCoro;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         "defer_load" => {

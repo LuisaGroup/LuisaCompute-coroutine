@@ -868,6 +868,22 @@ impl CoroGraph {
                     }));
                 } else {
                     let parent_branch = preliminary.get_parent_branch(current);
+                    // recursively process
+                    let inside_loop = inside_loop
+                        || match preliminary.instr(current.parent) {
+                            CoroInstruction::Loop { .. } => true,
+                            _ => false,
+                        };
+                    Self::construct_subscope_for_ancestors(
+                        graph,
+                        preliminary,
+                        suspend,
+                        &stack[1..],
+                        first_flag,
+                        inside_loop,
+                        block,
+                    );
+                    // clone the remaining
                     clone_branch!(
                         parent_branch,
                         block,
@@ -910,6 +926,21 @@ impl CoroGraph {
                     }));
                 } else {
                     let parent_branch = preliminary.get_parent_branch(current);
+                    let inside_loop = inside_loop
+                        || match preliminary.instr(current.parent) {
+                            CoroInstruction::Loop { .. } => true,
+                            _ => false,
+                        };
+                    Self::construct_subscope_for_ancestors(
+                        graph,
+                        preliminary,
+                        suspend,
+                        &stack[1..],
+                        first_flag,
+                        inside_loop,
+                        block,
+                    );
+                    // clone the remaining
                     clone_branch!(
                         parent_branch,
                         block,

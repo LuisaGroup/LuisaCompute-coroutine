@@ -1994,6 +1994,8 @@ pub struct CallableModule {
     pub captures: CBoxedSlice<Capture>,
     pub subroutines: CBoxedSlice<CallableModuleRef>,
     pub subroutine_ids: CBoxedSlice<u32>,
+    pub coro_frame_input_fields: CBoxedSlice<u32>,
+    pub coro_frame_output_fields: CBoxedSlice<u32>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
@@ -2231,6 +2233,8 @@ impl ModuleDuplicator {
                 captures: dup_captures,
                 subroutines: callable.subroutines.clone(),
                 subroutine_ids: callable.subroutine_ids.clone(),
+                coro_frame_input_fields: callable.coro_frame_input_fields.clone(),
+                coro_frame_output_fields: callable.coro_frame_output_fields.clone(),
                 cpu_custom_ops: callable.cpu_custom_ops.clone(),
                 pools: callable.pools.clone(),
             }

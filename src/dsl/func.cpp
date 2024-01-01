@@ -72,6 +72,7 @@ transform_function(Function function) noexcept {
 
 luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
     Type *corotype,
+    coro::CoroGraph &graph,
     luisa::unordered_map<uint, luisa::shared_ptr<const FunctionBuilder>> &sub_builders,
     Function function) noexcept {
     if (true) {
@@ -129,6 +130,7 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
             });
         };
 
+        graph = coro::CoroGraph(0, corotype);
         //idea: send in function-> module with .subroutine-> seperate transform to callable-> register to coroutine
         luisa::shared_ptr<const FunctionBuilder> converted;
         auto m = AST2IR::build_coroutine(function);
@@ -144,6 +146,24 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
             auto sub = IR2AST::build(subroutines.ptr[i]._0.get());
             auto wrapper = make_wrapper(sub.get());
             sub_builders.insert(std::make_pair(subroutine_ids.ptr[i], wrapper));
+            auto node = graph.add_node(subroutine_ids.ptr[i], wrapper);
+            for (int mem = 0u; mem < subroutines.ptr[i]._0->coro_frame_input_fields.len; ++mem) {
+                auto field = subroutines.ptr[i]._0->coro_frame_input_fields.ptr[mem];
+                node->input_state_members.push_back(field);
+            }
+            for (int mem = 0u; mem < subroutines.ptr[i]._0->coro_frame_output_fields.len; ++mem) {
+                auto field = subroutines.ptr[i]._0->coro_frame_output_fields.ptr[mem];
+                node->output_state_members.push_back(field);
+            }
+        }
+        auto node = graph.add_node(0, make_wrapper(converted.get()));
+        for (int mem = 0u; mem < m->get()->coro_frame_input_fields.len; ++mem) {
+            auto field = m->get()->coro_frame_input_fields.ptr[mem];
+            node->input_state_members.push_back(field);
+        }
+        for (int mem = 0u; mem < m->get()->coro_frame_output_fields.len; ++mem) {
+            auto field = m->get()->coro_frame_output_fields.ptr[mem];
+            node->output_state_members.push_back(field);
         }
         LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
                                     "kernel with hash {:016x}. "

@@ -1,6 +1,7 @@
 #include <luisa/luisa-compute.h>
 #include <luisa/dsl/sugar.h>
 #include <stb/stb_image_write.h>
+#include <luisa/coro/coro_dispatcher.h>
 
 using namespace luisa;
 using namespace luisa::compute;
@@ -125,12 +126,12 @@ int main(int argc, char *argv[]) {
 
     Coroutine coro = [&](Var<CoroFrame> &, ImageUInt seed_image, ImageFloat accum_image, UInt frame_index) noexcept {
         Float2 resolution = make_float2(width, height);
-        UInt2 coord = coro_id().xy();
+        UInt2 coord = make_uint2(coro_id().x / height, coro_id().x % height);
+
         $if (frame_index == 0u) {
             seed_image.write(coord, make_uint4(tea(coord.x, coord.y)));
             accum_image.write(coord, make_float4(make_float3(0.0f), 1.0f));
         };
-        $suspend("1");
 
         Float aspect_ratio = resolution.x / resolution.y;
         Float3 pos = def(camera_pos);
@@ -144,6 +145,7 @@ int main(int argc, char *argv[]) {
         Float3 throughput = def(make_float3(1.0f, 1.0f, 1.0f));
         Float hit_light = def(0.0f);
         $for (depth, max_ray_depth) {
+
             $suspend("2");
             Float closest = def(0.0f);
             Float3 normal = def(make_float3());
@@ -151,19 +153,28 @@ int main(int argc, char *argv[]) {
             next_hit(closest, normal, c, pos, d);
             Float dist_to_light = intersect_light(pos, d);
             $if (dist_to_light < closest) {
+                $if (depth == 0) {
+                    device_log("xxxxxcoord {} {}", coord.x, coord.y);
+                };
                 hit_light = 1.0f;
                 $break;
             };
-            $if (length_squared(normal) == 0.0f) { $break; };
+            $if (length_squared(normal) == 0.0f) {
+                $if (depth == 0) {
+                    device_log("coord {} {}", coord.x, coord.y);
+                };
+                $break;
+            };
             Float3 hit_pos = pos + closest * d;
             d = out_dir(normal, seed);
             pos = hit_pos + 1e-4f * d;
             throughput *= c;
-            $suspend("3");
         };
+        $suspend("3");
+
         Float3 accum_color = lerp(accum_image.read(coord).xyz(), throughput.xyz() * hit_light, 1.0f / (frame_index + 1.0f));
         accum_image.write(coord, make_float4(accum_color, 1.0f));
-        $suspend("4");
+        //$suspend("4");
         seed_image.write(coord, make_uint4(seed));
     };
 
@@ -201,10 +212,26 @@ int main(int argc, char *argv[]) {
     });
 
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
-    stream << clear_shader().dispatch(resolution);
-    for (auto i = 0u; i < 100u; i++) {
+    //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
+    // coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
+    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 32u, 2u, false};
+    stream << clear_shader().dispatch(resolution)
+           << synchronize();
+    /*for (auto i = 0u; i < 100u; i++) {
         stream << shader(seed_image, accum_image, i).dispatch(resolution);
+    }*/
+    Clock clk;
+    for (auto i = 0u; i < 10u; ++i) {
+        LUISA_INFO("spp {}", i);
+        Wdispatcher(seed_image, accum_image, i, resolution.x * resolution.y);
+        stream << Wdispatcher.await_all();
+        // << synchronize();
     }
+    stream << synchronize();
+    auto dt = clk.toc();
+    LUISA_INFO("Time: {} ms ({} spp/s)", dt, 1e6 / dt);
+
+    LUISA_INFO("Wavefront Dispatcher:");
     stream << accum_image.copy_to(host_image.data())
            << synchronize();
     stbi_write_hdr("test_helloworld.hdr", resolution.x, resolution.y, 4, reinterpret_cast<float *>(host_image.data()));

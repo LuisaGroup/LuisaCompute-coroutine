@@ -233,6 +233,7 @@ void MetalCodegenAST::_emit_type_decls(Function kernel) noexcept {
     // process types in topological order
     types.clear();
     auto emit = [&](auto &&self, auto type) noexcept -> void {
+        if (!type) { return; }
         if (types.emplace(type).second) {
             if (type->is_array() || type->is_buffer()) {
                 self(self, type->element());
@@ -950,9 +951,24 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::BUFFER_READ: _scratch << "buffer_read"; break;
         case CallOp::BUFFER_WRITE: _scratch << "buffer_write"; break;
         case CallOp::BUFFER_SIZE: _scratch << "buffer_size"; break;
-        case CallOp::BYTE_BUFFER_READ: _scratch << "byte_buffer_read"; break;
-        case CallOp::BYTE_BUFFER_WRITE: _scratch << "byte_buffer_write"; break;
-        case CallOp::BYTE_BUFFER_SIZE: _scratch << "byte_buffer_size"; break;
+        case CallOp::BYTE_BUFFER_READ: {
+            _scratch << "byte_buffer_read<";
+            _emit_type_name(expr->type());
+            _scratch << ">";
+            break;
+        }
+        case CallOp::BYTE_BUFFER_WRITE: {
+            _scratch << "byte_buffer_write<";
+            _emit_type_name(expr->type());
+            _scratch << ">";
+            break;
+        }
+        case CallOp::BYTE_BUFFER_SIZE: {
+            _scratch << "byte_buffer_size<";
+            _emit_type_name(expr->type());
+            _scratch << ">";
+            break;
+        }
         case CallOp::TEXTURE_READ: _scratch << "texture_read"; break;
         case CallOp::TEXTURE_WRITE: _scratch << "texture_write"; break;
         case CallOp::TEXTURE_SIZE: _scratch << "texture_size"; break;

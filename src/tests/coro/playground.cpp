@@ -19,21 +19,9 @@ int main(int argc, char *argv[]) {
     Stream stream = device.create_stream();
 
     Coroutine coro = [&](Var<CoroFrame> &frame) noexcept {
-        auto x = def(0u);
-        $loop {
-            $suspend("bad");
-            $if (x == 5u) { $break; };
-            $switch (x) {
-                for (auto i = 0u; i < 5u; i++) {
-                    $case (i) {
-                        device_log("x = {}", x);
-                    };
-                }
-                $default {
-                    unreachable();
-                };
-            };
-            x += 1u;
+        auto t = def(.5f);
+        $for (i, 10) {
+
         };
     };
 

@@ -112,7 +112,7 @@ int main(int argc, char *argv[]) {
                 fr.z);
         };
 
-        const float PI = 3.14159265;
+        const float PI = 3.14159265f;
         auto saturate = [](auto a) {
             return max(0.0f, min(1.0f, a));
         };
@@ -134,7 +134,7 @@ int main(int argc, char *argv[]) {
             n += noise2d(rayDir.xz() / rayDir.y * 2.0f) * 0.5f;
             n += noise2d(rayDir.xz() / rayDir.y * 4.0f) * 0.25f;
             n += noise2d(rayDir.xz() / rayDir.y * 8.0f) * 0.125f;
-            n = pow(abs(n), 3.0);
+            n = pow(abs(n), 3.f);
             n = mix(n * 0.2f, n, saturate(abs(rayDir.y * 8.f)));// fade clouds in distance
             finalColor = mix(finalColor, (make_float3(1.0) + sunCol * 10.0f) * 0.75f * saturate((rayDir.y + 0.2f) * 5.0f), saturate(n * 0.125f));
 
@@ -306,7 +306,7 @@ int main(int argc, char *argv[]) {
             rep = p2;
             Float carTime = localTime * 0.2f;// Speed of car driving
             Float crossStreet = 1.0f;        // whether we are north/south or east/west
-            Float repeatDist = 0.25;         // Car density bumper to bumper
+            Float repeatDist = 0.25f;         // Car density bumper to bumper
             // If we are going north/south instead of east/west (?) make cars that are
             // stopped in the street so we don't have collisions.
             $if (abs(fract(rep.x) - 0.5f) < 0.35f) {
@@ -555,12 +555,12 @@ int main(int argc, char *argv[]) {
 
         // If a ray actually hit the object, let's light it.
         $if ((t <= maxDepth) | (t == alpha)) {
-            //if (is_coroutine) $suspend("hit_object");
+            // if (is_coroutine) $suspend("hit_object");
             auto dist = distAndMat.x;
             // calculate the normal from the distance field. The distance field is a volume, so if you
             // sample the current point and neighboring points, you can use the difference to get
             // the normal.
-            vec3 smallVec = make_float3(smallVal, 0, 0);
+            vec3 smallVec = make_float3(smallVal, 0.f, 0.f);
             vec3 normalU = make_float3(dist - DistanceToObject(pos - smallVec.xyy()).x,
                                        dist - DistanceToObject(pos - smallVec.yxy()).x,
                                        dist - DistanceToObject(pos - smallVec.yyx()).x);
@@ -620,7 +620,7 @@ int main(int argc, char *argv[]) {
             sunShadow = saturate(sunShadow);
 
             // make a few frequencies of noise to give it some texture
-            auto n = def<float>(0.0);
+            auto n = def<float>(0.f);
             n += noise(pos * 32.0f);
             n += noise(pos * 64.0f);
             n += noise(pos * 128.0f);
@@ -635,7 +635,7 @@ int main(int argc, char *argv[]) {
             auto windowRef = def<float>(0.0f);
             // texture map the sides of buildings
             $if ((normal.y < 0.1f) & (distAndMat.y == 0.0f)) {
-                //                if (is_coroutine) $suspend("building");
+                if (is_coroutine) $suspend("building");
                 vec3 posdx = make_float3(0.0f);
                 vec3 posdy = make_float3(0.0f);
                 vec3 posGrad = posdx * Hash21(uv) + posdy * Hash21(uv * 7.6543f);
@@ -670,7 +670,7 @@ int main(int argc, char *argv[]) {
                 normal = normalize(normal + nTemp * 0.2f);
             }
             $else {
-                //                if (is_coroutine) $suspend("road");
+                // if (is_coroutine) $suspend("road");
                 // Draw the road
                 Float xroad = abs(fract(pos.x + 0.5f) - 0.5f);
                 Float zroad = abs(fract(pos.z + 0.5f) - 0.5f);
@@ -826,12 +826,35 @@ int main(int argc, char *argv[]) {
         Var rg = make_float2(coord) / make_float2(dispatch_size().xy());
         image.write(coord, make_float4(make_float2(0.3f, 0.4f), 0.5f, 1.0f));
     };
-    Kernel2D<Image<float>, float> k = main_kernel;
-    main_kernel = k;
-    k = main_kernel;
 
-    Shader2D<Image<float>> clear = device.compile(clear_kernel);
-    Shader2D<Image<float>, float> shader = device.compile(k);
+    Kernel1D mega_kernel = [&](Float time) {
+        Var<Skyline> frame;
+        // device_log("scheduler: init");
+        initialize_coroframe(frame, dispatch_id());
+        // device_log("scheduler: enter entry");
+        coro(frame, time);
+        // device_log("scheduler: exit entry");
+        $loop {
+            auto token = read_promise<uint>(frame, "coro_token");
+            $switch (token) {
+                for (auto i = 1u; i <= coro.suspend_count(); i++) {
+                    $case (i) {
+                        // device_log("scheduler: enter coro {}", i);
+                        coro[i](frame, time);
+                        // device_log("scheduler: exit coro {}", i);
+                    };
+                }
+                $default {
+                    // device_log("scheduler: terminate");
+                    $return();
+                };
+            };
+        };
+    };
+
+    auto clear = device.compile(clear_kernel);
+    auto shader = device.compile(main_kernel);
+    auto mega_shader = device.compile(mega_kernel);
 
     stream << clear(device_image).dispatch(width, height);
 
@@ -849,16 +872,18 @@ int main(int argc, char *argv[]) {
     }*/
     float time = 0;
     int count = 0;
-    float length = 6;
+    float length = 1000;
     clock.tic();
-    while (time < length) {
-        time = static_cast<float>(clock.toc() * 1e-3);
-        count += 1;
-        stream << shader(device_image, time).dispatch(width, height);
-        if (SHOW) {
-            stream << swap_chain.present(device_image);
-        }
-    }
+    // while (time < length) {
+    //     time = static_cast<float>(clock.toc() * 1e-3);
+    //     count += 1;
+    //     stream << shader(device_image, time).dispatch(width, height);
+    //     if (SHOW) {
+    //         window.poll_events();
+    //         if (window.should_close()) { break; }
+    //         stream << swap_chain.present(device_image);
+    //     }
+    // }
     time = 0;
     stream << synchronize();
     LUISA_INFO("FPS: {}.", count / (clock.toc() * 1e-3));
@@ -867,9 +892,12 @@ int main(int argc, char *argv[]) {
     while (time < length) {
         time = static_cast<float>(clock.toc() * 1e-3);
         count += 1;
-        Wdispatcher(time, width * height);
-        stream << Wdispatcher.await_all();
+        stream << mega_shader(time).dispatch(width * height);
+        // Wdispatcher(time, width * height);
+        // stream << Wdispatcher.await_all();
         if (SHOW) {
+            window.poll_events();
+            if (window.should_close()) { break; }
             stream << swap_chain.present(device_image);
         }
     }

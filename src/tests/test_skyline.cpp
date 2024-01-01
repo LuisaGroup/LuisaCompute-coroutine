@@ -13,7 +13,7 @@ using namespace luisa;
 using namespace luisa::compute;
 struct alignas(4) Skyline {
 };
-const bool SHOW = false;
+const bool SHOW = true;
 LUISA_COROFRAME_STRUCT(Skyline){};
 int main(int argc, char *argv[]) {
 
@@ -421,7 +421,7 @@ int main(int argc, char *argv[]) {
                 auto alpha = time / (t2 - t1);
                 fade = saturate(time);
                 fade *= saturate(t2 - localTime);
-                camPos = make_float3(26.0f, 0.05f + smoothstep(0.0, 1.0, alpha) * 0.4f, 2.0f);
+                camPos = make_float3(26.0f, 0.05f + smoothstep(0.0f, 1.0f, alpha) * 0.4f, 2.0f);
                 camPos.z -= alpha * 2.8f;
                 camUp = make_float3(0, 1, 0);
                 camLookat = make_float3(camPos.x - 0.3f, -8.15f, -40.0f);
@@ -451,7 +451,7 @@ int main(int argc, char *argv[]) {
                         fade = saturate(time);
                         fade *= saturate(t4 - localTime);
                         camPos = make_float3(2.15f - alpha * 0.5f, 0.02f, -1.0f - alpha * 0.2f);
-                        camPos.y += smoothstep(0.0, 1.0, alpha * alpha) * 3.4f;
+                        camPos.y += smoothstep(0.0f, 1.0f, alpha * alpha) * 3.4f;
                         camUp = normalize(make_float3(0, 1, 0.0));
                         camLookat = make_float3(0.f, 0.5f + alpha, alpha * 5.0f);
                     }
@@ -501,7 +501,7 @@ int main(int argc, char *argv[]) {
         // ray marching time
         $for (i, 0, 500)// This is the count of the max times the ray actually marches.
         {
-            //if (is_coroutine) $suspend("ray_march");
+            //            if (is_coroutine) $suspend("ray_march");
             marchCount += 1.0f;
             // Step along the ray.
             pos = (camPos + rayVec * t);
@@ -555,7 +555,7 @@ int main(int argc, char *argv[]) {
 
         // If a ray actually hit the object, let's light it.
         $if ((t <= maxDepth) | (t == alpha)) {
-            if (is_coroutine) $suspend("hit_object");
+            //if (is_coroutine) $suspend("hit_object");
             auto dist = distAndMat.x;
             // calculate the normal from the distance field. The distance field is a volume, so if you
             // sample the current point and neighboring points, you can use the difference to get
@@ -635,7 +635,7 @@ int main(int argc, char *argv[]) {
             auto windowRef = def<float>(0.0f);
             // texture map the sides of buildings
             $if ((normal.y < 0.1f) & (distAndMat.y == 0.0f)) {
-                if (is_coroutine) $suspend("building");
+                //                if (is_coroutine) $suspend("building");
                 vec3 posdx = make_float3(0.0f);
                 vec3 posdy = make_float3(0.0f);
                 vec3 posGrad = posdx * Hash21(uv) + posdy * Hash21(uv * 7.6543f);
@@ -670,7 +670,7 @@ int main(int argc, char *argv[]) {
                 normal = normalize(normal + nTemp * 0.2f);
             }
             $else {
-                if (is_coroutine) $suspend("road");
+                //                if (is_coroutine) $suspend("road");
                 // Draw the road
                 Float xroad = abs(fract(pos.x + 0.5f) - 0.5f);
                 Float zroad = abs(fract(pos.z + 0.5f) - 0.5f);
@@ -836,8 +836,8 @@ int main(int argc, char *argv[]) {
     stream << clear(device_image).dispatch(width, height);
 
     Clock clock;
-    //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, width * height};
-    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 96u, 2u, false};
+    coro::SimpleCoroDispatcher Wdispatcher{&coro, device, width * height};
+    //coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 96u, 2u, false};
     /*while (!window.should_close()) {
         window.poll_events();
         float time = static_cast<float>(clock.toc() * 1e-3);

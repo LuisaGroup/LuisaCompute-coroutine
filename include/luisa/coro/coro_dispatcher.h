@@ -276,7 +276,7 @@ public:
             auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
             count.atomic(nxt).fetch_add(1u);
         };
-        ShaderOption o{.name = "coro_gen"};
+        ShaderOption o{};
         _gen_shader = device.compile(gen_kernel, o);
         _resume_shaders.resize(max_sub_coro);
         for (int i = 1; i < max_sub_coro; ++i) {
@@ -312,7 +312,7 @@ public:
                 //    device_log("resume kernel {} : id {} goto kernel {}", i, frame_id, nxt);
                 count.atomic(nxt).fetch_add(1u);
             };
-            o.name = "resume" + std::to_string(i);
+            if (_debug) o.name = "resume" + std::to_string(i);
             _resume_shaders[i] = device.compile(resume_kernel, o);
         }
         Kernel1D _prefix_kernel = [&](BufferUInt count, BufferUInt prefix, UInt n) {
@@ -416,7 +416,7 @@ public:
         _done = false;
         Kernel1D main_kernel = [&](BufferUInt global, UInt dispatch_size, Var<Args>... args) {
             set_block_size(block_size, 1, 1);
-            auto q_fac = 1u;
+            auto q_fac = 2u;
             auto shared_queue_size = block_size * q_fac;
             Shared<FrameType> frames{shared_queue_size};
             Shared<uint> path_id{shared_queue_size};

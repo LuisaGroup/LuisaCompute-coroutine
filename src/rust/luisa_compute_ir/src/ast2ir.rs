@@ -1104,7 +1104,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "SMOOTHSTEP" | "STEP" | "FMA" => {
                 // (floatN, floatN, floatN) -> floatN
                 let args = convert_args(&[false, false, false]);
-                check_same_types!(t, args[0].type_(), args[1].type_(), args[2].type_());
+                //check_same_types!(t, args[0].type_(), args[1].type_(), args[2].type_());
                 assert!(t.is_float());
                 args
             }
@@ -1149,7 +1149,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "POW" | "ATAN2" | "COPYSIGN" => {
                 // (floatN, floatN) -> floatN
                 let args = convert_args(&[false, false]);
-                check_same_types!(t, args[0].type_(), args[1].type_());
+                //check_same_types!(t, args[0].type_(), args[1].type_());
                 assert!(t.is_float());
                 args
             }

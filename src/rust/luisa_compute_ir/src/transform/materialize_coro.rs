@@ -29,6 +29,7 @@ use crate::transform::Transform;
 use crate::{CArc, CBox, CBoxedSlice, Pooled};
 use bitflags::Flags;
 use std::collections::HashMap;
+use crate::transform::mem2reg::Mem2Reg;
 
 pub(crate) struct MaterializeCoro;
 
@@ -1005,6 +1006,7 @@ impl<'a> CoroScopeMaterializer<'a> {
 impl Transform for MaterializeCoro {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         let callable = CanonicalizeControlFlow.transform_callable(callable);
+        let callable = Mem2Reg.transform_callable(callable);
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);

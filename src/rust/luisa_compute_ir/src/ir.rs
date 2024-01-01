@@ -1147,11 +1147,34 @@ impl Serialize for UserData {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Serialize, Hash, PartialEq, Eq)]
 pub struct PhiIncoming {
     pub value: NodeRef,
     pub block: Pooled<BasicBlock>,
+}
+
+impl Ord for PhiIncoming {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        let ans = self.block.as_ptr().cmp(&other.block.as_ptr());
+        if ans == Ordering::Equal {
+            self.value.cmp(&other.value)
+        } else {
+            ans
+        }
+    }
+}
+impl PartialOrd for PhiIncoming {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let ans = self.block.as_ptr().partial_cmp(&other.block.as_ptr());
+        if ans == Some(Ordering::Equal) {
+            self.value.partial_cmp(&other.value)
+        } else {
+            ans
+        }
+    }
 }
 
 #[repr(C)]
@@ -1217,6 +1240,7 @@ pub enum Instruction {
     Call(Func, CBoxedSlice<NodeRef>),
 
     Phi(CBoxedSlice<PhiIncoming>),
+    Return(NodeRef),
     /* represent a loop in the form of
     loop {
         body();
@@ -1225,7 +1249,6 @@ pub enum Instruction {
         }
     }
     */
-    Return(NodeRef),
     Loop {
         body: Pooled<BasicBlock>,
         cond: NodeRef,
@@ -1794,6 +1817,12 @@ impl NodeRef {
             _ => false,
         }
     }
+    pub fn is_primitive(&self) -> bool {
+        match self.type_().as_ref() { 
+            Type::Primitive(..) => true,
+            _ => false,
+        }
+    }
     pub fn is_reference_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { by_value } => !*by_value,
@@ -1968,6 +1997,7 @@ pub struct CallableModule {
 }
 
 impl PartialEq for CallableModuleRef {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.0.as_ptr() == other.0.as_ptr()
     }
@@ -1976,6 +2006,7 @@ impl PartialEq for CallableModuleRef {
 impl Eq for CallableModuleRef {}
 
 impl Hash for CallableModuleRef {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.as_ptr().hash(state);
     }

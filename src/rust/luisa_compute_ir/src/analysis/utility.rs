@@ -2,6 +2,7 @@ use crate::analysis::const_eval::ConstEval;
 use crate::display::DisplayIR;
 use crate::ir::{Func, Instruction, NodeRef, Type};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use crate::{CArc, CBoxedSlice};
 
 #[macro_export]
 macro_rules! safe {
@@ -668,6 +669,257 @@ impl AccessTree {
     }
 }
 
+pub(crate) fn is_primitives_read_only_function(func: &Func, args: &CBoxedSlice<NodeRef>) -> bool {
+    match func {
+        // callable
+        Func::Callable(callable) => {
+            !callable.0.args.iter().zip(args.iter()).any(|(parameter, arg)| {
+                arg.is_primitive() && parameter.is_reference_argument()
+            })
+        }
+
+        // function with no arguments
+        Func::ZeroInitializer
+        | Func::ThreadId
+        | Func::BlockId
+        | Func::WarpSize
+        | Func::WarpLaneId
+        | Func::DispatchId
+        | Func::DispatchSize
+        | Func::CoroId
+        | Func::CoroToken => true,
+
+        // AD functions
+        Func::PropagateGrad
+        | Func::OutputGrad
+        | Func::RequiresGradient
+        | Func::Backward
+        | Func::Gradient
+        | Func::GradientMarker
+        | Func::AccGrad
+        | Func::Detach => todo!(),
+
+        // functions with all value arguments
+        Func::Assume
+        | Func::Assert(_)
+        | Func::RasterDiscard
+        | Func::Cast
+        | Func::Bitcast
+        | Func::Pack
+        | Func::Unpack
+        | Func::Add
+        | Func::Sub
+        | Func::Mul
+        | Func::Div
+        | Func::Rem
+        | Func::BitAnd
+        | Func::BitOr
+        | Func::BitXor
+        | Func::Shl
+        | Func::Shr
+        | Func::RotRight
+        | Func::RotLeft
+        | Func::Eq
+        | Func::Ne
+        | Func::Lt
+        | Func::Le
+        | Func::Gt
+        | Func::Ge
+        | Func::MatCompMul
+        | Func::Neg
+        | Func::Not
+        | Func::BitNot
+        | Func::All
+        | Func::Any
+        | Func::Select
+        | Func::Clamp
+        | Func::Lerp
+        | Func::Step
+        | Func::SmoothStep
+        | Func::Saturate
+        | Func::Abs
+        | Func::Min
+        | Func::Max
+        | Func::ReduceSum
+        | Func::ReduceProd
+        | Func::ReduceMin
+        | Func::ReduceMax
+        | Func::Clz
+        | Func::Ctz
+        | Func::PopCount
+        | Func::Reverse
+        | Func::IsInf
+        | Func::IsNan
+        | Func::Acos
+        | Func::Acosh
+        | Func::Asin
+        | Func::Asinh
+        | Func::Atan
+        | Func::Atan2
+        | Func::Atanh
+        | Func::Cos
+        | Func::Cosh
+        | Func::Sin
+        | Func::Sinh
+        | Func::Tan
+        | Func::Tanh
+        | Func::Exp
+        | Func::Exp2
+        | Func::Exp10
+        | Func::Log
+        | Func::Log2
+        | Func::Log10
+        | Func::Powi
+        | Func::Powf
+        | Func::Sqrt
+        | Func::Rsqrt
+        | Func::Ceil
+        | Func::Floor
+        | Func::Fract
+        | Func::Trunc
+        | Func::Round
+        | Func::Fma
+        | Func::Copysign
+        | Func::Cross
+        | Func::Dot
+        | Func::OuterProduct
+        | Func::Length
+        | Func::LengthSquared
+        | Func::Normalize
+        | Func::Faceforward
+        | Func::Distance
+        | Func::Reflect
+        | Func::Determinant
+        | Func::Transpose
+        | Func::Inverse
+        | Func::WarpIsFirstActiveLane
+        | Func::WarpFirstActiveLane
+        | Func::WarpActiveAllEqual
+        | Func::WarpActiveBitAnd
+        | Func::WarpActiveBitOr
+        | Func::WarpActiveBitXor
+        | Func::WarpActiveCountBits
+        | Func::WarpActiveMax
+        | Func::WarpActiveMin
+        | Func::WarpActiveProduct
+        | Func::WarpActiveSum
+        | Func::WarpActiveAll
+        | Func::WarpActiveAny
+        | Func::WarpActiveBitMask
+        | Func::WarpPrefixCountBits
+        | Func::WarpPrefixSum
+        | Func::WarpPrefixProduct
+        | Func::WarpReadLaneAt
+        | Func::WarpReadFirstLane
+        | Func::SynchronizeBlock
+        | Func::Vec
+        | Func::Vec2
+        | Func::Vec3
+        | Func::Vec4
+        | Func::Permute
+        | Func::InsertElement
+        | Func::ExtractElement
+        | Func::Struct
+        | Func::Array
+        | Func::Mat
+        | Func::Mat2
+        | Func::Mat3
+        | Func::Mat4
+        | Func::ShaderExecutionReorder => true,
+
+        // resource functions, the first argument should always be a reference
+        Func::RayTracingQueryAll
+        | Func::RayTracingQueryAny
+        | Func::RayTracingInstanceTransform
+        | Func::RayTracingInstanceVisibilityMask
+        | Func::RayTracingInstanceUserId
+        | Func::RayTracingSetInstanceTransform
+        | Func::RayTracingSetInstanceOpacity
+        | Func::RayTracingSetInstanceVisibility
+        | Func::RayTracingSetInstanceUserId
+        | Func::RayTracingTraceClosest
+        | Func::RayTracingTraceAny
+        | Func::RayQueryWorldSpaceRay
+        | Func::RayQueryProceduralCandidateHit
+        | Func::RayQueryTriangleCandidateHit
+        | Func::RayQueryCommittedHit
+        | Func::RayQueryCommitTriangle
+        | Func::RayQueryCommitProcedural
+        | Func::RayQueryTerminate
+        | Func::IndirectDispatchSetCount
+        | Func::IndirectDispatchSetKernel
+        | Func::AtomicRef
+        | Func::AtomicExchange
+        | Func::AtomicCompareExchange
+        | Func::AtomicFetchAdd
+        | Func::AtomicFetchSub
+        | Func::AtomicFetchAnd
+        | Func::AtomicFetchOr
+        | Func::AtomicFetchXor
+        | Func::AtomicFetchMin
+        | Func::AtomicFetchMax
+        | Func::BufferRead
+        | Func::BufferWrite
+        | Func::BufferSize
+        | Func::BufferAddress
+        | Func::ByteBufferRead
+        | Func::ByteBufferWrite
+        | Func::ByteBufferSize
+        | Func::Texture2dRead
+        | Func::Texture2dWrite
+        | Func::Texture2dSize
+        | Func::Texture3dRead
+        | Func::Texture3dWrite
+        | Func::Texture3dSize
+        | Func::BindlessTexture2dSample
+        | Func::BindlessTexture2dSampleLevel
+        | Func::BindlessTexture2dSampleGrad
+        | Func::BindlessTexture2dSampleGradLevel
+        | Func::BindlessTexture3dSample
+        | Func::BindlessTexture3dSampleLevel
+        | Func::BindlessTexture3dSampleGrad
+        | Func::BindlessTexture3dSampleGradLevel
+        | Func::BindlessTexture2dRead
+        | Func::BindlessTexture3dRead
+        | Func::BindlessTexture2dReadLevel
+        | Func::BindlessTexture3dReadLevel
+        | Func::BindlessTexture2dSize
+        | Func::BindlessTexture3dSize
+        | Func::BindlessTexture2dSizeLevel
+        | Func::BindlessTexture3dSizeLevel
+        | Func::BindlessBufferRead
+        | Func::BindlessBufferWrite
+        | Func::BindlessBufferSize
+        | Func::BindlessBufferAddress
+        | Func::BindlessBufferType
+        | Func::BindlessByteBufferRead => true,
+
+        Func::Unreachable(_) => todo!(),
+        Func::Load => true,
+        Func::AddressOf => true,
+        Func::CpuCustomOp(_) => todo!(),
+        Func::GetElementPtr => true,
+
+        Func::Unknown0 => todo!(),
+        Func::Unknown1 => todo!(),
+    }
+}
+
+// fn phi_eq(a: NodeRef, b: NodeRef) -> bool {
+//     if let (&Instruction::Phi(ref a),
+//         &Instruction::Phi(ref b)) = (a.as_ref(), b.as_ref()) {
+//         if a.len() != b.len() {
+//             return false;
+//         }
+//         let mut a = a.to_vec();
+//         let mut b = b.to_vec();
+//         a.sort();
+//         b.sort();
+//         a.eq(&b)
+//     } else {
+//         false
+//     }
+// }
 
 
 pub(crate) fn node_updatable(var: NodeRef) -> bool {

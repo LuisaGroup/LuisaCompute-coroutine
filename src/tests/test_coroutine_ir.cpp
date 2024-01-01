@@ -79,11 +79,11 @@ int main(int argc, char *argv[]) {
 
             auto a = def(234u);
             // $suspend("2");
-            //
-            // $if (i == 0u) {
-            //     $break;
-            // };
-            //
+
+            $if (i == 0u) {
+                a = def(7u);
+            };
+
             $suspend("Suspend(2)");
 
             x_buffer.write(coro_id_, a);

@@ -450,9 +450,7 @@ impl<'a> FunctionEmitter<'a> {
                             write!(&mut param, "{}* {}", ty, var).unwrap();
                         }
                     }
-                    _ => {
-                        unreachable!("{:?}", arg.get().instruction.as_ref());
-                    }
+                    _ => unreachable!("{:?}", arg.get().instruction.as_ref()),
                 }
                 callable_emitter
                     .node_to_var

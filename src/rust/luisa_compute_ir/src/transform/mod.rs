@@ -8,6 +8,7 @@ pub mod vectorize;
 pub mod fwd_autodiff;
 pub mod ref2ret;
 pub mod reg2mem;
+pub mod mem2reg;
 
 use bitflags::Flags;
 

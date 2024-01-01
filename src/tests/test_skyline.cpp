@@ -635,7 +635,9 @@ int main(int argc, char *argv[]) {
             auto windowRef = def<float>(0.0f);
             // texture map the sides of buildings
             $if ((normal.y < 0.1f) & (distAndMat.y == 0.0f)) {
-                if (is_coroutine) $suspend("building");
+                if (is_coroutine) {
+                    $suspend("building");
+                }
                 vec3 posdx = make_float3(0.0f);
                 vec3 posdy = make_float3(0.0f);
                 vec3 posGrad = posdx * Hash21(uv) + posdy * Hash21(uv * 7.6543f);

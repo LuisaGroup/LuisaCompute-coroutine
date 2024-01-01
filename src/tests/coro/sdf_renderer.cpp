@@ -214,14 +214,14 @@ int main(int argc, char *argv[]) {
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
     //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
     // coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
-    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 32u, 2u, true};
+    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 32u, 2u, false};
     stream << clear_shader().dispatch(resolution)
            << synchronize();
     /*for (auto i = 0u; i < 100u; i++) {
         stream << shader(seed_image, accum_image, i).dispatch(resolution);
     }*/
     Clock clk;
-    for (auto i = 0u; i < 1000u; ++i) {
+    for (auto i = 0u; i < 10u; ++i) {
         LUISA_INFO("spp {}", i);
         Wdispatcher(seed_image, accum_image, i, resolution.x * resolution.y);
         stream << Wdispatcher.await_all();

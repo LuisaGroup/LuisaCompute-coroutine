@@ -20,8 +20,13 @@ int main(int argc, char *argv[]) {
 
     Coroutine coro = [&](Var<CoroFrame> &frame) noexcept {
         auto t = def(.5f);
-        $for (i, 10) {
-
+        $if (true) {
+            $suspend("1");
+            $if (t < 1.f) {
+                device_log("good");
+            }
+            $else {};
+            device_log("good2");
         };
     };
 

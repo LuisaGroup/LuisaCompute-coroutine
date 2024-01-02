@@ -27,7 +27,7 @@ struct Mem2RegImpl {
 
     node_definition: HashMap<NodeRef, HashMap<Pooled<BasicBlock>, IncomingInfo>>,
     node_updated: HashMap<Pooled<BasicBlock>, HashSet<NodeRef>>,
-    node_by_ref: HashSet<NodeRef>,
+    local_remaining: HashSet<NodeRef>,
     phi2var: HashMap<NodeRef, NodeRef>,
     backfill_phis: HashMap<Pooled<BasicBlock>, HashSet<NodeRef>>,
 }
@@ -39,7 +39,7 @@ impl Mem2RegImpl {
             module_original: module.entry.clone(),
             node_definition: HashMap::new(),
             node_updated: HashMap::new(),
-            node_by_ref: HashSet::new(),
+            local_remaining: HashSet::new(),
             phi2var: HashMap::new(),
             backfill_phis: HashMap::new(),
         }
@@ -61,7 +61,7 @@ impl Mem2RegImpl {
                                 for (parameter, arg) in callable.0.args.iter().zip(args.iter()) {
                                     if arg.is_local_primitive() && parameter.is_reference_argument()
                                     {
-                                        self.node_by_ref.insert(*arg);
+                                        self.local_remaining.insert(*arg);
                                     }
                                 }
                             }
@@ -72,28 +72,55 @@ impl Mem2RegImpl {
                 _ => {}
             }
         }
+        for node in nodes.iter() {
+            let type_ = node.type_().as_ref();
+            let instruction = node.get().instruction.as_ref();
+            match instruction {
+                Instruction::Local { .. } => {
+                    if !node.is_primitive() {
+                        println!("local_remaining {:?}", *node);
+                        self.local_remaining.insert(*node);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn keep_unchanged(&self, var: NodeRef) -> bool {
-        if self.node_by_ref.contains(&var) {
-            return true;
+        if var.is_local() {
+            if self.local_remaining.contains(&var) {
+                return true;
+            }
+            return false;
         }
-        let is_local_primitive = var.is_primitive() && var.is_local();
         let is_load_removable_func = match var.get().instruction.as_ref() {
             Instruction::Call(func, args) => match func {
                 Func::Load => {
                     assert_eq!(args.len(), 1);
                     let arg = args[0];
-                    if self.node_by_ref.contains(&arg) || arg.is_gep() {
-                        false;
-                    }
-                    true
+                    let ans = || {
+                        if arg.is_gep() {
+                            return false;
+                        }
+                        if arg.is_local() {
+                            if self.local_remaining.contains(&arg) {
+                                return false;
+                            }
+                            return true;
+                        }
+                        if arg.is_phi() {
+                            return true;
+                        }
+                        false
+                    };
+                    ans()
                 }
                 _ => false,
             },
             _ => false,
         };
-        if is_local_primitive || is_load_removable_func {
+        if is_load_removable_func {
             return false;
         }
         true
@@ -481,9 +508,13 @@ impl Mem2RegImpl {
                     }
                     if changed {
                         args = CBoxedSlice::new(args_new);
+                        node.get_mut().instruction =
+                            CArc::new(Instruction::Call(func.clone(), args.clone()));
                     }
 
                     // record def of return value
+                    // must replace node instruction before check keep_unchanged
+                    // because we have updated args
                     let mut node_removed = false;
                     if !self.keep_unchanged(node) {
                         match func {
@@ -500,11 +531,6 @@ impl Mem2RegImpl {
                     }
                     if !node_removed {
                         self.record_def(block, node, node);
-
-                        if changed {
-                            node.get_mut().instruction =
-                                CArc::new(Instruction::Call(func.clone(), args));
-                        }
                     }
                 }
                 Instruction::Print { fmt, args } => {
@@ -547,11 +573,7 @@ impl Mem2RegImpl {
                 }
                 Instruction::UserData(_) => {}
                 Instruction::Comment(_) => {}
-                Instruction::CoroSplitMark { token } => {
-                    if *token == 3 {
-                        println!("{}", *token);
-                    }
-                }
+                Instruction::CoroSplitMark { token } => {}
                 Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
                     unreachable!("{:?} unreachable in Mem2Reg", instruction);
                 }

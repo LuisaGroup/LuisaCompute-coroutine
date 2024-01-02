@@ -1,6 +1,6 @@
-use std::collections::HashSet;
-use crate::ir::{BasicBlock, collect_nodes, Func, Instruction, IrBuilder, Module};
+use crate::ir::{collect_nodes, BasicBlock, Func, Instruction, IrBuilder, Module};
 use crate::transform::Transform;
+use std::collections::HashSet;
 
 struct RemovePhiImpl;
 
@@ -15,7 +15,7 @@ impl RemovePhiImpl {
                         b.set_insert_point(module.entry.first);
                         let local = b.local_zero_init(node.type_().clone());
                         for incoming in incomings.iter() {
-                            b.set_insert_point(incoming.block.last.get().prev);
+                            b.set_insert_point(incoming.value);
                             b.update(local, incoming.value);
                         }
                         b.set_insert_point(node);

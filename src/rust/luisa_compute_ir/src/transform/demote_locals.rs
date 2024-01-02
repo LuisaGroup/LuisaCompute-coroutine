@@ -25,6 +25,7 @@
 
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
 use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
+use crate::analysis::utility::DISPLAY_IR_DEBUG;
 use crate::display::DisplayIR;
 use crate::ir::{BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
 use crate::transform::remove_phi::RemovePhi;
@@ -293,6 +294,10 @@ impl VariablePropagator {
     ) {
         macro_rules! check_not_local {
             ($node: expr) => {
+                if ($node.valid() && $node.is_local()) {
+                    let v = unsafe { DISPLAY_IR_DEBUG.get() }.var_str($node);
+                    println!("local variable not loaded {}", v);
+                }
                 assert!(
                     !($node.valid() && $node.is_local()),
                     "local variable not loaded"
@@ -616,7 +621,15 @@ impl Transform for DemoteLocals {
     fn transform_module(&self, module: Module) -> Module {
         let module = RemovePhi.transform_module(module);
         println!("{:-^40}", " After RemovePhi ");
-        println!("{}", DisplayIR::new().display_ir(&module));
+        println!(
+            "{}",
+            unsafe {
+                let diplay_ir = DISPLAY_IR_DEBUG.get();
+                diplay_ir.clear();
+                diplay_ir
+            }
+            .display_ir(&module)
+        );
 
         InitializationNormalizer::normalize(&module);
         let scope_tree = ScopeTree::from(&module);

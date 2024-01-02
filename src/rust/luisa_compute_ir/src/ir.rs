@@ -1824,6 +1824,12 @@ impl NodeRef {
             _ => false,
         }
     }
+    pub fn is_vector(&self) -> bool {
+        match self.type_().as_ref() {
+            Type::Vector(..) => true,
+            _ => false,
+        }
+    }
     pub fn is_local_primitive(&self) -> bool {
         self.is_primitive() && self.is_local()
     }

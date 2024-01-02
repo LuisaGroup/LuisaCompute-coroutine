@@ -32,9 +32,7 @@ impl DisplayIR {
     }
 
     pub fn clear(&mut self) {
-        self.map.clear();
-        self.defs.clear();
-        self.cnt = 0;
+        *self = DisplayIR::new();
     }
 
     pub fn var_str(&mut self, node: &NodeRef) -> String {

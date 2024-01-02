@@ -18,44 +18,48 @@ int main(int argc, char *argv[]) {
     Device device = context.create_device(argv[1]);
     Stream stream = device.create_stream();
 
-    Coroutine coro = [&](Var<CoroFrame> &frame) noexcept {
-        auto t = def(.5f);
-        $if (true) {
-            $suspend("1");
-            $if (t < 1.f) {
-                device_log("good");
-            }
-            $else {};
-            device_log("good2");
-        };
+    auto cuda_print = [](const char *msg) noexcept {
+        ExternalCallable<void()>{luisa::format("([] {{ printf(\"{}\n\") }})", msg)}();
     };
 
-    Kernel1D mega_kernel = [&] {
-        Var<CoroFrame> frame;
-        device_log("scheduler: init");
-        initialize_coroframe(frame, dispatch_id());
-        device_log("scheduler: enter entry");
-        coro(frame);
-        device_log("scheduler: exit entry");
+    Kernel1D coro = [&]() noexcept {
+        auto t = def(0.f);
+        // cuda_print("000000000000000000000000");
         $loop {
-            auto token = read_promise<uint>(frame, "coro_token");
-            $switch (token) {
-                for (auto i = 1u; i <= coro.suspend_count(); i++) {
-                    $case (i) {
-                        device_log("scheduler: enter coro {}", i);
-                        coro[i](frame);
-                        device_log("scheduler: exit coro {}", i);
-                    };
-                }
-                $default {
-                    device_log("scheduler: terminate");
-                    $return();
-                };
+            // cuda_print("aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            $if (t > 1.f) {
+                $break;
             };
+            t += 1.f;
         };
     };
 
-    auto shader = device.compile(mega_kernel);
+    // Kernel1D mega_kernel = [&] {
+    //     Var<CoroFrame> frame;
+    //     device_log("scheduler: init");
+    //     initialize_coroframe(frame, dispatch_id());
+    //     device_log("scheduler: enter entry");
+    //     coro(frame);
+    //     device_log("scheduler: exit entry");
+    //     $loop {
+    //         auto token = read_promise<uint>(frame, "coro_token");
+    //         $switch (token) {
+    //             for (auto i = 1u; i <= coro.suspend_count(); i++) {
+    //                 $case (i) {
+    //                     device_log("scheduler: enter coro {}", i);
+    //                     coro[i](frame);
+    //                     device_log("scheduler: exit coro {}", i);
+    //                 };
+    //             }
+    //             $default {
+    //                 device_log("scheduler: terminate");
+    //                 $return();
+    //             };
+    //         };
+    //     };
+    // };
+
+    auto shader = device.compile(coro);
     stream << shader().dispatch(1u)
            << synchronize();
 }

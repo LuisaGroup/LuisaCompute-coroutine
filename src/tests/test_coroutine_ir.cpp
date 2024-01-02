@@ -120,7 +120,7 @@ int main(int argc, char *argv[]) {
     //    };
     LUISA_INFO_WITH_LOCATION("Coro count = {}", coro.suspend_count());
     auto type = Type::of<CoroFrame>();
-    Kernel1D main_kernel = [&](BufferUInt x_buffer) noexcept {
+    Kernel1D mega_kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
         Var<CoroFrame> frame;
         initialize_coroframe(frame, dispatch_id());
@@ -141,7 +141,7 @@ int main(int argc, char *argv[]) {
             };
         };
     };
-    auto shader = device.compile(main_kernel, {.name = R"(output\shader)"});
+    auto shader = device.compile(mega_kernel, {.name = R"(output\shader)"});
     // coro::WavefrontCoroDispatcher dispatcher{&coro, device, stream, n, false};
     // dispatcher(x_buffer, n);
     // stream << dispatcher.await_all()
@@ -150,7 +150,6 @@ int main(int argc, char *argv[]) {
     for (auto i = 0u; i < n; ++i) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
-    for (auto iter = 0u; iter < 5; ++iter) {
-        stream << shader(x_buffer).dispatch(n);
-    }
+    stream << shader(x_buffer).dispatch(n);
+    stream << synchronize();
 }

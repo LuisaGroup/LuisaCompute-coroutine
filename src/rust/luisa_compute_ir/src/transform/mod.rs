@@ -136,6 +136,14 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = materialize_coro::MaterializeCoro;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
+        "mem2reg" => {
+            let transform = mem2reg::Mem2Reg;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "remove_phi" => {
+            let transform = remove_phi::RemovePhi;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
         _ => panic!("unknown transform {}", name),
     }
 }

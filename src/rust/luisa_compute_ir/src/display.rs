@@ -271,7 +271,7 @@ impl DisplayIR {
                 self.output += &format!("${}: Phi", n);
                 for PhiIncoming { block, value } in incomings.iter() {
                     let label = self.block_label(*block);
-                    let v = self.get(value);
+                    let v = self.get_or_insert(value);
                     self.output += &format!(" {} -> ${}, ", label, v);
                 }
             }

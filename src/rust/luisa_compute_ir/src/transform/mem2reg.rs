@@ -221,6 +221,7 @@ impl Mem2RegImpl {
         }
 
         for branch in branches {
+            // update incomings
             for node in node_updated_branch.iter() {
                 let incoming_branch_merge = incomings_branch.entry(*node).or_insert(IncomingInfo {
                     defined_locally: HashSet::new(),
@@ -240,6 +241,14 @@ impl Mem2RegImpl {
                 } else {
                     incoming_branch_merge.exclusive_defined_locally = false;
                 }
+            }
+
+            // backfill phis
+            if let Some(backfill_phis_branch) = self.backfill_phis.remove(&branch) {
+                self.backfill_phis
+                    .entry(outer)
+                    .or_default()
+                    .extend(backfill_phis_branch);
             }
         }
 
@@ -608,24 +617,22 @@ impl Mem2Reg {
 }
 
 impl Transform for Mem2Reg {
-    fn transform_callable(&self, module: CallableModule) -> CallableModule {
-        Self::validate(&module.module);
+    fn transform_module(&self, module: Module) -> Module {
+        Self::validate(&module);
 
         println!("{:-^40}", " Before Mem2Reg ");
-        println!(
-            "{}",
-            unsafe { DISPLAY_IR_DEBUG.get() }.display_ir_callable(&module)
-        );
+        println!("{}", unsafe { DISPLAY_IR_DEBUG.get() }.display_ir(&module));
 
         let mut module = module;
-        let mut impl_ = Mem2RegImpl::new(&module.module);
+        let mut impl_ = Mem2RegImpl::new(&module);
         impl_.pre_process();
         impl_.process_block(impl_.module_original);
 
-        // println!("{:-^40}", " After Mem2Reg ");
-        // println!("{}", DisplayIR::new().display_ir_callable(&module));
+        println!("{:-^40}", " After Mem2Reg ");
+        println!("{}", DisplayIR::new().display_ir(&module));
 
-        Self::validate(&module.module);
+        Self::validate(&module);
+
         module
     }
 }

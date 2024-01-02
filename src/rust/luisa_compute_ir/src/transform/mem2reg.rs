@@ -544,6 +544,7 @@ impl Transform for Mem2Reg {
         println!("{:-^40}", " After Mem2Reg ");
         println!("{}", DisplayIR::new().display_ir_callable(&module));
 
+        Self::validate(&module.module);
         module
     }
 }

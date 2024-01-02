@@ -629,7 +629,15 @@ impl Transform for Mem2Reg {
         impl_.process_block(impl_.module_original);
 
         println!("{:-^40}", " After Mem2Reg ");
-        println!("{}", DisplayIR::new().display_ir(&module));
+        println!(
+            "{}",
+            unsafe {
+                let display_ir = DISPLAY_IR_DEBUG.get();
+                display_ir.clear();
+                display_ir
+            }
+            .display_ir(&module)
+        );
 
         Self::validate(&module);
 

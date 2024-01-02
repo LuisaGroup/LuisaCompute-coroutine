@@ -1,3 +1,4 @@
+use crate::analysis::utility::DISPLAY_IR_DEBUG;
 use crate::ir::{collect_nodes, BasicBlock, Func, Instruction, IrBuilder, Module};
 use crate::transform::Transform;
 use std::collections::HashSet;
@@ -11,6 +12,10 @@ impl RemovePhiImpl {
             for node in nodes {
                 match node.get().instruction.as_ref() {
                     Instruction::Phi(incomings) => {
+                        println!(
+                            "Remove Phi {:?}",
+                            unsafe { DISPLAY_IR_DEBUG.get() }.var_str(&node)
+                        );
                         let mut b = IrBuilder::new_without_bb(module.pools.clone());
                         b.set_insert_point(module.entry.first);
                         let local = b.local_zero_init(node.type_().clone());

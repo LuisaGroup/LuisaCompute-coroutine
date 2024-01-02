@@ -25,6 +25,11 @@ pub struct CopyPropagation;
 impl Transform for CopyPropagation {
     fn transform_callable(&self, module: CallableModule) -> CallableModule {
         let mut impl_ = CopyPropagationImpl::new(&module.module);
+
+        // TODO: copy propagation
+
+        // TODO: especially phi of callable args!
+
         todo!()
     }
 }

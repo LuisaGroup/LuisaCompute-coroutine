@@ -1062,7 +1062,7 @@ impl<'a> CoroScopeMaterializer<'a> {
 impl Transform for MaterializeCoro {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         let callable = CanonicalizeControlFlow.transform_callable(callable);
-        // let callable = Mem2Reg.transform_callable(callable);
+        let callable = Mem2Reg.transform_callable(callable);
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);

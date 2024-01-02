@@ -357,6 +357,8 @@ impl DisplayIR {
             Instruction::Loop { body, cond } => {
                 let temp = format!("Loop {{\n");
                 self.output += temp.as_str();
+                let default_label = self.block_label(*body);
+                writeln!(self.output, "{}:", default_label).unwrap();
                 for node in body.nodes().iter() {
                     self.display(*node, ident + 1, false);
                 }

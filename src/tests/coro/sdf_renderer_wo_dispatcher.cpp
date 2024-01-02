@@ -1,7 +1,6 @@
 #include <luisa/luisa-compute.h>
 #include <luisa/dsl/sugar.h>
 #include <stb/stb_image_write.h>
-#include <luisa/coro/coro_dispatcher.h>
 
 using namespace luisa;
 using namespace luisa::compute;
@@ -181,11 +180,12 @@ int main(int argc, char *argv[]) {
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream();
     constexpr auto resolution = make_uint2(width, height);
+    constexpr auto spp = 10u;
 
     Image<uint> seed_image = device.create_image<uint>(PixelStorage::INT1, width, height);
     Image<float> accum_image = device.create_image<float>(PixelStorage::FLOAT4, width, height);
 
-    Kernel2D mega_kernel = [&](ImageUInt seed_image, ImageFloat accum_image, UInt frame_index) {
+    Kernel1D mega_kernel = [&](ImageUInt seed_image, ImageFloat accum_image, UInt frame_index) {
         Var<CoroFrame> frame;
         initialize_coroframe(frame, dispatch_id());
         coro(frame, seed_image, accum_image, frame_index);
@@ -212,27 +212,18 @@ int main(int argc, char *argv[]) {
     });
 
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
-    //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
-    // coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
-    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 32u, 2u, false};
     stream << clear_shader().dispatch(resolution)
            << synchronize();
-    /*for (auto i = 0u; i < 100u; i++) {
-        stream << shader(seed_image, accum_image, i).dispatch(resolution);
-    }*/
     Clock clk;
-    for (auto i = 0u; i < 10u; ++i) {
+    for (auto i = 0u; i < spp; i++) {
         LUISA_INFO("spp {}", i);
-        Wdispatcher(seed_image, accum_image, i, resolution.x * resolution.y);
-        stream << Wdispatcher.await_all();
-        // << synchronize();
+        stream << shader(seed_image, accum_image, i).dispatch(resolution.x * resolution.y);
     }
     stream << synchronize();
     auto dt = clk.toc();
     LUISA_INFO("Time: {} ms ({} spp/s)", dt, 1e6 / dt);
 
-    LUISA_INFO("Wavefront Dispatcher:");
     stream << accum_image.copy_to(host_image.data())
            << synchronize();
-    stbi_write_hdr("test_sdf.hdr", resolution.x, resolution.y, 4, reinterpret_cast<float *>(host_image.data()));
+    stbi_write_hdr("test_sdf_wo_dispatcher.hdr", resolution.x, resolution.y, 4, reinterpret_cast<float *>(host_image.data()));
 }

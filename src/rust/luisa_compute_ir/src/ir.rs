@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
 use std::ops::Deref;
+use std::ptr::null;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
@@ -2574,6 +2575,11 @@ impl IrBuilder {
     pub fn pools(&self) -> &CArc<ModulePools> {
         &self.pools
     }
+
+    fn _check_insert_point(&self) {
+        assert_ne!(self.insert_point, INVALID_REF);
+    }
+
     pub fn new_without_bb(pools: CArc<ModulePools>) -> Self {
         Self {
             bb: Pooled::null(),
@@ -2591,6 +2597,7 @@ impl IrBuilder {
         }
     }
     pub fn bb(&self) -> Pooled<BasicBlock> {
+        assert_ne!(self.bb.as_ptr(), null());
         self.bb
     }
     pub fn set_insert_point(&mut self, node: NodeRef) {
@@ -2604,9 +2611,11 @@ impl IrBuilder {
         }
     }
     pub fn get_insert_point(&self) -> NodeRef {
+        self._check_insert_point();
         self.insert_point
     }
     pub fn append(&mut self, node: NodeRef) {
+        self._check_insert_point();
         self.insert_point.insert_after_self(node);
         self.insert_point = node;
     }
@@ -3021,6 +3030,7 @@ impl IrBuilder {
         new_node
     }
     pub fn finish(self) -> Pooled<BasicBlock> {
+        assert_ne!(self.bb.as_ptr(), null());
         self.bb
     }
 }

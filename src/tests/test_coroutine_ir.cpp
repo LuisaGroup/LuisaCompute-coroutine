@@ -30,7 +30,7 @@ int main(int argc, char *argv[]) {
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream(StreamTag::COMPUTE);
 
-    constexpr auto n = 2u;
+    constexpr auto n = 3u;
     auto x_buffer = device.create_buffer<uint>(n);
     auto x_vec = std::vector<uint>(n, 0u);
 
@@ -73,12 +73,12 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [](Var<CoroFrame> &frame, BufferUInt x_buffer) noexcept {
         auto coro_id_ = coro_id().x;
         auto a = def(0u);
-        // $for (i, 2u) {
-            // $suspend("Suspend(1)");
-            // x_buffer.write(coro_id_, coro_id_);
+        $for (i, 2u) {
+            $suspend("Suspend(1)");
+            x_buffer.write(coro_id_, coro_id_);
 
-            // a = def(234u);
-            // $suspend("2");
+            a = def(234u);
+            $suspend("2");
 
             $if (1u == 0u) {
                 a = def(7u);
@@ -87,9 +87,7 @@ int main(int argc, char *argv[]) {
             $suspend("Suspend(2)");
 
             x_buffer.write(coro_id_, a);
-        // };
-
-
+        };
 
         //        auto coro_id_ = coro_id().x;
         //        UInt a;
@@ -122,39 +120,28 @@ int main(int argc, char *argv[]) {
     //    };
     LUISA_INFO_WITH_LOCATION("Coro count = {}", coro.suspend_count());
     auto type = Type::of<CoroFrame>();
-    auto frame_buffer = device.create_buffer<CoroFrame>(n);
-    Kernel1D kernel = [&](BufferUInt x_buffer) noexcept {
-        auto id = dispatch_id();
-        auto id_x = id.x;
-        x_buffer.write(id_x, id_x);
-        auto frame = frame_buffer->read(id_x);
-        initialize_coroframe(frame, id);
-        auto token = read_promise<uint>(frame, "coro_token");
-        device_log("id = {}, coro_token = {}, coro_frame = {}", id, token, frame);
-        coro(frame, x_buffer);
-        frame_buffer->write(id_x, frame);
-    };
-    auto shader = device.compile(kernel, {.name = R"(output\entry_debug)"});
-    Kernel1D resume_kernel = [&](BufferUInt x_buffer) noexcept {
+    Kernel1D main_kernel = [&](BufferUInt x_buffer) noexcept {
         auto id = dispatch_x();
-        auto frame = frame_buffer->read(id);
-        auto token = read_promise<uint>(frame, "coro_token");
-        $switch (token) {
-            for (int i = 1; i <= coro.suspend_count(); ++i) {
-                $case (i) {
-                    coro[i](frame, x_buffer);
+        Var<CoroFrame> frame;
+        initialize_coroframe(frame, dispatch_id());
+        coro(frame, x_buffer);
+        $loop {
+            auto token = read_promise<uint>(frame, "coro_token");
+            device_log("id = {}, coro_token = {}, coro_frame = {}", id, token, frame);
+            $switch (token) {
+                for (int i = 1; i <= coro.suspend_count(); ++i) {
+                    $case (i) {
+                        coro[i](frame, x_buffer);
+                    };
+                }
+                $default {
+                    x_buffer.write(id, 0u);
+                    $return();
                 };
-            }
-            $default {
-                x_buffer.write(id, 0u);
             };
         };
-        device_log("id = {}, coro_token = {}, coro_frame = {}", id, token, frame);
-        frame_buffer->write(id, frame);
     };
-    auto resume_shader = device.compile(
-        resume_kernel,
-        {.name = R"(output\resume_debug)"});
+    auto shader = device.compile(main_kernel, {.name = R"(output\shader)"});
     // coro::WavefrontCoroDispatcher dispatcher{&coro, device, stream, n, false};
     // dispatcher(x_buffer, n);
     // stream << dispatcher.await_all()
@@ -163,15 +150,7 @@ int main(int argc, char *argv[]) {
     for (auto i = 0u; i < n; ++i) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
-    stream << shader(x_buffer).dispatch(n)
-           << x_buffer.copy_to(x_vec.data())
-           << synchronize();
     for (auto iter = 0u; iter < 5; ++iter) {
-        for (auto i = 0u; i < n; ++i) {
-            LUISA_INFO("iter {}: x[{}] = {}", iter, i, x_vec[i]);
-        }
-        stream << resume_shader(x_buffer).dispatch(n)
-               << x_buffer.copy_to(x_vec.data())
-               << synchronize();
+        stream << shader(x_buffer).dispatch(n);
     }
 }

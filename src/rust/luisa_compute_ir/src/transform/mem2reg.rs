@@ -28,6 +28,7 @@ struct Mem2RegImpl {
     node_definition: HashMap<NodeRef, HashMap<Pooled<BasicBlock>, IncomingInfo>>,
     node_updated: HashMap<Pooled<BasicBlock>, HashSet<NodeRef>>,
     node_by_ref: HashSet<NodeRef>,
+    phi2value: HashMap<NodeRef, NodeRef>,
 }
 
 impl Mem2RegImpl {
@@ -38,6 +39,7 @@ impl Mem2RegImpl {
             node_definition: HashMap::new(),
             node_updated: HashMap::new(),
             node_by_ref: HashSet::new(),
+            phi2value: HashMap::new(),
         }
     }
 
@@ -45,9 +47,8 @@ impl Mem2RegImpl {
         self.scan_argument_by_ref(self.module_original);
     }
     fn scan_argument_by_ref(&mut self, block: Pooled<BasicBlock>) {
-        // if block.is_empty() { return; }
-        let mut node = block.first.get().next;
-        while node != block.last {
+        let nodes = collect_nodes(block);
+        for node in nodes.iter() {
             let type_ = node.type_().as_ref();
             let instruction = node.get().instruction.as_ref();
             match instruction {
@@ -66,31 +67,8 @@ impl Mem2RegImpl {
                         }
                     }
                 }
-                // control flow
-                Instruction::If {
-                    cond,
-                    true_branch,
-                    false_branch,
-                } => {
-                    self.scan_argument_by_ref(*true_branch);
-                    self.scan_argument_by_ref(*false_branch);
-                }
-                Instruction::Switch {
-                    value,
-                    default,
-                    cases,
-                } => {
-                    for case in cases.as_ref() {
-                        self.scan_argument_by_ref(case.block);
-                    }
-                    self.scan_argument_by_ref(*default);
-                }
-                Instruction::Loop { body, cond } => {
-                    self.scan_argument_by_ref(*body);
-                }
                 _ => {}
             }
-            node = node.get().next;
         }
     }
 
@@ -114,9 +92,9 @@ impl Mem2RegImpl {
         self.node_by_ref.contains(&var) || !(is_local_phi_primitive || is_load_removable_func)
     }
     fn record_def(&mut self, block: Pooled<BasicBlock>, var: NodeRef, value: NodeRef) {
-        if self.keep_unchanged(var) {
-            return;
-        }
+        // if self.keep_unchanged(var) {
+        //     return;
+        // }
 
         // some PhiIncomings are killed by this def
         let incomings = self
@@ -153,13 +131,18 @@ impl Mem2RegImpl {
         let incomings = self.node_definition.get(&var).unwrap().get(&block).unwrap();
         assert!(incomings.exclusive_alive); // there must be a value for each incoming block
         let incomings_alive = CBoxedSlice::new(incomings.alive.iter().cloned().collect::<Vec<_>>());
-        // Optimize if there is only 1 incoming
-        if incomings_alive.len() == 1 {
-            return incomings_alive[0].value;
-        }
+        let incomings = 0; // release borrow
+
+        // // Optimize if there is only 1 incoming
+        // // TODO: if we fill back in the loop, it should not be done here
+        // if incomings_alive.len() == 1 {
+        //     return incomings_alive[0].value;
+        // }
+
         let instruction = CArc::new(Instruction::Phi(incomings_alive));
         let phi = Node::new(instruction, var.type_().clone());
         let phi = new_node(&self.builder.pools, phi);
+        self.record_def(block, var, phi);
 
         // insert phi node before ref_node
         insert_before.insert_before_self(phi);
@@ -177,11 +160,14 @@ impl Mem2RegImpl {
                 assert!(incoming_info.insert(branch, incoming_branch).is_none());
             }
         }
-        self.node_updated.entry(branch).or_default();
+        assert!(self.node_updated.insert(branch, HashSet::new()).is_none());
     }
     fn exit_block(&mut self, branches: Vec<Pooled<BasicBlock>>, outer: Pooled<BasicBlock>) {
         let mut node_updated_branch = HashSet::new();
         let mut incomings_branch: HashMap<NodeRef, IncomingInfo> = HashMap::new();
+
+        let branch_set: HashSet<Pooled<BasicBlock>> = HashSet::from_iter(branches.iter().cloned());
+        assert_eq!(branches.len(), branch_set.len());
 
         for branch in branches.iter() {
             // add node updated by inner to outer
@@ -269,7 +255,6 @@ impl Mem2RegImpl {
 
     fn process_block(&mut self, block: Pooled<BasicBlock>) {
         println!("Process block {:?}", block.ptr);
-        // if block.is_empty() { return; }
 
         let mut node = block.first.get().next;
         while node != block.last {
@@ -279,9 +264,6 @@ impl Mem2RegImpl {
             println!("{:?}", node);
             match instruction {
                 Instruction::Invalid => {
-                    println!("\n{}", unsafe {
-                        DISPLAY_IR_DEBUG.get().display_ir_bb(&block, 0, false)
-                    });
                     unreachable!("Invalid node should not appear in non-sentinel nodes");
                 }
                 Instruction::Buffer
@@ -300,13 +282,27 @@ impl Mem2RegImpl {
                     self.process_block(*body);
                     // record use of cond. insert phi node to the end of body
                     let cond_new = self.record_use(*body, *cond, body.last);
+
+                    // TODO: fill back if in loop block
+                    // x = 1;           // PhiIncoming 0
+                    // loop {
+                    //     use x;
+                    //     if (...) {
+                    //         x = 2;   // PhiIncoming 1
+                    //     }
+                    // } (...)
+
+                    self.exit_block(vec![*body], block);
+
+                    // Instruction replacement must be done last.
+                    // Because when the former instruction is released, the instruction match reference
+                    // will become "wild pointers"!
                     if cond_new != *cond {
                         node.get_mut().instruction = CArc::new(Instruction::Loop {
                             cond: cond_new,
                             body: *body,
                         })
                     }
-                    self.exit_block(vec![*body], block);
                 }
                 Instruction::If {
                     cond,
@@ -317,6 +313,12 @@ impl Mem2RegImpl {
 
                     // record use of cond
                     let cond_new = self.record_use(block, *cond, node);
+                    self.enter_block(*true_branch, block);
+                    self.process_block(*true_branch);
+                    self.enter_block(*false_branch, block);
+                    self.process_block(*false_branch);
+                    self.exit_block(vec![*true_branch, *false_branch], block);
+
                     if cond_new != *cond {
                         node.get_mut().instruction = CArc::new(Instruction::If {
                             cond: cond_new,
@@ -324,11 +326,6 @@ impl Mem2RegImpl {
                             false_branch: *false_branch,
                         })
                     }
-                    self.enter_block(*true_branch, block);
-                    self.process_block(*true_branch);
-                    self.enter_block(*false_branch, block);
-                    self.process_block(*false_branch);
-                    self.exit_block(vec![*true_branch, *false_branch], block);
                 }
                 Instruction::Switch {
                     value,
@@ -337,13 +334,6 @@ impl Mem2RegImpl {
                 } => {
                     // record use of value
                     let value_new = self.record_use(block, *value, node);
-                    if value_new != *value {
-                        node.get_mut().instruction = CArc::new(Instruction::Switch {
-                            value: value_new,
-                            default: *default,
-                            cases: cases.clone(),
-                        })
-                    }
                     let mut branches = Vec::new();
                     for case in cases.as_ref() {
                         self.enter_block(case.block, block);
@@ -354,6 +344,14 @@ impl Mem2RegImpl {
                     self.process_block(*default);
                     branches.push(*default);
                     self.exit_block(branches, block);
+
+                    if value_new != *value {
+                        node.get_mut().instruction = CArc::new(Instruction::Switch {
+                            value: value_new,
+                            default: *default,
+                            cases: cases.clone(),
+                        })
+                    }
                 }
                 Instruction::RayQuery {
                     ray_query,
@@ -368,6 +366,7 @@ impl Mem2RegImpl {
                 }
                 Instruction::CoroRegister { token, value, var } => {
                     let value_new = self.record_use(block, *value, node);
+
                     if value_new != *value {
                         node.get_mut().instruction = CArc::new(Instruction::CoroRegister {
                             token: *token,
@@ -398,12 +397,13 @@ impl Mem2RegImpl {
                 Instruction::Update { var, value } => {
                     // record use
                     let value_new = self.record_use(block, *value, node);
+                    let var = *var;
 
-                    if self.keep_unchanged(*var) {
+                    if self.keep_unchanged(var) {
                         // keep this update node unchanged
                         if value_new != *value {
                             node.get_mut().instruction = CArc::new(Instruction::Update {
-                                var: *var,
+                                var,
                                 value: value_new,
                             });
                         }
@@ -413,7 +413,7 @@ impl Mem2RegImpl {
                     }
 
                     // record def
-                    self.record_def(block, *var, value_new);
+                    self.record_def(block, var, value_new);
                 }
                 Instruction::Const(_) => {
                     // record def
@@ -432,21 +432,16 @@ impl Mem2RegImpl {
                             changed = true;
                         }
                     }
-                    if changed {
-                        let args_new = CBoxedSlice::new(args_new);
-                        args = args_new.clone();
-                        node.get_mut().instruction =
-                            CArc::new(Instruction::Call(func.clone(), args_new));
-                    }
 
                     // record def of return value
                     let mut return_value_recorded = false;
                     match func {
                         Func::Load => {
                             assert_eq!(args.len(), 1);
-                            let arg = args[0];
+                            let arg = args_new[0];
+                            println!("arg = {:?}", arg);
                             if !arg.is_gep() && !arg.is_local() {
-                                node.remove();
+                                node.replace_with(Node);
                                 self.record_def(block, node, arg);
                                 return_value_recorded = true;
                             }
@@ -455,6 +450,13 @@ impl Mem2RegImpl {
                     }
                     if !return_value_recorded {
                         self.record_def(block, node, node);
+                    }
+
+                    if changed {
+                        let args_new = CBoxedSlice::new(args_new);
+                        args = args_new.clone();
+                        node.get_mut().instruction =
+                            CArc::new(Instruction::Call(func.clone(), args_new));
                     }
                 }
                 Instruction::Print { fmt, args } => {
@@ -467,6 +469,7 @@ impl Mem2RegImpl {
                             changed = true;
                         }
                     }
+
                     if changed {
                         let args_new = CBoxedSlice::new(args_new);
                         node.get_mut().instruction = CArc::new(Instruction::Print {
@@ -512,6 +515,7 @@ impl Mem2Reg {
     fn validate(module: &Module) {
         let nodes = collect_nodes(module.entry);
         for node in nodes {
+            assert!(node.valid());
             match node.get().instruction.as_ref() {
                 Instruction::If {
                     true_branch,
@@ -519,6 +523,9 @@ impl Mem2Reg {
                     ..
                 } => {
                     assert_ne!(true_branch.as_ptr(), false_branch.as_ptr());
+                }
+                Instruction::Invalid => {
+                    unreachable!();
                 }
                 _ => {}
             }

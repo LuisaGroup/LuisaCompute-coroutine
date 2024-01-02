@@ -149,7 +149,6 @@ impl Mem2RegImpl {
         } else {
             backfill = true;
         }
-        let incomings = 0; // release borrow
 
         let instruction = CArc::new(Instruction::Phi(incomings_alive));
         let phi = Node::new(instruction, var.type_().clone());
@@ -354,7 +353,7 @@ impl Mem2RegImpl {
                     if cond_new != *cond {
                         node.get_mut().instruction = CArc::new(Instruction::Loop {
                             cond: cond_new,
-                            body: body,
+                            body,
                         })
                     }
                 }

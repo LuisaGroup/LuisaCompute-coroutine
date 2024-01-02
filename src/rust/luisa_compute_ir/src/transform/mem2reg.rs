@@ -6,12 +6,12 @@ use crate::analysis::utility::{is_primitives_read_only_function, DISPLAY_IR_DEBU
 use crate::display::DisplayIR;
 use crate::ir::{
     collect_nodes, new_node, ArrayType, BasicBlock, CallableModule, Func, Instruction, IrBuilder,
-    MatrixType, Module, Node, NodeRef, PhiIncoming, Primitive, StructType, Type, VectorType,
+    MatrixType, Module, ModulePools, Node, NodeRef, PhiIncoming, Primitive, StructType, Type,
+    VectorType,
 };
 use crate::transform::Transform;
 use crate::{CArc, CBoxedSlice, Pooled};
 use std::collections::{HashMap, HashSet};
-use std::process::exit;
 
 #[derive(Default, Clone)]
 struct IncomingInfo {
@@ -22,24 +22,26 @@ struct IncomingInfo {
 }
 
 struct Mem2RegImpl {
-    builder: IrBuilder,
+    pools: CArc<ModulePools>,
     module_original: Pooled<BasicBlock>,
 
     node_definition: HashMap<NodeRef, HashMap<Pooled<BasicBlock>, IncomingInfo>>,
     node_updated: HashMap<Pooled<BasicBlock>, HashSet<NodeRef>>,
     node_by_ref: HashSet<NodeRef>,
-    phi2value: HashMap<NodeRef, NodeRef>,
+    phi2var: HashMap<NodeRef, NodeRef>,
+    backfill_phis: HashMap<Pooled<BasicBlock>, HashSet<NodeRef>>,
 }
 
 impl Mem2RegImpl {
     fn new(module: &Module) -> Self {
         Self {
-            builder: IrBuilder::new(module.pools.clone()),
+            pools: module.pools.clone(),
             module_original: module.entry.clone(),
             node_definition: HashMap::new(),
             node_updated: HashMap::new(),
             node_by_ref: HashSet::new(),
-            phi2value: HashMap::new(),
+            phi2var: HashMap::new(),
+            backfill_phis: HashMap::new(),
         }
     }
 
@@ -89,7 +91,13 @@ impl Mem2RegImpl {
             },
             _ => false,
         };
-        self.node_by_ref.contains(&var) || !(is_local_phi_primitive || is_load_removable_func)
+        if self.node_by_ref.contains(&var) {
+            return true;
+        }
+        if !is_local_phi_primitive && !is_load_removable_func {
+            return true;
+        }
+        false
     }
     fn record_def(&mut self, block: Pooled<BasicBlock>, var: NodeRef, value: NodeRef) {
         // if self.keep_unchanged(var) {
@@ -131,18 +139,30 @@ impl Mem2RegImpl {
         let incomings = self.node_definition.get(&var).unwrap().get(&block).unwrap();
         assert!(incomings.exclusive_alive); // there must be a value for each incoming block
         let incomings_alive = CBoxedSlice::new(incomings.alive.iter().cloned().collect::<Vec<_>>());
-        let incomings = 0; // release borrow
 
-        // // Optimize if there is only 1 incoming
-        // // TODO: if we fill back in the loop, it should not be done here
-        // if incomings_alive.len() == 1 {
-        //     return incomings_alive[0].value;
-        // }
+        // Optimize if there is only 1 incoming and do not need backfill in loops
+        let mut backfill = false;
+        if incomings.exclusive_defined_locally {
+            if incomings_alive.len() == 1 {
+                return incomings_alive[0].value;
+            }
+        } else {
+            backfill = true;
+        }
+        let incomings = 0; // release borrow
 
         let instruction = CArc::new(Instruction::Phi(incomings_alive));
         let phi = Node::new(instruction, var.type_().clone());
-        let phi = new_node(&self.builder.pools, phi);
-        self.record_def(block, var, phi);
+        let phi = new_node(&self.pools, phi);
+
+        // We don't record_def(block, var, phi) here because it will override possible alive incomings.
+        // Eliminate common subexpression in an other pass if possible.
+
+        // record phis that need backfill in loops
+        self.phi2var.insert(phi, var);
+        if backfill {
+            self.backfill_phis.entry(block).or_default().insert(phi);
+        }
 
         // insert phi node before ref_node
         insert_before.insert_before_self(phi);
@@ -253,6 +273,45 @@ impl Mem2RegImpl {
         }
     }
 
+    fn fill_back_phis(&mut self, block: Pooled<BasicBlock>) {
+        // x = 1;           // PhiIncoming 0
+        // loop {
+        //     use x;       // Phi(...)
+        //     if (...) {
+        //         x = 2;   // PhiIncoming 1
+        //     }
+        // } (...)
+
+        let phis_to_backfill = self.backfill_phis.remove(&block).unwrap_or_default();
+        for phi in phis_to_backfill {
+            let var = *self.phi2var.get(&phi).unwrap();
+            let incomings_body_end = self.node_definition.get(&var);
+            if incomings_body_end.is_none() {
+                continue;
+            }
+            let incomings_body_end = incomings_body_end.unwrap().get(&block);
+            if incomings_body_end.is_none() {
+                continue;
+            }
+            let incomings_body_end = incomings_body_end.unwrap();
+            if incomings_body_end.defined_locally.is_empty() {
+                continue;
+            }
+            match phi.get().instruction.as_ref() {
+                Instruction::Phi(incomings) => {
+                    println!("Before backfill: {:?}", phi);
+                    let mut incomings: HashSet<_> = HashSet::from_iter(incomings.iter().cloned());
+                    incomings.extend(incomings_body_end.defined_locally.clone());
+                    let incomings =
+                        CBoxedSlice::new(Vec::from_iter(incomings.iter().map(ToOwned::to_owned)));
+                    phi.get_mut().instruction = CArc::new(Instruction::Phi(incomings));
+                    println!("After backfill: {:?}", phi);
+                }
+                _ => panic!(),
+            }
+        }
+    }
+
     fn process_block(&mut self, block: Pooled<BasicBlock>) {
         println!("Process block {:?}", block.ptr);
 
@@ -278,21 +337,16 @@ impl Mem2RegImpl {
                 }
 
                 Instruction::Loop { body, cond } => {
-                    self.enter_block(*body, block);
-                    self.process_block(*body);
+                    let body = *body;
+                    self.enter_block(body, block);
+                    self.process_block(body);
                     // record use of cond. insert phi node to the end of body
-                    let cond_new = self.record_use(*body, *cond, body.last);
+                    let cond_new = self.record_use(body, *cond, body.last);
 
-                    // TODO: fill back if in loop block
-                    // x = 1;           // PhiIncoming 0
-                    // loop {
-                    //     use x;
-                    //     if (...) {
-                    //         x = 2;   // PhiIncoming 1
-                    //     }
-                    // } (...)
+                    // // backfill if in loop block
+                    // self.fill_back_phis(body);
 
-                    self.exit_block(vec![*body], block);
+                    self.exit_block(vec![body], block);
 
                     // Instruction replacement must be done last.
                     // Because when the former instruction is released, the instruction match reference
@@ -300,7 +354,7 @@ impl Mem2RegImpl {
                     if cond_new != *cond {
                         node.get_mut().instruction = CArc::new(Instruction::Loop {
                             cond: cond_new,
-                            body: *body,
+                            body: body,
                         })
                     }
                 }
@@ -309,21 +363,22 @@ impl Mem2RegImpl {
                     true_branch,
                     false_branch,
                 } => {
-                    let var_index = unsafe { DISPLAY_IR_DEBUG.get().get(cond) };
+                    let true_branch = *true_branch;
+                    let false_branch = *false_branch;
 
                     // record use of cond
                     let cond_new = self.record_use(block, *cond, node);
-                    self.enter_block(*true_branch, block);
-                    self.process_block(*true_branch);
-                    self.enter_block(*false_branch, block);
-                    self.process_block(*false_branch);
-                    self.exit_block(vec![*true_branch, *false_branch], block);
+                    self.enter_block(true_branch, block);
+                    self.process_block(true_branch);
+                    self.enter_block(false_branch, block);
+                    self.process_block(false_branch);
+                    self.exit_block(vec![true_branch, false_branch], block);
 
                     if cond_new != *cond {
                         node.get_mut().instruction = CArc::new(Instruction::If {
                             cond: cond_new,
-                            true_branch: *true_branch,
-                            false_branch: *false_branch,
+                            true_branch,
+                            false_branch,
                         })
                     }
                 }
@@ -378,13 +433,13 @@ impl Mem2RegImpl {
 
                 Instruction::Local { init } => {
                     // record use of init
-                    let init_new = self.record_use(block, *init, node);
+                    let mut value = self.record_use(block, *init, node);
 
                     if self.keep_unchanged(node) {
                         // keep this local node unchanged
-                        if init_new != *init {
+                        if value != *init {
                             node.get_mut().instruction =
-                                CArc::new(Instruction::Local { init: init_new });
+                                CArc::new(Instruction::Local { init: value });
                         }
                     } else {
                         // do not generate local node
@@ -392,12 +447,15 @@ impl Mem2RegImpl {
                     }
 
                     // record def of Local node
-                    self.record_def(block, node, init_new);
+                    self.record_def(block, node, value);
                 }
                 Instruction::Update { var, value } => {
                     // record use
                     let value_new = self.record_use(block, *value, node);
                     let var = *var;
+
+                    // record def
+                    self.record_def(block, var, value_new);
 
                     if self.keep_unchanged(var) {
                         // keep this update node unchanged
@@ -411,9 +469,6 @@ impl Mem2RegImpl {
                         // do not generate update node
                         node.remove();
                     }
-
-                    // record def
-                    self.record_def(block, var, value_new);
                 }
                 Instruction::Const(_) => {
                     // record def
@@ -434,29 +489,29 @@ impl Mem2RegImpl {
                     }
 
                     // record def of return value
-                    let mut return_value_recorded = false;
+                    let mut node_removed = false;
                     match func {
                         Func::Load => {
                             assert_eq!(args.len(), 1);
                             let arg = args_new[0];
                             println!("arg = {:?}", arg);
                             if !arg.is_gep() && !arg.is_local() {
-                                node.replace_with(Node);
+                                node.remove();
                                 self.record_def(block, node, arg);
-                                return_value_recorded = true;
+                                node_removed = true;
                             }
                         }
                         _ => {}
                     }
-                    if !return_value_recorded {
+                    if !node_removed {
                         self.record_def(block, node, node);
-                    }
 
-                    if changed {
-                        let args_new = CBoxedSlice::new(args_new);
-                        args = args_new.clone();
-                        node.get_mut().instruction =
-                            CArc::new(Instruction::Call(func.clone(), args_new));
+                        if changed {
+                            let args_new = CBoxedSlice::new(args_new);
+                            args = args_new.clone();
+                            node.get_mut().instruction =
+                                CArc::new(Instruction::Call(func.clone(), args_new));
+                        }
                     }
                 }
                 Instruction::Print { fmt, args } => {

@@ -6,9 +6,9 @@ pub mod vectorize;
 
 // pub mod eval;
 pub mod fwd_autodiff;
+pub mod mem2reg;
 pub mod ref2ret;
 pub mod reg2mem;
-pub mod mem2reg;
 
 use bitflags::Flags;
 
@@ -16,6 +16,7 @@ pub mod extract_loop_cond;
 
 pub mod demote_locals;
 
+pub mod copy_propagation;
 pub mod defer_load;
 pub mod inliner;
 pub mod materialize_coro;

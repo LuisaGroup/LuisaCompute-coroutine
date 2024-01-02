@@ -133,7 +133,10 @@ impl DisplayIR {
             self.map
                 .get(&node.0)
                 .map(ToOwned::to_owned)
-                .unwrap_or_else(|| panic!("{:?} not found in map", node))
+                .unwrap_or_else(|| {
+                    println!("{}", self.output);
+                    panic!("{:?} not found in map", node)
+                })
         } else {
             usize::MAX
         }
@@ -268,7 +271,7 @@ impl DisplayIR {
                 for PhiIncoming { block, value } in incomings.iter() {
                     let label = self.block_label(*block);
                     let v = self.get(value);
-                    self.output += &format!(" block_{} -> ${}, ", label, v);
+                    self.output += &format!(" {} -> ${}, ", label, v);
                 }
             }
             Instruction::Break => self.output += "break",

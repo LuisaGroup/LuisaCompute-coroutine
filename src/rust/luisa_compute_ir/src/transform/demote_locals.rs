@@ -23,13 +23,13 @@
 //
 // Note: the `reg2mem` transform should be applied before this transform.
 
-use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
+use crate::analysis::scope_tree::{ScopeTree, ScopeTreeBlock};
 use crate::ir::{BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
+use crate::transform::remove_phi::RemovePhi;
 use crate::transform::Transform;
 use crate::CBoxedSlice;
 use std::collections::{HashMap, HashSet};
-use crate::transform::remove_phi::RemovePhi;
 
 pub struct DemoteLocals;
 

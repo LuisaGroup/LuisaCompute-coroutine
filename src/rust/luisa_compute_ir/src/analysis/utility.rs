@@ -1,8 +1,8 @@
 use crate::analysis::const_eval::ConstEval;
 use crate::display::DisplayIR;
 use crate::ir::{Func, Instruction, NodeRef, Type};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::{CArc, CBoxedSlice};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[macro_export]
 macro_rules! safe {
@@ -672,11 +672,12 @@ impl AccessTree {
 pub(crate) fn is_primitives_read_only_function(func: &Func, args: &CBoxedSlice<NodeRef>) -> bool {
     match func {
         // callable
-        Func::Callable(callable) => {
-            !callable.0.args.iter().zip(args.iter()).any(|(parameter, arg)| {
-                arg.is_primitive() && parameter.is_reference_argument()
-            })
-        }
+        Func::Callable(callable) => !callable
+            .0
+            .args
+            .iter()
+            .zip(args.iter())
+            .any(|(parameter, arg)| arg.is_primitive() && parameter.is_reference_argument()),
 
         // function with no arguments
         Func::ZeroInitializer
@@ -905,29 +906,10 @@ pub(crate) fn is_primitives_read_only_function(func: &Func, args: &CBoxedSlice<N
     }
 }
 
-// fn phi_eq(a: NodeRef, b: NodeRef) -> bool {
-//     if let (&Instruction::Phi(ref a),
-//         &Instruction::Phi(ref b)) = (a.as_ref(), b.as_ref()) {
-//         if a.len() != b.len() {
-//             return false;
-//         }
-//         let mut a = a.to_vec();
-//         let mut b = b.to_vec();
-//         a.sort();
-//         b.sort();
-//         a.eq(&b)
-//     } else {
-//         false
-//     }
-// }
-
-
 pub(crate) fn node_updatable(var: NodeRef) -> bool {
     match var.get().instruction.as_ref() {
         Instruction::Local { .. } => true,
-        Instruction::Argument { by_value } => {
-            !by_value
-        }
+        Instruction::Argument { by_value } => !by_value,
         Instruction::Shared { .. } => true,
         Instruction::Call(func, _) => match func {
             Func::GetElementPtr => true,

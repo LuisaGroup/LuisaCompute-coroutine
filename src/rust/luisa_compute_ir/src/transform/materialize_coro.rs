@@ -25,11 +25,11 @@ use crate::ir::{
 use crate::transform::canonicalize_control_flow::CanonicalizeControlFlow;
 use crate::transform::defer_load::DeferLoad;
 use crate::transform::demote_locals::DemoteLocals;
+use crate::transform::mem2reg::Mem2Reg;
 use crate::transform::Transform;
 use crate::{CArc, CBox, CBoxedSlice, Pooled};
 use bitflags::Flags;
 use std::collections::{HashMap, HashSet};
-use crate::transform::mem2reg::Mem2Reg;
 
 pub(crate) struct MaterializeCoro;
 
@@ -1062,7 +1062,7 @@ impl<'a> CoroScopeMaterializer<'a> {
 impl Transform for MaterializeCoro {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         let callable = CanonicalizeControlFlow.transform_callable(callable);
-        let callable = Mem2Reg.transform_callable(callable);
+        // let callable = Mem2Reg.transform_callable(callable);
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);

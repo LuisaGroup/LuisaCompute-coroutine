@@ -100,6 +100,9 @@ impl DisplayIR {
         no_new_line: bool,
     ) -> String {
         self.defs.extend(collect_nodes(bb.clone()).into_iter());
+        self.add_ident(ident);
+        let block_label = self.block_label(bb.clone());
+        writeln!(self.output, "{}:", block_label).unwrap();
         for node in bb.nodes().iter() {
             self.display(*node, ident, no_new_line);
         }

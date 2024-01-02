@@ -75,29 +75,28 @@ impl Mem2RegImpl {
     }
 
     fn keep_unchanged(&self, var: NodeRef) -> bool {
-        let is_local_phi_primitive = var.is_primitive() && (var.is_local() || var.is_phi());
+        if self.node_by_ref.contains(&var) {
+            return true;
+        }
+        let is_local_primitive = var.is_primitive() && var.is_local();
         let is_load_removable_func = match var.get().instruction.as_ref() {
             Instruction::Call(func, args) => match func {
                 Func::Load => {
                     assert_eq!(args.len(), 1);
                     let arg = args[0];
-                    if !arg.is_gep() && !arg.is_local() {
-                        true
-                    } else {
-                        false
+                    if self.node_by_ref.contains(&arg) || arg.is_gep() {
+                        false;
                     }
+                    true
                 }
                 _ => false,
             },
             _ => false,
         };
-        if self.node_by_ref.contains(&var) {
-            return true;
+        if is_local_primitive || is_load_removable_func {
+            return false;
         }
-        if !is_local_phi_primitive && !is_load_removable_func {
-            return true;
-        }
-        false
+        true
     }
     fn record_def(&mut self, block: Pooled<BasicBlock>, var: NodeRef, value: NodeRef) {
         // if self.keep_unchanged(var) {
@@ -143,9 +142,9 @@ impl Mem2RegImpl {
         // Optimize if there is only 1 incoming and do not need backfill in loops
         let mut backfill = false;
         if incomings.exclusive_defined_locally {
-            if incomings_alive.len() == 1 {
-                return incomings_alive[0].value;
-            }
+            // if incomings_alive.len() == 1 {
+            //     return incomings_alive[0].value;
+            // }
         } else {
             backfill = true;
         }
@@ -190,14 +189,7 @@ impl Mem2RegImpl {
 
         for branch in branches.iter() {
             // add node updated by inner to outer
-            let contain = self.node_updated.contains_key(branch);
-            let node_updated = self.node_updated.remove(branch);
-            if node_updated.is_none() {
-                println!("node_updated = {:?}", node_updated);
-                println!("branch = {:?}", branch);
-                panic!();
-            }
-            let node_updated = node_updated.unwrap();
+            let node_updated = self.node_updated.remove(branch).unwrap();
             node_updated_branch.extend(node_updated);
         }
 
@@ -342,8 +334,8 @@ impl Mem2RegImpl {
                     // record use of cond. insert phi node to the end of body
                     let cond_new = self.record_use(body, *cond, body.last);
 
-                    // // backfill if in loop block
-                    // self.fill_back_phis(body);
+                    // backfill if in loop block
+                    self.fill_back_phis(body);
 
                     self.exit_block(vec![body], block);
 
@@ -481,35 +473,37 @@ impl Mem2RegImpl {
                     let mut args_new = Vec::new();
                     for arg in args.iter() {
                         let arg_new = self.record_use(block, *arg, node);
+                        println!("arg = {:?}, arg_new = {:?}", *arg, arg_new);
                         args_new.push(arg_new);
                         if arg_new != *arg {
                             changed = true;
                         }
                     }
+                    if changed {
+                        args = CBoxedSlice::new(args_new);
+                    }
 
                     // record def of return value
                     let mut node_removed = false;
-                    match func {
-                        Func::Load => {
-                            assert_eq!(args.len(), 1);
-                            let arg = args_new[0];
-                            println!("arg = {:?}", arg);
-                            if !arg.is_gep() && !arg.is_local() {
+                    if !self.keep_unchanged(node) {
+                        match func {
+                            Func::Load => {
+                                assert_eq!(args.len(), 1);
+                                let arg = args[0];
+                                println!("arg = {:?}", arg);
                                 node.remove();
                                 self.record_def(block, node, arg);
                                 node_removed = true;
                             }
+                            _ => unreachable!(),
                         }
-                        _ => {}
                     }
                     if !node_removed {
                         self.record_def(block, node, node);
 
                         if changed {
-                            let args_new = CBoxedSlice::new(args_new);
-                            args = args_new.clone();
                             node.get_mut().instruction =
-                                CArc::new(Instruction::Call(func.clone(), args_new));
+                                CArc::new(Instruction::Call(func.clone(), args));
                         }
                     }
                 }
@@ -553,7 +547,11 @@ impl Mem2RegImpl {
                 }
                 Instruction::UserData(_) => {}
                 Instruction::Comment(_) => {}
-                Instruction::CoroSplitMark { .. } => {}
+                Instruction::CoroSplitMark { token } => {
+                    if *token == 3 {
+                        println!("{}", *token);
+                    }
+                }
                 Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
                     unreachable!("{:?} unreachable in Mem2Reg", instruction);
                 }
@@ -602,8 +600,8 @@ impl Transform for Mem2Reg {
         impl_.pre_process();
         impl_.process_block(impl_.module_original);
 
-        println!("{:-^40}", " After Mem2Reg ");
-        println!("{}", DisplayIR::new().display_ir_callable(&module));
+        // println!("{:-^40}", " After Mem2Reg ");
+        // println!("{}", DisplayIR::new().display_ir_callable(&module));
 
         Self::validate(&module.module);
         module

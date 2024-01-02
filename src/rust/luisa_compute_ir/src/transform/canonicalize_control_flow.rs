@@ -10,10 +10,10 @@ use crate::ir::{
     collect_nodes, BasicBlock, Const, Func, Instruction, IrBuilder, Module, ModulePools, NodeRef,
     Type, INVALID_REF,
 };
+use crate::transform::remove_phi::RemovePhi;
 use crate::transform::Transform;
 use crate::{CArc, CBoxedSlice, Pooled, TypeOf};
 use std::collections::{HashMap, HashSet};
-use crate::transform::remove_phi::RemovePhi;
 
 pub struct CanonicalizeControlFlow;
 
@@ -323,7 +323,7 @@ impl LowerBreakContinuePreprocess {
                     if let Some(current_loop) = self.current_loop {
                         // if the flag variable is not generated yet, generate it
                         if !self.flags.break_.contains_key(&current_loop) {
-                            let mut builder = IrBuilder::new(self.pools.clone());
+                            let mut builder = IrBuilder::new_without_bb(self.pools.clone());
                             builder.set_insert_point(current_loop.get().prev);
                             builder.comment(CBoxedSlice::from("loop break flag".to_string()));
                             let const_false = builder.const_(Const::Bool(false));
@@ -342,7 +342,7 @@ impl LowerBreakContinuePreprocess {
                 Instruction::Continue => {
                     if let Some(current_loop) = self.current_loop {
                         if !self.flags.continue_.contains_key(&current_loop) {
-                            let mut builder = IrBuilder::new(self.pools.clone());
+                            let mut builder = IrBuilder::new_without_bb(self.pools.clone());
                             builder.set_insert_point(current_loop.get().prev);
                             builder.comment(CBoxedSlice::from("loop continue flag".to_string()));
                             let const_false = builder.const_(Const::Bool(false));
@@ -507,13 +507,13 @@ impl LowerBreakContinue {
     }
 
     fn empty_block(pools: CArc<ModulePools>) -> Pooled<BasicBlock> {
-        let mut builder = IrBuilder::new(pools);
+        let builder = IrBuilder::new(pools);
         builder.finish()
     }
 
     fn lower_break_continue(&mut self, node: NodeRef, flag: NodeRef, stack: &Vec<NodeRef>) {
         assert_eq!(stack.last(), Some(&node));
-        let mut builder = IrBuilder::new(self.pools.clone());
+        let mut builder = IrBuilder::new_without_bb(self.pools.clone());
         builder.set_insert_point(node.get().prev);
         // mark the loop break/continue flag as true
         builder.comment(CBoxedSlice::from(
@@ -580,7 +580,7 @@ impl LowerBreakContinue {
                     let break_flag = self.flags.break_.get(&node);
                     let continue_flag = self.flags.continue_.get(&node);
                     if break_flag.is_some() || continue_flag.is_some() {
-                        let mut builder = IrBuilder::new(self.pools.clone());
+                        let mut builder = IrBuilder::new_without_bb(self.pools.clone());
                         // reset the flag before the loop
                         builder.set_insert_point(body.first.clone());
                         if let Some(flag) = break_flag {
@@ -731,7 +731,7 @@ impl LowerBreakContinue {
         for (pool, loop_) in lower_break_continue.loops {
             if let Instruction::Loop { body, cond } = loop_.get().instruction.as_ref() {
                 if cond.is_const() && !cond.get_bool() {
-                    let mut builder = IrBuilder::new(pool);
+                    let mut builder = IrBuilder::new_without_bb(pool);
                     builder.set_insert_point(loop_.get().prev);
                     loop_.remove();
                     builder.comment(CBoxedSlice::from("flattened loop begin".to_string()));
@@ -861,7 +861,7 @@ impl LowerEarlyReturn {
         // Split the nodes reachable from the early-return node into new if-guarded
         // blocks and mark the loops that are broken by the early-return node.
         assert_eq!(stack.last(), Some(&node));
-        let mut builder = IrBuilder::new(self.pools.clone());
+        let mut builder = IrBuilder::new_without_bb(self.pools.clone());
         builder.set_insert_point(node.get().prev);
         // set the return value if present
         if let Some(ret_val) = ret_val {
@@ -1053,7 +1053,7 @@ impl LowerEarlyReturn {
             let old_pools = self.pools.clone();
             self.pools = module.pools.clone();
             // ret flag
-            let mut builder = IrBuilder::new(module.pools.clone());
+            let mut builder = IrBuilder::new_without_bb(module.pools.clone());
             builder.set_insert_point(module.entry.first);
             builder.comment(CBoxedSlice::from("early return flag".to_string()));
             let const_false = builder.const_(Const::Bool(false));
@@ -1077,7 +1077,7 @@ impl LowerEarlyReturn {
                 true,
             );
             self.pools = old_pools;
-            let mut builder = IrBuilder::new(module.pools.clone());
+            let mut builder = IrBuilder::new_without_bb(module.pools.clone());
             // some remaining work:
             // 1. fix the affected loops by replacing the loop condition
             for loop_ in affected_loops {

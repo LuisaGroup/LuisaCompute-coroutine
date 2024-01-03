@@ -12,15 +12,15 @@ impl RemovePhiImpl {
             for node in nodes {
                 match node.get().instruction.as_ref() {
                     Instruction::Phi(incomings) => {
-                        println!(
-                            "Remove Phi {:?}",
-                            unsafe { DISPLAY_IR_DEBUG.get() }.var_str(&node)
-                        );
                         let mut b = IrBuilder::new_without_bb(module.pools.clone());
                         b.set_insert_point(module.entry.first);
                         let local = b.local_zero_init(node.type_().clone());
                         for incoming in incomings.iter() {
-                            b.set_insert_point(incoming.value);
+                            if incoming.value.is_argument() || incoming.value.is_uniform() {
+                                b.set_insert_point(module.entry.first);
+                            } else {
+                                b.set_insert_point(incoming.value);
+                            }
                             b.update(local, incoming.value);
                         }
                         b.set_insert_point(node);

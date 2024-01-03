@@ -13,6 +13,7 @@
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
 use crate::analysis::utility::AccessTree;
 use crate::ir::{collect_nodes, BasicBlock, Func, Instruction, IrBuilder, Module, NodeRef};
+use crate::transform::remove_phi::RemovePhi;
 use crate::transform::Transform;
 use crate::{CArc, CBoxedSlice};
 use std::collections::{HashMap, HashSet};
@@ -382,6 +383,7 @@ impl DeferLoadImpl {
 
 impl Transform for DeferLoad {
     fn transform_module(&self, module: Module) -> Module {
+        let module = RemovePhi.transform_module(module);
         DeferLoadImpl::transform(module)
     }
 }

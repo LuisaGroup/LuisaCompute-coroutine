@@ -11,10 +11,10 @@
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transfer_graph::CoroTransferGraph;
-use crate::analysis::utility::{AccessChainIndex, AccessTreeNodeRef};
+use crate::analysis::utility::{AccessChainIndex, AccessTree, AccessTreeNodeRef};
 use crate::ir::{BasicBlock, Const, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF};
 use crate::{CArc, CBoxedSlice, TypeOf};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub(crate) struct CoroFrameField {
@@ -269,6 +269,44 @@ impl<'a> CoroFrame<'a> {
         }
         // return
         b.return_(INVALID_REF);
+    }
+
+    fn collect_fields(&self, tree: &AccessTree) -> HashSet<u32> {
+        let mut indices = HashSet::new();
+        for (i, field) in self.fields.iter().enumerate() {
+            let chain: Vec<_> = field
+                .chain
+                .iter()
+                .map(|&i| AccessChainIndex::Static(i as i32))
+                .collect();
+            if tree.contains(field.root, chain.as_slice()) {
+                indices.insert((i + 2/* skip coro_id and coro_token */) as u32);
+            }
+        }
+        indices
+    }
+
+    pub fn collect_io_fields(
+        &self,
+        scope: CoroScopeRef,
+        uses_coro_id: bool,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let load_tree = &self.transfer_graph.nodes[&scope].union_states_to_load;
+        let store_tree = &self.transfer_graph.nodes[&scope].union_states_to_save;
+        let mut in_fields = self.collect_fields(load_tree);
+        let mut out_fields = self.collect_fields(store_tree);
+        // TODO: magic numbers for coro_id and coro_token's indices
+        if uses_coro_id {
+            // mark that the coro_id field is read
+            in_fields.insert(0);
+        }
+        // we always write the coro_token
+        out_fields.insert(1);
+        let mut in_fields: Vec<_> = in_fields.iter().cloned().collect();
+        let mut out_fields: Vec<_> = out_fields.iter().cloned().collect();
+        in_fields.sort();
+        out_fields.sort();
+        (in_fields, out_fields)
     }
 
     pub fn terminate(&self, scope: CoroScopeRef, frame: NodeRef, b: &mut IrBuilder) {

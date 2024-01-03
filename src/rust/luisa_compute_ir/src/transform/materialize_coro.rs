@@ -26,6 +26,7 @@ use crate::transform::canonicalize_control_flow::CanonicalizeControlFlow;
 use crate::transform::defer_load::DeferLoad;
 use crate::transform::demote_locals::DemoteLocals;
 use crate::transform::mem2reg::Mem2Reg;
+use crate::transform::reg2mem::Reg2Mem;
 use crate::transform::Transform;
 use crate::{CArc, CBox, CBoxedSlice, Pooled};
 use bitflags::Flags;
@@ -964,30 +965,6 @@ impl<'a> CoroScopeMaterializer<'a> {
         }
     }
 
-    fn collect_coro_frame_fields(&self, tree: &AccessTree) -> HashSet<u32> {
-        let mut indices = HashSet::new();
-        for (i, field) in self.frame.fields.iter().enumerate() {
-            let chain: Vec<_> = field
-                .chain
-                .iter()
-                .map(|&i| AccessChainIndex::Static(i as i32))
-                .collect();
-            if tree.contains(field.root, chain.as_slice()) {
-                indices.insert((i + 2/* skip coro_id and coro_token */) as u32);
-            }
-        }
-        indices
-    }
-
-    fn collect_coro_frame_io_fields(&self) -> (HashSet<u32>, HashSet<u32>) {
-        let load_tree = &self.frame.transfer_graph.nodes[&self.scope].union_states_to_load;
-        let store_tree = &self.frame.transfer_graph.nodes[&self.scope].union_states_to_save;
-        (
-            self.collect_coro_frame_fields(load_tree),
-            self.collect_coro_frame_fields(store_tree),
-        )
-    }
-
     fn materialize(&self) -> CallableModule {
         let mappings: HashMap<_, _> = self
             .coro
@@ -1031,18 +1008,7 @@ impl<'a> CoroScopeMaterializer<'a> {
         };
         let module = DemoteLocals.transform_module(module);
         // compute the input/output coro frame fields so that the frontend scheduler can optimize the I/O
-        let (mut in_fields, mut out_fields) = self.collect_coro_frame_io_fields();
-        // TODO: magic numbers for coro_id and coro_token's indices
-        if ctx.uses_coro_id {
-            // mark that the coro_id field is read
-            in_fields.insert(0);
-        }
-        // we always write the coro_token
-        out_fields.insert(1);
-        let mut in_fields: Vec<_> = in_fields.iter().cloned().collect();
-        let mut out_fields: Vec<_> = out_fields.iter().cloned().collect();
-        in_fields.sort();
-        out_fields.sort();
+        let (in_fields, out_fields) = self.frame.collect_io_fields(self.scope, ctx.uses_coro_id);
         // create the callable module
         CallableModule {
             module,
@@ -1062,7 +1028,7 @@ impl<'a> CoroScopeMaterializer<'a> {
 impl Transform for MaterializeCoro {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         let callable = CanonicalizeControlFlow.transform_callable(callable);
-        // let callable = Mem2Reg.transform_callable(callable);
+        let callable = Mem2Reg.transform_callable(callable);
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);

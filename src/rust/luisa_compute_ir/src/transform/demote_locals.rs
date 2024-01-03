@@ -294,10 +294,10 @@ impl VariablePropagator {
     ) {
         macro_rules! check_not_local {
             ($node: expr) => {
-                if ($node.valid() && $node.is_local()) {
-                    let v = unsafe { DISPLAY_IR_DEBUG.get() }.var_str($node);
-                    println!("local variable not loaded {}", v);
-                }
+                // if ($node.valid() && $node.is_local()) {
+                //     let v = unsafe { DISPLAY_IR_DEBUG.get() }.var_str($node);
+                //     println!("local variable not loaded {}", v);
+                // }
                 assert!(
                     !($node.valid() && $node.is_local()),
                     "local variable not loaded"
@@ -620,16 +620,16 @@ impl DemoteLocals {
 impl Transform for DemoteLocals {
     fn transform_module(&self, module: Module) -> Module {
         let module = RemovePhi.transform_module(module);
-        println!("{:-^40}", " After RemovePhi ");
-        println!(
-            "{}",
-            unsafe {
-                let diplay_ir = DISPLAY_IR_DEBUG.get();
-                diplay_ir.clear();
-                diplay_ir
-            }
-            .display_ir(&module)
-        );
+        // println!("{:-^40}", " After RemovePhi ");
+        // println!(
+        //     "{}",
+        //     unsafe {
+        //         let diplay_ir = DISPLAY_IR_DEBUG.get();
+        //         diplay_ir.clear();
+        //         diplay_ir
+        //     }
+        //     .display_ir(&module)
+        // );
 
         InitializationNormalizer::normalize(&module);
         let scope_tree = ScopeTree::from(&module);

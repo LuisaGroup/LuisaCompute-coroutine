@@ -1,4 +1,4 @@
-// This file implements the coroutine transfer graph analysis, which records the
+// This file implements the coroutine transition graph analysis, which records the
 // topology of a coroutine and computes the alive states at each suspension point.
 // The result is used in the coroutine frame layout analysis and will be passed to
 // the frontend to help the scheduler to optimize the coroutine execution.
@@ -8,7 +8,7 @@
 //   (computed by graph-level liveness analysis)
 // - Load: the set of nodes that are loaded at the beginning of the subroutine
 //   (computed as [((Live - InternalKill) & InternalTouch) + ExternalUse])
-// - Save: the set of nodes that are saved to the frame at each suspension point (from CoroTransferGraph)
+// - Save: the set of nodes that are saved to the frame at each suspension point
 //   (computed as [Live & Touch])
 
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
@@ -17,8 +17,8 @@ use crate::analysis::utility::AccessTree;
 use crate::safe;
 use std::collections::{BTreeMap, HashMap};
 
-pub(crate) struct CoroTransferEdge {
-    // the target of the transfer (another subscope)
+pub(crate) struct CoroTransitionEdge {
+    // the target of the transition (another subscope)
     pub target: CoroScopeRef,
     // the live states at the suspension point, i.e. the states that will be read
     // from reachable subscopes and should thus be saved in the coroutine frame
@@ -28,22 +28,22 @@ pub(crate) struct CoroTransferEdge {
 }
 
 // A subscope of the coroutine
-pub(crate) struct CoroTransferNode {
+pub(crate) struct CoroTransitionState {
     pub scope: CoroScopeRef,
-    pub outlets: BTreeMap<u32, CoroTransferEdge>,
+    pub outlets: BTreeMap<u32, CoroTransitionEdge>,
     pub union_live_states: AccessTree,
     pub union_states_to_load: AccessTree,
     pub union_states_to_save: AccessTree,
 }
 
-pub(crate) struct CoroTransferGraph {
+pub(crate) struct CoroTransitionGraph {
     pub union_states: AccessTree,
-    pub nodes: HashMap<CoroScopeRef, CoroTransferNode>,
+    pub nodes: HashMap<CoroScopeRef, CoroTransitionState>,
 }
 
-impl CoroTransferGraph {
+impl CoroTransitionGraph {
     pub fn dump(&self) {
-        println!("=========================== CoroTransferGraph ===========================");
+        println!("=========================== CoroTransitionGraph ===========================");
         for i in 0..self.nodes.len() {
             let scope = CoroScopeRef(i);
             let node = &self.nodes[&scope];
@@ -66,12 +66,12 @@ impl CoroTransferGraph {
     }
 }
 
-struct CoroTransferGraphBuilder<'a> {
+struct CoroTransitionGraphBuilder<'a> {
     graph: &'a CoroGraph,
     use_def: &'a CoroGraphUseDef,
 }
 
-impl<'a> CoroTransferGraphBuilder<'a> {
+impl<'a> CoroTransitionGraphBuilder<'a> {
     fn new(graph: &'a CoroGraph, use_def: &'a CoroGraphUseDef) -> Self {
         Self { graph, use_def }
     }
@@ -112,7 +112,7 @@ impl<'a> CoroTransferGraphBuilder<'a> {
         }
     }
 
-    fn build_transfer_topology(&self, g: &mut CoroTransferGraph) {
+    fn build_transition_topology(&self, g: &mut CoroTransitionGraph) {
         for (i, scope) in self.graph.scopes.iter().enumerate() {
             // probe the suspension points in the subscope
             let mut suspend_tokens = Vec::new();
@@ -122,13 +122,13 @@ impl<'a> CoroTransferGraphBuilder<'a> {
             suspend_tokens.dedup();
             // create a node for the subscope
             let scope_ref = CoroScopeRef(i);
-            let node = CoroTransferNode {
+            let node = CoroTransitionState {
                 scope: scope_ref,
                 outlets: suspend_tokens
                     .iter()
                     .map(|t| {
                         let target = self.graph.tokens[t];
-                        let edge = CoroTransferEdge {
+                        let edge = CoroTransitionEdge {
                             target,
                             live_states: self.use_def.scopes[&target].external_uses.clone(),
                             states_to_load: AccessTree::new(),
@@ -146,11 +146,11 @@ impl<'a> CoroTransferGraphBuilder<'a> {
         }
     }
 
-    fn compute_live_states(&self, g: &mut CoroTransferGraph) {
+    fn compute_live_states(&self, g: &mut CoroTransitionGraph) {
         let mut any_change = true;
         while any_change {
             any_change = false;
-            let gg = safe! { &*(g as *mut CoroTransferGraph) };
+            let gg = safe! { &*(g as *mut CoroTransitionGraph) };
             for node in g.nodes.values_mut() {
                 for (_, edge) in node.outlets.iter_mut() {
                     // propagate the alive states from the target subscopes
@@ -201,19 +201,19 @@ impl<'a> CoroTransferGraphBuilder<'a> {
         }
     }
 
-    fn build(&self) -> CoroTransferGraph {
-        let mut g = CoroTransferGraph {
+    fn build(&self) -> CoroTransitionGraph {
+        let mut g = CoroTransitionGraph {
             union_states: self.use_def.union_uses.clone(),
             nodes: HashMap::new(),
         };
-        self.build_transfer_topology(&mut g);
+        self.build_transition_topology(&mut g);
         self.compute_live_states(&mut g);
         g
     }
 }
 
-impl CoroTransferGraph {
+impl CoroTransitionGraph {
     pub fn build(graph: &CoroGraph, use_def: &CoroGraphUseDef) -> Self {
-        CoroTransferGraphBuilder::new(graph, use_def).build()
+        CoroTransitionGraphBuilder::new(graph, use_def).build()
     }
 }

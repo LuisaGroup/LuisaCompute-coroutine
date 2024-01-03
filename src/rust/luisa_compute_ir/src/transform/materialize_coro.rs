@@ -1,5 +1,5 @@
 // This file implements the materialization of subroutines in a coroutine. It analyzes the
-// input coroutine module, generates the coroutine graph and transfer graph, computes the
+// input coroutine module, generates the coroutine graph and transition graph, computes the
 // coroutine frame layout, and finally materializes the subroutines into callable modules.
 // Some corner cases to consider:
 // - Some values might be promoted to values in the coroutine frame and should be loaded
@@ -13,7 +13,7 @@ use crate::analysis::coro_frame::CoroFrame;
 use crate::analysis::coro_graph::{
     CoroGraph, CoroInstrRef, CoroInstruction, CoroScope, CoroScopeRef,
 };
-use crate::analysis::coro_transfer_graph::CoroTransferGraph;
+use crate::analysis::coro_transition_graph::CoroTransitionGraph;
 use crate::analysis::coro_use_def::CoroUseDefAnalysis;
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
 use crate::analysis::utility::{AccessChainIndex, AccessTree};
@@ -980,8 +980,8 @@ impl<'a> CoroScopeMaterializer<'a> {
     }
 
     fn collect_coro_frame_io_fields(&self) -> (HashSet<u32>, HashSet<u32>) {
-        let load_tree = &self.frame.transfer_graph.nodes[&self.scope].union_states_to_load;
-        let store_tree = &self.frame.transfer_graph.nodes[&self.scope].union_states_to_save;
+        let load_tree = &self.frame.transition_graph.nodes[&self.scope].union_states_to_load;
+        let store_tree = &self.frame.transition_graph.nodes[&self.scope].union_states_to_save;
         (
             self.collect_coro_frame_fields(load_tree),
             self.collect_coro_frame_fields(store_tree),
@@ -1068,8 +1068,8 @@ impl Transform for MaterializeCoro {
         let coro_graph = CoroGraph::from(&callable.module);
         coro_graph.dump();
         let coro_use_def = CoroUseDefAnalysis::analyze(&coro_graph);
-        let coro_transfer_graph = CoroTransferGraph::build(&coro_graph, &coro_use_def);
-        let coro_frame = CoroFrame::build(&coro_graph, &coro_transfer_graph);
+        let coro_transition_graph = CoroTransitionGraph::build(&coro_graph, &coro_use_def);
+        let coro_frame = CoroFrame::build(&coro_graph, &coro_transition_graph);
         coro_frame.dump();
         let mut entry = CoroScopeMaterializer::new(&coro_frame, &callable, None).materialize();
         let subroutines: Vec<_> = coro_graph

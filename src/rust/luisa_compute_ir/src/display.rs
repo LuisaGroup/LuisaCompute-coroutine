@@ -32,7 +32,12 @@ impl DisplayIR {
     }
 
     pub fn clear(&mut self) {
-        *self = DisplayIR::new();
+        self.output.clear();
+        self.map.clear();
+        self.cnt = 0;
+        self.block_labels.clear();
+        self.block_cnt = 0;
+        self.defs.clear();
     }
 
     pub fn var_str(&mut self, node: &NodeRef) -> String {
@@ -361,6 +366,7 @@ impl DisplayIR {
             Instruction::Loop { body, cond } => {
                 let temp = format!("Loop {{\n");
                 self.output += temp.as_str();
+                self.add_ident(ident);
                 let default_label = self.block_label(*body);
                 writeln!(self.output, "{}:", default_label).unwrap();
                 for node in body.nodes().iter() {

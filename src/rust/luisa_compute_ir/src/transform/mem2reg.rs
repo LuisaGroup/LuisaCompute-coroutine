@@ -4,11 +4,13 @@
 
 use crate::analysis::utility::{is_primitives_read_only_function, DISPLAY_IR_DEBUG};
 use crate::display::DisplayIR;
+use crate::ir::debug::dump_ir_human_readable;
 use crate::ir::{
     collect_nodes, new_node, ArrayType, BasicBlock, CallableModule, Func, Instruction, IrBuilder,
     MatrixType, Module, ModulePools, Node, NodeRef, PhiIncoming, Primitive, StructType, Type,
     VectorType,
 };
+use crate::transform::copy_propagation::CopyPropagation;
 use crate::transform::Transform;
 use crate::{CArc, CBoxedSlice, Pooled};
 use std::collections::{HashMap, HashSet};
@@ -573,6 +575,7 @@ impl Mem2RegImpl {
                         }
                     }
                 }
+
                 Instruction::GenericLoop { .. } | Instruction::Break | Instruction::Continue => {
                     unreachable!("{:?} should be lowered in CCF", instruction);
                 }
@@ -594,41 +597,23 @@ impl Mem2RegImpl {
 
 pub struct Mem2Reg;
 
-impl Mem2Reg {
-    fn validate(module: &Module) {
-        let nodes = collect_nodes(module.entry);
-        for node in nodes {
-            assert!(node.valid());
-            match node.get().instruction.as_ref() {
-                Instruction::If {
-                    true_branch,
-                    false_branch,
-                    ..
-                } => {
-                    assert_ne!(true_branch.as_ptr(), false_branch.as_ptr());
-                }
-                Instruction::Invalid => {
-                    unreachable!();
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 impl Transform for Mem2Reg {
     fn transform_module(&self, module: Module) -> Module {
-        Self::validate(&module);
-
         println!("{:-^40}", " Before Mem2Reg ");
         println!("{}", unsafe { DISPLAY_IR_DEBUG.get() }.display_ir(&module));
 
-        let mut module = module;
         let mut impl_ = Mem2RegImpl::new(&module);
         impl_.pre_process();
         impl_.process_block(impl_.module_original);
 
         println!("{:-^40}", " After Mem2Reg ");
+        println!("{}", dump_ir_human_readable(&module));
+
+        // Optimization
+        // 1. Copy Propagation
+        let module = CopyPropagation.transform_module(module);
+
+        println!("{:-^40}", " After Copy Propagation ");
         println!(
             "{}",
             unsafe {
@@ -638,8 +623,6 @@ impl Transform for Mem2Reg {
             }
             .display_ir(&module)
         );
-
-        Self::validate(&module);
 
         module
     }

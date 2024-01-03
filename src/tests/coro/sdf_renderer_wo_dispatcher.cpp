@@ -180,7 +180,7 @@ int main(int argc, char *argv[]) {
     auto device = context.create_device(argv[1]);
     auto stream = device.create_stream();
     constexpr auto resolution = make_uint2(width, height);
-    constexpr auto spp = 10u;
+    constexpr auto spp = 1000u;
 
     Image<uint> seed_image = device.create_image<uint>(PixelStorage::INT1, width, height);
     Image<float> accum_image = device.create_image<float>(PixelStorage::FLOAT4, width, height);

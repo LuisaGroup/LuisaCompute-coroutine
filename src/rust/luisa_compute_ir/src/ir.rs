@@ -2112,6 +2112,7 @@ unsafe impl Send for BlockModule {}
 struct NodeCollector {
     nodes: Vec<NodeRef>,
     unique: HashSet<NodeRef>,
+    node2block: HashMap<NodeRef, Pooled<BasicBlock>>,
 }
 
 impl NodeCollector {
@@ -2119,19 +2120,21 @@ impl NodeCollector {
         Self {
             nodes: Vec::new(),
             unique: HashSet::new(),
+            node2block: HashMap::new(),
         }
     }
     fn visit_block(&mut self, block: Pooled<BasicBlock>) {
         for node in block.iter() {
-            self.visit_node(node);
+            self.visit_node(block, node);
         }
     }
-    fn visit_node(&mut self, node_ref: NodeRef) {
+    fn visit_node(&mut self, block: Pooled<BasicBlock>, node_ref: NodeRef) {
         if self.unique.contains(&node_ref) {
             return;
         }
         self.unique.insert(node_ref);
         self.nodes.push(node_ref);
+        self.node2block.insert(node_ref, block);
         let inst = node_ref.get().instruction.as_ref();
         match inst {
             Instruction::AdScope { body, .. } => {
@@ -2190,9 +2193,20 @@ pub fn collect_nodes(block: Pooled<BasicBlock>) -> Vec<NodeRef> {
     collector.nodes
 }
 
+pub fn collect_nodes_with_block(
+    block: Pooled<BasicBlock>,
+) -> (Vec<NodeRef>, HashMap<NodeRef, Pooled<BasicBlock>>) {
+    let mut collector = NodeCollector::new();
+    collector.visit_block(block);
+    (collector.nodes, collector.node2block)
+}
+
 impl Module {
     pub fn collect_nodes(&self) -> Vec<NodeRef> {
         collect_nodes(self.entry)
+    }
+    pub fn collect_nodes_with_block(&self) -> (Vec<NodeRef>, HashMap<NodeRef, Pooled<BasicBlock>>) {
+        collect_nodes_with_block(self.entry)
     }
 }
 

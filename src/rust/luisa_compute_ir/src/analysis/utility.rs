@@ -3,6 +3,7 @@ use crate::display::DisplayIR;
 use crate::ir::{Func, Instruction, NodeRef, Type};
 use crate::{CArc, CBoxedSlice};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::hash::Hash;
 
 #[macro_export]
 macro_rules! safe {
@@ -916,5 +917,42 @@ pub(crate) fn node_updatable(var: NodeRef) -> bool {
             _ => false,
         },
         _ => false,
+    }
+}
+
+pub struct ChainedUnionSet<T> {
+    ptr: HashMap<T, T>,
+}
+
+impl<T: Clone + Hash + PartialEq + Eq> ChainedUnionSet<T> {
+    pub fn new() -> Self {
+        Self {
+            ptr: HashMap::new(),
+        }
+    }
+    pub fn set_root(&mut self, from: T, to: T) {
+        // collect all nodes that need to be redirected to the root of "to", including "from"
+        let mut redirect = vec![from];
+        let mut to = self.ptr.entry(to.clone()).or_insert(to).clone();
+        let mut to_next = self.ptr.get(&to).unwrap();
+        while to != *to_next {
+            redirect.push(to);
+            to = to_next.clone();
+            to_next = self.ptr.get(&to).unwrap();
+        }
+
+        // redirect nodes
+        for node in redirect {
+            *self.ptr.entry(node.clone()).or_insert(node) = to.clone();
+        }
+    }
+    pub fn root(&mut self, node: &T) -> T {
+        let mut root = self.ptr.entry(node.clone()).or_insert(node.clone()).clone();
+        let mut root_next = self.ptr.get(&root).unwrap();
+        while root != *root_next {
+            root = root_next.clone();
+            root_next = self.ptr.get(&root).unwrap();
+        }
+        root
     }
 }

@@ -1006,7 +1006,6 @@ impl<'a> CoroScopeMaterializer<'a> {
             },
             pools: self.coro.pools.clone(),
         };
-        let module = DemoteLocals.transform_module(module);
         // compute the input/output coro frame fields so that the frontend scheduler can optimize the I/O
         let (in_fields, out_fields) = self.frame.collect_io_fields(self.scope, ctx.uses_coro_id);
         // create the callable module
@@ -1029,7 +1028,6 @@ impl Transform for MaterializeCoro {
     fn transform_callable(&self, callable: CallableModule) -> CallableModule {
         let callable = CanonicalizeControlFlow.transform_callable(callable);
         let callable = Mem2Reg.transform_callable(callable);
-        let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);
         coro_graph.dump();

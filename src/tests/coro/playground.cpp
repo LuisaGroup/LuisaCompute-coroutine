@@ -23,14 +23,18 @@ int main(int argc, char *argv[]) {
     };
 
     Kernel1D coro = [&]() noexcept {
-        auto t = def(0.f);
+        Float t;
         // cuda_print("000000000000000000000000");
         $loop {
             // cuda_print("aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-            $if (t > 1.f) {
-                $break;
+            $if (true) {
+                $if (t > 1.f) {
+                    $break;
+                } $else {
+                    t += 1.f;
+                    device_log("t = {}", t);
+                };
             };
-            t += 1.f;
         };
     };
 

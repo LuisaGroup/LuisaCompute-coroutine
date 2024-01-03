@@ -504,6 +504,7 @@ impl Mem2RegImpl {
                     self.record_def(block, node, node);
                 }
                 Instruction::Call(func, args) => {
+                    let func = func.clone();
                     let mut args = args.clone();
 
                     // record use of args

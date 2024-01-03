@@ -10,7 +10,7 @@
 //       - Argument (by_value = true)
 //       - One/Zero
 //    b. non-uniform initializers are split into a zero-initializer and an update.
-// 1. Construct a scope tree from the AST of the module, where each node is a instruction
+// 1. Construct a scope tree from the AST of the module, where each node is an instruction
 //    that contains nested basic blocks (using the `scope_tree` analysis).
 // 2. Recursively visit each node in the scope tree and propagate the referenced variables
 //    to its parent node.
@@ -619,32 +619,62 @@ impl DemoteLocals {
 
 impl Transform for DemoteLocals {
     fn transform_module(&self, module: Module) -> Module {
-        let module = RemovePhi.transform_module(module);
-        // println!("{:-^40}", " After RemovePhi ");
-        // println!(
-        //     "{}",
-        //     unsafe {
-        //         let diplay_ir = DISPLAY_IR_DEBUG.get();
-        //         diplay_ir.clear();
-        //         diplay_ir
-        //     }
-        //     .display_ir(&module)
-        // );
-
-        InitializationNormalizer::normalize(&module);
-        let scope_tree = ScopeTree::from(&module);
-        let propagation = VariablePropagator::propagate(&scope_tree);
-        // println!(
-        //     "DemoteLocals: before demotion:\n{}",
-        //     dump_ir_human_readable(&module)
-        // );
-        let demotion = VariableRelocator::new(&scope_tree, &propagation).process(&module);
-        // demote locals
-        Self::demote_locals(&module, &scope_tree, &propagation, &demotion);
+        // let module = RemovePhi.transform_module(module);
+        // // println!("{:-^40}", " After RemovePhi ");
+        // // println!(
+        // //     "{}",
+        // //     unsafe {
+        // //         let diplay_ir = DISPLAY_IR_DEBUG.get();
+        // //         diplay_ir.clear();
+        // //         diplay_ir
+        // //     }
+        // //     .display_ir(&module)
+        // // );
+        //
+        // InitializationNormalizer::normalize(&module);
+        // let scope_tree = ScopeTree::from(&module);
+        // let propagation = VariablePropagator::propagate(&scope_tree);
+        // // println!(
+        // //     "DemoteLocals: before demotion:\n{}",
+        // //     dump_ir_human_readable(&module)
+        // // );
+        // let demotion = VariableRelocator::new(&scope_tree, &propagation).process(&module);
+        // // demote locals
+        // Self::demote_locals(&module, &scope_tree, &propagation, &demotion);
         // println!(
         //     "DemoteLocals: after demotion:\n{}",
         //     dump_ir_human_readable(&module)
         // );
+        // TODO: demote locals has a bug that it may demote a variable to a wrong place
+        //  To reproduce:
+        //  Kernel1D k = [&]() noexcept {
+        //      Float t;
+        //      $loop {
+        //          $if (true) {
+        //              $if (t > 1.f) {
+        //                  $break;
+        //              } $else {
+        //                  t += 1.f;
+        //                  device_log("t = {}", t);
+        //              };
+        //          };
+        //      };
+        //  };
+        //  This will be an infinite loop because the variable t is demoted to inside
+        //  the if body, which is wrong:
+        //  Kernel1D k = [&]() noexcept {
+        //      $loop {
+        //          $if (true) {
+        //              Float t;// wrong!!!
+        //              $if (t > 1.f) {
+        //                  $break;
+        //              } $else {
+        //                  t += 1.f;
+        //                  device_log("t = {}", t);
+        //              };
+        //          };
+        //      };
+        //  };
         module
     }
 }

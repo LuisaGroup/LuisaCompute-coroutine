@@ -896,7 +896,7 @@ pub(crate) fn is_primitives_read_only_function(func: &Func, args: &CBoxedSlice<N
         | Func::BindlessBufferType
         | Func::BindlessByteBufferRead => true,
 
-        Func::Unreachable(_) => todo!(),
+        Func::Unreachable(_) => true,
         Func::Load => true,
         Func::AddressOf => true,
         Func::CpuCustomOp(_) => todo!(),

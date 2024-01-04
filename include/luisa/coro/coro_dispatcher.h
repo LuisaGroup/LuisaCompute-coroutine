@@ -84,7 +84,7 @@ template<typename FrameRef, typename... Args>
 class SimpleCoroDispatcher : public CoroDispatcherBase<void(FrameRef, Args...)> {
 private:
     using FrameType = std::remove_reference_t<FrameRef>;
-    simple Shader1D<uint, Args...> _shader;
+    Shader1D<uint, Args...> _shader;
     bool _done;
     void _await_step(Stream &stream) noexcept override {
         stream << this->template call_shader<1, uint>(_shader, this->_dispatch_size).dispatch(this->_dispatch_size);

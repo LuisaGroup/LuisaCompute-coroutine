@@ -637,7 +637,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                     assert!(i < st.fields.len());
                     st.fields[i].clone()
                 }
-                _ => panic!("Invalid member access."),
+                _ => panic!("Invalid member access to {}.{}: {}.", t_v, i, j),
             };
             assert_eq!(t.as_ref(), t_elem.as_ref(), "Invalid member type.");
             if is_lval {

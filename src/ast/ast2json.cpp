@@ -588,6 +588,9 @@ private:
 
 private:
     [[nodiscard]] uint _type_index(const Type *type) noexcept {
+        if (type != nullptr && type->is_materialized_coroframe()) {
+            return _type_index(type->corotype());
+        }
         if (auto iter = _type_to_index.find(type);
             iter != _type_to_index.end()) {
             return iter->second;

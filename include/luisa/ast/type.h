@@ -460,6 +460,7 @@ public:
     [[nodiscard]] bool is_resource() const noexcept;
     [[nodiscard]] bool is_custom() const noexcept;
     [[nodiscard]] bool is_coroframe() const noexcept;
+    [[nodiscard]] bool is_materialized_coroframe() const noexcept;
 };
 
 }// namespace luisa::compute

@@ -472,6 +472,7 @@ const Type *Type::element() const noexcept {
                  description());
     return static_cast<const detail::TypeImpl *>(this)->members.front();
 }
+
 const Type *Type::corotype() const noexcept {
     LUISA_ASSERT(is_coroframe(),
                  "Calling corotype() on a non-coroframe type {}.",
@@ -481,6 +482,7 @@ const Type *Type::corotype() const noexcept {
                  "Define Coroutine with this coroframe to specify the backend type!");
     return static_cast<const detail::TypeImpl *>(this)->members.front();
 }
+
 const Type *Type::from(std::string_view description) noexcept {
     return detail::TypeRegistry::instance().decode_type(description);
 }
@@ -603,6 +605,10 @@ bool Type::is_bindless_array() const noexcept { return tag() == Tag::BINDLESS_AR
 bool Type::is_accel() const noexcept { return tag() == Tag::ACCEL; }
 bool Type::is_custom() const noexcept { return tag() == Tag::CUSTOM; }
 bool Type::is_coroframe() const noexcept { return tag() == Tag::COROFRAME; }
+bool Type::is_materialized_coroframe() const noexcept {
+    return tag() == Tag::COROFRAME &&
+           !reinterpret_cast<const detail::TypeImpl *>(this)->members.empty();
+}
 
 const Type *Type::array(const Type *elem, size_t n) noexcept {
     return from(luisa::format("array<{},{}>", elem->description(), n));
@@ -694,6 +700,7 @@ size_t Type::member(const luisa::string &name) const noexcept {
         return it->second;
     }
 }
+
 bool Type::is_bool() const noexcept { return tag() == Tag::BOOL; }
 bool Type::is_int32() const noexcept { return tag() == Tag::INT32; }
 bool Type::is_uint32() const noexcept { return tag() == Tag::UINT32; }

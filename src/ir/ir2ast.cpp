@@ -938,6 +938,9 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
 
         case ir::Func::Tag::CoroId: return builtin_func(1, CallOp::CORO_ID);
         case ir::Func::Tag::CoroToken: return builtin_func(1, CallOp::CORO_TOKEN);
+        case ir::Func::Tag::AddressOf: LUISA_NOT_IMPLEMENTED();
+        case ir::Func::Tag::BufferAddress: LUISA_NOT_IMPLEMENTED();
+        case ir::Func::Tag::BindlessBufferAddress: LUISA_NOT_IMPLEMENTED();
     }
     return nullptr;
 }

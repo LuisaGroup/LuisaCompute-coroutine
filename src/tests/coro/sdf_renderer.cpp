@@ -171,7 +171,6 @@ int main(int argc, char *argv[]) {
             throughput *= c;
         };
         $suspend("3");
-
         Float3 accum_color = lerp(accum_image.read(coord).xyz(), throughput.xyz() * hit_light, 1.0f / (frame_index + 1.0f));
         accum_image.write(coord, make_float4(accum_color, 1.0f));
         //$suspend("4");
@@ -213,15 +212,16 @@ int main(int argc, char *argv[]) {
 
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
     //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
-    // coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
-    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 32u, 2u, false};
+    //coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
+    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256u, 128u, 3u, false};
     stream << clear_shader().dispatch(resolution)
            << synchronize();
     /*for (auto i = 0u; i < 100u; i++) {
         stream << shader(seed_image, accum_image, i).dispatch(resolution);
     }*/
     Clock clk;
-    for (auto i = 0u; i < 10u; ++i) {
+    auto samples = 1000;
+    for (auto i = 0u; i < samples; ++i) {
         LUISA_INFO("spp {}", i);
         Wdispatcher(seed_image, accum_image, i, resolution.x * resolution.y);
         stream << Wdispatcher.await_all();
@@ -229,9 +229,8 @@ int main(int argc, char *argv[]) {
     }
     stream << synchronize();
     auto dt = clk.toc();
-    LUISA_INFO("Time: {} ms ({} spp/s)", dt, 1e6 / dt);
+    LUISA_INFO("Time: {} ms ({} spp/s)", dt, samples * 1e3 / dt);
 
-    LUISA_INFO("Wavefront Dispatcher:");
     stream << accum_image.copy_to(host_image.data())
            << synchronize();
     stbi_write_hdr("test_sdf.hdr", resolution.x, resolution.y, 4, reinterpret_cast<float *>(host_image.data()));

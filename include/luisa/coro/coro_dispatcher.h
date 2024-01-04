@@ -84,31 +84,24 @@ template<typename FrameRef, typename... Args>
 class SimpleCoroDispatcher : public CoroDispatcherBase<void(FrameRef, Args...)> {
 private:
     using FrameType = std::remove_reference_t<FrameRef>;
-    Shader1D<Buffer<FrameType>, uint, Args...> _shader;
-    Shader1D<Buffer<FrameType>, uint> _clear_shader;
-    compute::Buffer<FrameType> _frame;
-    bool _first;
+    simple Shader1D<uint, Args...> _shader;
     bool _done;
     void _await_step(Stream &stream) noexcept override {
-        if (_first) {
-            stream << _clear_shader(_frame, this->_dispatch_size).dispatch(this->_dispatch_size);
-            _first = false;
-        } else {
-            stream << this->template call_shader<1, Buffer<FrameType>, uint>(_shader, _frame, this->_dispatch_size).dispatch(this->_dispatch_size);
-            _done = true;
-        }
+        stream << this->template call_shader<1, uint>(_shader, this->_dispatch_size).dispatch(this->_dispatch_size);
+        _done = true;
         stream << synchronize();
     }
 public:
     SimpleCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device,
                          uint max_frame_count) : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
-                                                 _first{true}, _done{false} {
-        _frame = device.create_buffer<FrameType>(max_frame_count);
+                                                 _done{false} {
         uint max_sub_coro = coroutine->suspend_count() + 1;
-        Kernel1D run_kernel = [&](Var<Buffer<FrameType>> frame_buffer, UInt n, Var<Args>... args) {
+        Kernel1D run_kernel = [&](UInt n, Var<Args>... args) {
+            set_block_size(128, 1, 1);
             auto x = dispatch_x();
             $if (x < n) {
-                auto frame = frame_buffer.read(x);
+                Var<FrameType> frame;
+                initialize_coroframe(frame, def<uint3>(x, 0, 0));
                 $loop {
                     auto token = read_promise<uint>(frame, "coro_token");
                     $if (token == 0x8000'0000) {
@@ -127,24 +120,14 @@ public:
                 };
             };
         };
-        Kernel1D clear_kernel = [&](Var<Buffer<FrameType>> frame_buffer, UInt n) {
-            auto x = dispatch_x();
-            $if (x < n) {
-                auto frame = frame_buffer.read(x);
-                initialize_coroframe(frame, def<uint3>(x, 0, 0));
-                frame_buffer.write(x, frame);
-            };
-        };
         _shader = device.compile(run_kernel);
-        _clear_shader = device.compile(clear_kernel);
     }
     void operator()(prototype_to_coro_dispatcher_t<Args>... args, uint dispatch_size) noexcept {
         CoroDispatcherBase<void(FrameRef, Args...)>::operator()(args..., dispatch_size);
-        _first = true;
         _done = false;
     }
     bool all_dispatched() const noexcept override {
-        return _first;
+        return _done;
     }
     bool all_done() const noexcept override {
         return _done;
@@ -276,7 +259,7 @@ public:
             auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
             count.atomic(nxt).fetch_add(1u);
         };
-        ShaderOption o{};
+        ShaderOption o{.enable_fast_math = false};
         _gen_shader = device.compile(gen_kernel, o);
         _resume_shaders.resize(max_sub_coro);
         for (int i = 1; i < max_sub_coro; ++i) {
@@ -416,7 +399,7 @@ public:
         _done = false;
         Kernel1D main_kernel = [&](BufferUInt global, UInt dispatch_size, Var<Args>... args) {
             set_block_size(block_size, 1, 1);
-            auto q_fac = 2u;
+            auto q_fac = 1u;
             auto shared_queue_size = block_size * q_fac;
             Shared<FrameType> frames{shared_queue_size};
             Shared<uint> path_id{shared_queue_size};
@@ -426,7 +409,9 @@ public:
             Shared<uint> work_stat{2};//0 max_count,1 max_id
             //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
             //Shared<uint> tag_offset{pipeline().surfaces().size()};
-            initialize_coroframe(frames[thread_x()], def<uint3>(0, 0, 0));
+            $for (index, 0u, q_fac) {
+                initialize_coroframe(frames[index * block_size + thread_x()], def<uint3>(0, 0, 0));
+            };
             $if (thread_x() < max_sub_coro) {
                 $if (thread_x() == 0) {
                     work_counter[thread_x()] = shared_queue_size;
@@ -444,12 +429,10 @@ public:
             sync_block();
             auto count = def(0);
             uint count_limit = -1;
-            if (_debug) {
-                count_limit = 20;
-            }
 
             $while ((rem_global[0] != 0u | rem_local[0] != 0u) & (count != count_limit)) {
                 sync_block();//very important, synchronize for condition
+
                 rem_local[0] = 0u;
                 count += 1;
                 work_stat[0] = 0;
@@ -493,8 +476,6 @@ public:
                             work_stat.atomic(0).fetch_max(work_counter[thread_x()]);
                         };
                     };
-                    if (_debug)
-                        device_log("work counter {} of block {}: {}", thread_x(), block_x(), work_counter[thread_x()]);
                 };
                 sync_block();
                 $if (thread_x() < max_sub_coro) {//get argmax
@@ -529,8 +510,6 @@ public:
                                 (*coroutine)(frames[pid], args...);//only work when kernel 0s are continue
                                 auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;
                                 work_counter.atomic(nxt).fetch_add(1u);
-                                if (_debug)
-                                    device_log("gen_load_st {}, work_id {}, goto {}", gen_st, work_id, nxt);
                                 workload.atomic(0).fetch_add(1u);
                             };
                         };
@@ -539,8 +518,6 @@ public:
                                 work_counter.atomic(i).fetch_sub(1u);
                                 (*coroutine)[i](frames[pid], args...);
                                 work_counter.atomic(read_promise<uint>(frames[pid], "coro_token") & token_mask).fetch_add(1u);
-                                if (_debug)
-                                    device_log("resume kernel {} on block {}: id {} goto kernel {}", i, block_x(), read_promise<uint3>(frames[pid], "coro_id"), read_promise<uint>(frames[pid], "coro_token") & token_mask);
                             };
                         }
                     };

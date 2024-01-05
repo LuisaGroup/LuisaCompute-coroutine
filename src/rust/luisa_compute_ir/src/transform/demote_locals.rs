@@ -619,7 +619,7 @@ impl DemoteLocals {
 
 impl Transform for DemoteLocals {
     fn transform_module(&self, module: Module) -> Module {
-        // let module = RemovePhi.transform_module(module);
+        let module = RemovePhi.transform_module(module);
         // // println!("{:-^40}", " After RemovePhi ");
         // // println!(
         // //     "{}",
@@ -631,16 +631,16 @@ impl Transform for DemoteLocals {
         // //     .display_ir(&module)
         // // );
         //
-        // InitializationNormalizer::normalize(&module);
-        // let scope_tree = ScopeTree::from(&module);
-        // let propagation = VariablePropagator::propagate(&scope_tree);
-        // // println!(
-        // //     "DemoteLocals: before demotion:\n{}",
-        // //     dump_ir_human_readable(&module)
-        // // );
-        // let demotion = VariableRelocator::new(&scope_tree, &propagation).process(&module);
-        // // demote locals
-        // Self::demote_locals(&module, &scope_tree, &propagation, &demotion);
+        InitializationNormalizer::normalize(&module);
+        let scope_tree = ScopeTree::from(&module);
+        let propagation = VariablePropagator::propagate(&scope_tree);
+        // println!(
+        //     "DemoteLocals: before demotion:\n{}",
+        //     dump_ir_human_readable(&module)
+        // );
+        let demotion = VariableRelocator::new(&scope_tree, &propagation).process(&module);
+        // demote locals
+        Self::demote_locals(&module, &scope_tree, &propagation, &demotion);
         // println!(
         //     "DemoteLocals: after demotion:\n{}",
         //     dump_ir_human_readable(&module)

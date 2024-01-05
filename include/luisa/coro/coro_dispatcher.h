@@ -102,15 +102,13 @@ public:
             $if (x < n) {
                 Var<FrameType> frame;
                 initialize_coroframe(frame, def<uint3>(x, 0, 0));
+                (*coroutine)(frame, args...);
                 $loop {
                     auto token = read_promise<uint>(frame, "coro_token");
                     $if (token == 0x8000'0000) {
                         $break;
                     };
                     $switch (token) {
-                        $case (0u) {
-                            (*coroutine)(frame, args...);
-                        };
                         for (auto i = 1u; i < max_sub_coro; ++i) {
                             $case (i) {
                                 (*coroutine)[i](frame, args...);

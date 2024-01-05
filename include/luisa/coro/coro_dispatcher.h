@@ -139,6 +139,7 @@ private:
     using Container = compute::SOA<FrameType>;
     bool static constexpr is_soa = true;
     bool static constexpr sort_base_gather = true;
+    bool static constexpr use_compact = true;
     Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
     luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
@@ -253,8 +254,12 @@ public:
             $if (x >= n) {
                 $return();
             };
-            //auto frame_id = index->read(x);
-            auto frame_id = offset + x;
+            UInt frame_id;
+            if (!use_compact) {
+                frame_id = index->read(x);
+            } else {
+                frame_id = offset + x;
+            }
             Var<FrameType> frame;
             if (_debug) {
                 frame = frame_buffer.read(frame_id);
@@ -371,14 +376,21 @@ public:
                             device_log("compact: new slot is in empty set!!!! slot:{}>empty_offset:{}", slot, empty_offset);
                         };
                     }*/
-                    auto empty = frame_buffer.read(slot);
                     if (_debug) {
+                        auto empty = frame_buffer.read(slot);
                         $if ((read_promise<uint>(empty, "coro_token") & token_mask) != 0u) {
                             device_log("wrong compact for frame {} at kernel {} when dispatch {}", slot, (read_promise<uint>(empty, "coro_token") & token_mask), dispatch_x());
                         };
                     }
                     frame_buffer.write(slot, frame);
-                    frame_buffer.write(empty_offset + x, empty);
+                    Var<FrameType> empty_frame;
+                    initialize_coroframe(empty_frame, def<uint3>(0, 0, 0));
+                    if (is_soa) {
+                        frame_buffer.write(empty_offset + x, empty_frame, {1});
+
+                    } else {
+                        frame_buffer.write(empty_offset + x, empty_frame);
+                    }
                 };
             };
         };
@@ -683,12 +695,12 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
             for (int i = 0; i < _max_sub_coro; ++i) {
                 LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
             }
-        if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
+        if (_host_count[0] > _max_frame_count * (0.66) && !all_dispatched()) {
             auto gen_count = std::min(this->_dispatch_size - this->_dispatch_counter, _host_count[0]);
             if (_debug) {
                 LUISA_INFO("Gen {} new frame", gen_count);
             }
-            if (_host_count[0] != _max_frame_count) {
+            if (_host_count[0] != _max_frame_count && use_compact) {
                 stream << _clear_shader(_global_buffer, 1).dispatch(1u);
                 stream << _compact_shader(_resume_index, _frame, _max_frame_count - _host_count[0], _max_frame_count).dispatch(_host_count[0]);
             }

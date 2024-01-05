@@ -140,6 +140,7 @@ private:
     using FrameType = std::remove_reference_t<FrameRef>;
     using Container = compute::SOA<FrameType>;
     bool static constexpr is_soa = true;
+    bool static constexpr sort_base_gather = true;
     Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
     luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
@@ -153,6 +154,7 @@ private:
     ///offset calculate from count, will be end after gathering
     compute::Buffer<uint> _resume_offset;
     compute::Buffer<uint> _global_buffer;
+    compute::Buffer<uint> _debug_buffer;
     luisa::vector<uint> _host_count;
     luisa::vector<uint> _host_offset;
     bool _host_empty;
@@ -176,15 +178,21 @@ public:
                             uint max_frame_count = 2000000, luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           _max_frame_count{max_frame_count}, _stream{stream}, _debug{debug}, _frame{device.create_soa<FrameType>(max_frame_count)} {
+        bool use_sort = sort_base_gather | !hint_token.empty();
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
         _resume_index = device.create_buffer<uint>(max_frame_count);
-        _temp_index = device.create_buffer<uint>(max_frame_count);
-        _temp_key[0] = device.create_buffer<uint>(max_frame_count);
-        _temp_key[1] = device.create_buffer<uint>(max_frame_count);
+        if (use_sort) {
+            _temp_index = device.create_buffer<uint>(max_frame_count);
+            _temp_key[0] = device.create_buffer<uint>(max_frame_count);
+            _temp_key[1] = device.create_buffer<uint>(max_frame_count);
+        }
         _resume_count = device.create_buffer<uint>(max_sub_coro);
         _resume_offset = device.create_buffer<uint>(max_sub_coro);
         _global_buffer = device.create_buffer<uint>(1);
+        if (_debug) {
+            _debug_buffer = device.create_buffer<uint>(max_sub_coro);
+        }
         _host_empty = true;
         _dispatch_counter = 0;
         _host_offset.resize(max_sub_coro);
@@ -230,11 +238,18 @@ public:
                 return def<uint>(0u);
             }
         };
-        _sort_temp_storage = radix_sort::temp_storage(device, max_frame_count, std::max(128u, max_sub_coro));
-        _sort_token = radix_sort(device, max_frame_count, _sort_temp_storage,
-                                 &get_coro_token, &id, &get_coro_token, 1, max_sub_coro);
-        _sort_hint = radix_sort(device, max_frame_count, _sort_temp_storage,
-                                &get_coro_hint, &keep_index);
+        if (use_sort) {
+            _sort_temp_storage = radix_sort::temp_storage(device, max_frame_count, std::max(128u, max_sub_coro));
+        }
+        if (sort_base_gather) {
+            _sort_token = radix_sort(device, max_frame_count, _sort_temp_storage,
+                                     &get_coro_token, &id, &get_coro_token, 1, max_sub_coro);
+        }
+        if (!hint_token.empty()) {
+            _sort_hint = radix_sort(device, max_frame_count, _sort_temp_storage,
+                                    &get_coro_hint, &keep_index);
+        }
+
         Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, UInt offset, Var<Container> frame_buffer, UInt st_task_id, UInt n, Var<Args>... args) {
             auto x = dispatch_x();
             $if (x >= n) {
@@ -243,21 +258,27 @@ public:
             //auto frame_id = index->read(x);
             auto frame_id = offset + x;
             Var<FrameType> frame;
-            if constexpr (is_soa) {
-                frame = frame_buffer.read(frame_id, {});
-            } else {
+            if (_debug) {
                 frame = frame_buffer.read(frame_id);
+                $if ((read_promise<uint>(frame, "coro_token") & token_mask) != 0u) {
+                    device_log("wrong gen for frame {} at kernel {}when dispatch {}", frame_id, read_promise<uint>(frame, "coro_token"), dispatch_x());
+                };
             }
             initialize_coroframe(frame, def<uint3>(st_task_id + x, 0, 0));
-            count.atomic(0).fetch_add(-1u);
+            if (!sort_base_gather) {
+                count.atomic(0).fetch_add(-1u);
+            }
+
             (*coroutine)(frame, args...);
             if constexpr (is_soa) {
                 frame_buffer.write(frame_id, frame, coroutine->graph().node(0u)->output_state_members);
             } else {
                 frame_buffer.write(frame_id, frame);
             }
-            auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
-            count.atomic(nxt).fetch_add(1u);
+            if (!sort_base_gather) {
+                auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
+                count.atomic(nxt).fetch_add(1u);
+            }
         };
         ShaderOption o{.enable_fast_math = false};
         _gen_shader = device.compile(gen_kernel, o);
@@ -276,7 +297,9 @@ public:
                 } else {
                     frame = frame_buffer.read(frame_id);
                 }
-                count.atomic(i).fetch_add(-1u);
+                if (!sort_base_gather) {
+                    count.atomic(i).fetch_add(-1u);
+                }
                 if (_debug) {
                     auto token = frame_buffer.read(frame_id);
                     auto check = read_promise<uint>(token, "coro_token") & token_mask;
@@ -305,15 +328,28 @@ public:
                     auto val = count.read(i);
                     prefix.write(i, pre);
                     pre = pre + val;
+                    if (_debug) {
+                        _debug_buffer->write(i, pre);
+                    }
                 };
             };
         };
         _count_prefix_shader = device.compile(_prefix_kernel);
-        Kernel1D _collect_kernel = [](BufferUInt index, BufferUInt prefix, Var<Container> frame_buffer, UInt n) {
+        Kernel1D _collect_kernel = [&](BufferUInt index, BufferUInt prefix, Var<Container> frame_buffer, UInt n) {
             auto x = dispatch_x();
             auto frame = frame_buffer.read(x);
             auto r_id = read_promise<uint>(frame, "coro_token") & token_mask;
             auto q_id = prefix.atomic(r_id).fetch_add(1u);
+            if (_debug) {
+                $if (q_id >= _debug_buffer->read(r_id)) {
+                    device_log("collect: indices overflow!!!! frame_id:{}>buffer_offset:{}", q_id, _debug_buffer->read(r_id));
+                };
+                /*
+                $if (q_id == _debug_buffer->read(r_id) - 1) {
+                    device_log("finish gather: kernel {}, tot :{}", r_id, _debug_buffer->read(r_id));
+                };
+                 */
+            }
             index.write(q_id, x);
         };
         _gather_shader = device.compile(_collect_kernel);
@@ -322,11 +358,27 @@ public:
             auto x = dispatch_x();
             $if (empty_offset + x < n) {
                 auto frame = frame_buffer.read(empty_offset + x);
-                $if ((read_promise<uint>(frame, "coro_token") & token_mask) != 0) {
+                $if ((read_promise<uint>(frame, "coro_token") & token_mask) != 0u) {
 
                     auto res = _global_buffer->atomic(0).fetch_add(1u);
                     auto slot = index.read(res);
+                    if (!sort_base_gather) {
+                        $while (slot >= empty_offset) {
+                            res = _global_buffer->atomic(0).fetch_add(1u);
+                            slot = index.read(res);
+                        };
+                    }
+                    /*if (_debug) {
+                        $if (slot >= empty_offset) {
+                            device_log("compact: new slot is in empty set!!!! slot:{}>empty_offset:{}", slot, empty_offset);
+                        };
+                    }*/
                     auto empty = frame_buffer.read(slot);
+                    if (_debug) {
+                        $if ((read_promise<uint>(empty, "coro_token") & token_mask) != 0u) {
+                            device_log("wrong compact for frame {} at kernel {} when dispatch {}", slot, (read_promise<uint>(empty, "coro_token") & token_mask), dispatch_x());
+                        };
+                    }
                     frame_buffer.write(slot, frame);
                     frame_buffer.write(empty_offset + x, empty);
                 };
@@ -611,115 +663,120 @@ void CoroAwait<T>::operator()(Stream &stream) && noexcept {
 }
 /*template<typename FrameRef, typename... Args>
 void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noexcept {
-    auto host_update = [&] {
-        _host_empty = true;
-        auto sum = 0u;
-        for (uint i = 0; i < _max_sub_coro; i++) {
-            _host_count[i] = (i + 1 == _max_sub_coro ? _max_frame_count : _host_offset[i + 1]) - _host_offset[i];
-            _host_empty = _host_empty && (i == 0 || _host_count[i] == 0);
-        }
-    };
-    _sort_token.sort(stream, _temp_key[0], _resume_index, _temp_key[1], _resume_index, _max_frame_count);
 
-    stream << _sort_temp_storage.hist_buffer.view(0, _max_sub_coro).copy_to(_host_offset.data())
-           << host_update
-           << synchronize();
-    if (_debug)
-        for (int i = 0; i < _max_sub_coro; ++i) {
-            LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
-        }
-    if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
-        auto gen_count = std::min(this->_dispatch_size - this->_dispatch_counter, _host_count[0]);
-        if (_debug) {
-            LUISA_INFO("Gen {} new frame", gen_count);
-        }
-        if (_host_count[0] != _max_frame_count) {
-            stream << _clear_shader(_global_buffer, 1).dispatch(1u);
-            stream << _compact_shader(_resume_index, _frame, _max_frame_count - _host_count[0], _max_frame_count).dispatch(_host_count[0]);
-        }
-        stream << this->template call_shader<1, Buffer<uint>, uint, Container, uint, uint>(
-                          _gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _max_frame_count - _host_count[0], _frame, _dispatch_counter, _max_frame_count)
-                      .dispatch(gen_count);
-        _dispatch_counter += gen_count;
-        _host_empty = false;
-    } else {
-        for (uint i = 1; i < _max_sub_coro; i++) {
-            if (_debug)
-                LUISA_INFO("launch kernel {} for count {}", i, _host_count[i]);
-            if (_host_count[i] > 0) {
-                if (_have_hint[i]) {
-                    BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
-                    BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
-                    uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
-                    stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
-                                                                                                         _resume_count, _frame, _max_frame_count)
-                                  .dispatch(_host_count[i]);
-                } else {
-
-                    stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
-                                                                                                         _resume_count, _frame, _max_frame_count)
-                                  .dispatch(_host_count[i]);
-                }
-            }
-        }
-    }
-    stream << synchronize();
 }*/
 template<typename FrameRef, typename... Args>
 void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noexcept {
-    if (_debug)
-        for (int i = 0; i < _max_sub_coro; ++i) {
-            LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
-        }
-    stream << _count_prefix_shader(_resume_count, _resume_offset, _max_sub_coro).dispatch(1u);
-    stream << _gather_shader(_resume_index, _resume_offset, _frame, _max_frame_count).dispatch(_max_frame_count);
-    if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
-        auto gen_count = std::min(this->_dispatch_size - this->_dispatch_counter, _host_count[0]);
-        if (_debug) {
-            LUISA_INFO("Gen {} new frame", gen_count);
-        }
-        if (_host_count[0] != _max_frame_count) {
-            stream << _clear_shader(_global_buffer, 1).dispatch(1u);
-            stream << _compact_shader(_resume_index, _frame, _max_frame_count - _host_count[0], _max_frame_count).dispatch(_host_count[0]);
-        }
-        stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, uint, Container, uint, uint>(
-                          _gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _max_frame_count - _host_count[0], _frame, _dispatch_counter, _max_frame_count)
-                      .dispatch(gen_count);
-        _dispatch_counter += gen_count;
-        _host_empty = false;
-    } else {
-        for (uint i = 1; i < _max_sub_coro; i++) {
-            if (_debug)
-                LUISA_INFO("launch kernel {} for count {}", i, _host_count[i]);
-            if (_host_count[i] > 0) {
-                if (_have_hint[i]) {
-                    BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
-                    BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
-                    uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
-                    stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
-                                                                                                         _resume_count, _frame, _max_frame_count)
-                                  .dispatch(_host_count[i]);
-                } else {
+    if (sort_base_gather) {
+        auto host_update = [&] {
+            _host_empty = true;
+            auto sum = 0u;
+            for (uint i = 0; i < _max_sub_coro; i++) {
+                _host_count[i] = (i + 1 == _max_sub_coro ? _max_frame_count : _host_offset[i + 1]) - _host_offset[i];
+                _host_empty = _host_empty && (i == 0 || _host_count[i] == 0);
+            }
+        };
+        _sort_token.sort(stream, _temp_key[0], _resume_index, _temp_key[1], _resume_index, _max_frame_count);
 
-                    stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
-                                                                                                         _resume_count, _frame, _max_frame_count)
-                                  .dispatch(_host_count[i]);
+        stream << _sort_temp_storage.hist_buffer.view(0, _max_sub_coro).copy_to(_host_offset.data())
+               << host_update
+               << synchronize();
+        if (_debug)
+            for (int i = 0; i < _max_sub_coro; ++i) {
+                LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
+            }
+        if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
+            auto gen_count = std::min(this->_dispatch_size - this->_dispatch_counter, _host_count[0]);
+            if (_debug) {
+                LUISA_INFO("Gen {} new frame", gen_count);
+            }
+            if (_host_count[0] != _max_frame_count) {
+                stream << _clear_shader(_global_buffer, 1).dispatch(1u);
+                stream << _compact_shader(_resume_index, _frame, _max_frame_count - _host_count[0], _max_frame_count).dispatch(_host_count[0]);
+            }
+            stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, uint, Container, uint, uint>(
+                              _gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _max_frame_count - _host_count[0], _frame, _dispatch_counter, _max_frame_count)
+                          .dispatch(gen_count);
+            _dispatch_counter += gen_count;
+            _host_empty = false;
+        } else {
+            for (uint i = 1; i < _max_sub_coro; i++) {
+                if (_debug)
+                    LUISA_INFO("launch kernel {} for count {}", i, _host_count[i]);
+                if (_host_count[i] > 0) {
+                    if (_have_hint[i]) {
+                        BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
+                        BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
+                        uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
+                        stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
+                                                                                                             _resume_count, _frame, _max_frame_count)
+                                      .dispatch(_host_count[i]);
+                    } else {
+
+                        stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
+                                                                                                             _resume_count, _frame, _max_frame_count)
+                                      .dispatch(_host_count[i]);
+                    }
                 }
             }
         }
-    }
-    auto host_update = [&] {
-        _host_empty = true;
-        auto sum = 0u;
-        for (uint i = 0; i < _max_sub_coro; i++) {
-            _host_offset[i] = sum;
-            sum += _host_count[i];
-            _host_empty = _host_empty && (i == 0 || _host_count[i] == 0);
+        stream << synchronize();
+    } else {
+        if (_debug)
+            for (int i = 0; i < _max_sub_coro; ++i) {
+                LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
+            }
+        stream << _count_prefix_shader(_resume_count, _resume_offset, _max_sub_coro).dispatch(1u);
+        stream << _gather_shader(_resume_index, _resume_offset, _frame, _max_frame_count).dispatch(_max_frame_count);
+        if (_host_count[0] > _max_frame_count / 2 && !all_dispatched()) {
+            auto gen_count = std::min(this->_dispatch_size - this->_dispatch_counter, _host_count[0]);
+            if (_debug) {
+                LUISA_INFO("Gen {} new frame", gen_count);
+            }
+            if (_host_count[0] != _max_frame_count) {
+                stream << _clear_shader(_global_buffer, 1).dispatch(1u);
+                stream << synchronize();
+                stream
+                    << _compact_shader(_resume_index.view(_host_offset[0], _host_count[0]), _frame, _max_frame_count - _host_count[0], _max_frame_count).dispatch(_host_count[0]);
+            }
+            stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, uint, Container, uint, uint>(
+                              _gen_shader, _resume_index.view(_host_offset[0], _host_count[0]), _resume_count, _max_frame_count - _host_count[0], _frame, _dispatch_counter, _max_frame_count)
+                          .dispatch(gen_count);
+            _dispatch_counter += gen_count;
+            _host_empty = false;
+        } else {
+            for (uint i = 1; i < _max_sub_coro; i++) {
+                if (_debug)
+                    LUISA_INFO("launch kernel {} for count {}", i, _host_count[i]);
+                if (_host_count[i] > 0) {
+                    if (_have_hint[i]) {
+                        BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
+                        BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
+                        uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
+                        stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
+                                                                                                             _resume_count, _frame, _max_frame_count)
+                                      .dispatch(_host_count[i]);
+                    } else {
+                        stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
+                                                                                                             _resume_count, _frame, _max_frame_count)
+                                      .dispatch(_host_count[i]);
+                    }
+                }
+            }
         }
-    };
-    stream << _resume_count.view(0, _max_sub_coro).copy_to(_host_count.data())
-           << host_update;
-    stream << synchronize();
+        auto host_update = [&] {
+            _host_empty = true;
+            auto sum = 0u;
+            for (uint i = 0; i < _max_sub_coro; i++) {
+                _host_offset[i] = sum;
+                sum += _host_count[i];
+                _host_empty = _host_empty && (i == 0 || _host_count[i] == 0);
+            }
+        };
+        stream << _resume_count.view(0, _max_sub_coro).copy_to(_host_count.data())
+               << host_update;
+        stream << synchronize();
+    }
 }
 template<typename FrameRef, typename... Args>
 bool WavefrontCoroDispatcher<FrameRef, Args...>::all_dispatched() const noexcept {

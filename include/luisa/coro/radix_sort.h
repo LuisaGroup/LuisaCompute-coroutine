@@ -10,8 +10,8 @@
 namespace luisa::compute {
 const uint HIST_BLOCK_SIZE = 128;
 const uint SM_COUNT = 256;
-const uint ONESWEEP_BLOCK_SIZE = 256;
-const uint ONESWEEP_ITEM_COUNT = 32;
+const uint ONESWEEP_BLOCK_SIZE = 128;
+const uint ONESWEEP_ITEM_COUNT = 16;
 const uint WARP_LOG = 5;
 const uint WARP_SIZE = 1 << WARP_LOG;
 const uint WARP_MASK = WARP_SIZE - 1;
@@ -253,7 +253,6 @@ public:
                     warp_rank += warp_prefix[warp_id * DIGIT + key];//offset between warp in a block
                     warp_rank += block_bin[key];                    //offset between block in global
                     warp_rank += hist_buffer.read(key);             //offset between digits
-                    //device_log("x[{}]={},rank={}", read_pos, key_v, warp_rank);
                     key_out.write(warp_rank, key_v);
                     auto val = def<uint>(0u);
                     if (is_first) {
@@ -304,11 +303,9 @@ public:
             stream << clear_shader(_temp.launch_count).dispatch(1u);
             stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
             if (i == 0) {
-                //stream << synchronize();
                 stream << onesweep_first_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                                 _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
                               .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
-                //stream << synchronize();
             } else {
                 stream << onesweep_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                           _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)

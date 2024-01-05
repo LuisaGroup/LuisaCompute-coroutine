@@ -212,8 +212,8 @@ int main(int argc, char *argv[]) {
 
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
     //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
-    //coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
-    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256u, 128u, 3u, false};
+    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
+    //coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256u, 128u, 3u, false};
     stream << clear_shader().dispatch(resolution)
            << synchronize();
     /*for (auto i = 0u; i < 100u; i++) {
@@ -221,6 +221,12 @@ int main(int argc, char *argv[]) {
     }*/
     Clock clk;
     auto samples = 1000;
+    /*Wdispatcher(seed_image, accum_image, 0u, resolution.x * resolution.y);
+    stream << Wdispatcher.await_step();
+    stream << Wdispatcher.await_step();
+    stream << Wdispatcher.await_step();
+    stream << Wdispatcher.await_step();
+    return 0;*/
     for (auto i = 0u; i < samples; ++i) {
         LUISA_INFO("spp {}", i);
         Wdispatcher(seed_image, accum_image, i, resolution.x * resolution.y);

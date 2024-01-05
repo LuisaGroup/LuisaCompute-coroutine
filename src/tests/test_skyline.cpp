@@ -306,7 +306,7 @@ int main(int argc, char *argv[]) {
             rep = p2;
             Float carTime = localTime * 0.2f;// Speed of car driving
             Float crossStreet = 1.0f;        // whether we are north/south or east/west
-            Float repeatDist = 0.25f;         // Car density bumper to bumper
+            Float repeatDist = 0.25f;        // Car density bumper to bumper
             // If we are going north/south instead of east/west (?) make cars that are
             // stopped in the street so we don't have collisions.
             $if (abs(fract(rep.x) - 0.5f) < 0.35f) {
@@ -861,7 +861,8 @@ int main(int argc, char *argv[]) {
     stream << clear(device_image).dispatch(width, height);
 
     Clock clock;
-    coro::SimpleCoroDispatcher Wdispatcher{&coro, device, width * height};
+    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, width * height / 3, {}, true};
+    //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, width * height};
     //coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 96u, 2u, false};
     /*while (!window.should_close()) {
         window.poll_events();
@@ -894,9 +895,9 @@ int main(int argc, char *argv[]) {
     while (time < length) {
         time = static_cast<float>(clock.toc() * 1e-3);
         count += 1;
-        stream << mega_shader(time).dispatch(width * height);
-        // Wdispatcher(time, width * height);
-        // stream << Wdispatcher.await_all();
+        //stream << mega_shader(time).dispatch(width * height);
+        Wdispatcher(time, width * height);
+        stream << Wdispatcher.await_all();
         if (SHOW) {
             window.poll_events();
             if (window.should_close()) { break; }

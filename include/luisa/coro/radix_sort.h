@@ -10,8 +10,8 @@
 namespace luisa::compute {
 const uint HIST_BLOCK_SIZE = 128;
 const uint SM_COUNT = 256;
-const uint ONESWEEP_BLOCK_SIZE = 128;
-const uint ONESWEEP_ITEM_COUNT = 16;
+const uint ONESWEEP_BLOCK_SIZE = 256;
+const uint ONESWEEP_ITEM_COUNT = 32;
 const uint WARP_LOG = 5;
 const uint WARP_SIZE = 1 << WARP_LOG;
 const uint WARP_MASK = WARP_SIZE - 1;
@@ -161,8 +161,8 @@ public:
             };
             Shared<uint> warp_prefix{ONESWEEP_BLOCK_SIZE / WARP_SIZE * DIGIT};
             Shared<uint> block_bin{DIGIT};
-            Shared<uint> local_rank{ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT};
-            warp_prefix[thread_x()] = 0;
+            //Shared<uint> local_rank{ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT};
+            ArrayUInt<ONESWEEP_ITEM_COUNT> local_rank;
             $for (i, 0u, ceil_div(ONESWEEP_BLOCK_SIZE / WARP_SIZE * DIGIT, ONESWEEP_BLOCK_SIZE)) {
                 $if (i * ONESWEEP_BLOCK_SIZE + thread_x() < ONESWEEP_BLOCK_SIZE / WARP_SIZE * DIGIT) {
                     warp_prefix[i * ONESWEEP_BLOCK_SIZE + thread_x()] = 0u;
@@ -205,7 +205,7 @@ public:
                 $if (prefix == 0u) {
                     warp_prefix[warp_id * DIGIT + key] = warp_pre + total;
                 };
-                local_rank[warp_offset + i * WARP_SIZE + lane_id] = prefix + warp_pre;
+                local_rank[i] = prefix + warp_pre;
             };
             sync_block();
             //get block level prefix, the calculate global offset
@@ -242,7 +242,7 @@ public:
             $for (i, 0u, ONESWEEP_ITEM_COUNT) {
                 auto read_pos = block_offset + warp_offset + i * WARP_SIZE + lane_id;
                 $if (read_pos < n) {
-                    UInt warp_rank = local_rank[warp_offset + i * WARP_SIZE + lane_id];
+                    UInt warp_rank = local_rank[i];
                     auto key_v = def<uint>(ALL_MASK);
                     if (is_first) {
                         key_v = (*get_key)(read_pos);
@@ -303,9 +303,11 @@ public:
             stream << clear_shader(_temp.launch_count).dispatch(1u);
             stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
             if (i == 0) {
+                stream << synchronize();
                 stream << onesweep_first_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                                 _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
                               .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
+                stream << synchronize();
             } else {
                 stream << onesweep_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                           _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)

@@ -29,9 +29,9 @@ pub struct CanonicalizeControlFlow;
  *   }
  * - Transformed
  *   do {
- *       loop_break = false;
  *       prepare();
  *       if (!cond()) break;
+ *       loop_break = false;
  *       do {
  *           body {
  *               // break => { loop_break = true; break; }
@@ -64,13 +64,13 @@ impl LowerGenericLoops {
             } => {
                 // create a new block for the transformed generic loop
                 let mut builder = IrBuilder::new(self.pools.clone());
+                // recursively transform the nested blocks
+                self.transform_block(prepare);
                 builder.comment(CBoxedSlice::from(
                     "lowered generic loop: break_flag = false".to_string(),
                 ));
                 let loop_break = builder.local(const_false);
                 self.generic_loop_break = Some(loop_break.clone());
-                // recursively transform the nested blocks
-                self.transform_block(prepare);
                 self.transform_block(body);
                 self.transform_block(update);
                 // move the prepare block to the new block

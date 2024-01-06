@@ -32,6 +32,22 @@ use crate::{CArc, CBox, CBoxedSlice, Pooled};
 use bitflags::Flags;
 use std::collections::{HashMap, HashSet};
 
+struct DuplicateNodeCollector<'a> {
+    frame: &'a CoroFrame<'a>,
+    scope: CoroScopeRef,
+}
+
+// collect the nodes that violate the SSA form, which should be promoted to locals
+impl<'a> DuplicateNodeCollector<'a> {
+    fn new(frame: &'a CoroFrame<'a>, scope: CoroScopeRef) -> Self {
+        Self { frame, scope }
+    }
+
+    fn collect(&self) -> HashSet<NodeRef> {
+        todo!()
+    }
+}
+
 pub(crate) struct MaterializeCoro;
 
 struct CoroScopeMaterializer<'a> {

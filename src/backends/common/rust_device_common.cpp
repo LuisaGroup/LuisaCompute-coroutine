@@ -601,18 +601,18 @@ public:
             transform_ir_kernel_module_auto(shader->get());
         }
         // for debugging
-        Clock clk;
-        auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
+        // Clock clk;
+        // auto ppl = ir::luisa_compute_ir_transform_pipeline_new();
         // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "reg2mem");
-        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "canonicalize_control_flow");
+        // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "canonicalize_control_flow");7
         // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "mem2reg");
         // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "remove_phi");
-        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "demote_locals");
-        ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "defer_load");
+        // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "demote_locals");
+        // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "defer_load");
         // ir::luisa_compute_ir_transform_pipeline_add_transform(ppl, "split_coro");
-        shader->get()->module = ir::luisa_compute_ir_transform_pipeline_transform_module(ppl, shader->get()->module);
-        ir::luisa_compute_ir_transform_pipeline_destroy(ppl);
-        LUISA_VERBOSE("IR transform took {} ms.", clk.toc());
+        // shader->get()->module = ir::luisa_compute_ir_transform_pipeline_transform_module(ppl, shader->get()->module);
+        // ir::luisa_compute_ir_transform_pipeline_destroy(ppl);
+        // LUISA_VERBOSE("IR transform took {} ms.", clk.toc());
         return create_shader(option, shader->get());
     }
 

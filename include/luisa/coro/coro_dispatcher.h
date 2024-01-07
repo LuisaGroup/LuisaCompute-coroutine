@@ -138,7 +138,7 @@ private:
     using FrameType = std::remove_reference_t<FrameRef>;
     using Container = compute::SOA<FrameType>;
     bool static constexpr is_soa = true;
-    bool static constexpr sort_base_gather = true;
+    bool sort_base_gather = true;
     bool static constexpr use_compact = true;
     Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
     luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
@@ -177,6 +177,11 @@ public:
                             uint max_frame_count = 2000000, luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           _max_frame_count{max_frame_count}, _stream{stream}, _debug{debug}, _frame{device.create_soa<FrameType>(max_frame_count)} {
+        if (device.backend_name() != "cuda") {//only cuda can sort
+            sort_base_gather = false;
+            hint_token = {};
+            LUISA_INFO("Using wavefront dispatcher without cuda, the sorting will be disabled!");
+        }
         bool use_sort = sort_base_gather | !hint_token.empty();
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;

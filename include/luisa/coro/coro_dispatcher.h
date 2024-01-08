@@ -399,7 +399,45 @@ public:
                 };
             };
         };
-        _compact_shader = device.compile(_compact_kernel);
+        Kernel1D _compact_kernel_2 = [&](BufferUInt index, Var<Container> frame_buffer, UInt empty_offset, UInt n) {
+            //_global_buffer->write(0u, 0u);
+            auto x = dispatch_x();
+            $if (empty_offset + x < n) {
+                auto token = frame_buffer.read_coro_token(empty_offset + x);
+                $if ((token & token_mask) != 0u) {
+
+                    auto res = _global_buffer->atomic(0).fetch_add(1u);
+                    auto slot = index.read(res);
+                    if (!sort_base_gather) {
+                        $while (slot >= empty_offset) {
+                            res = _global_buffer->atomic(0).fetch_add(1u);
+                            slot = index.read(res);
+                        };
+                    }
+                    /*if (_debug) {
+                        $if (slot >= empty_offset) {
+                            device_log("compact: new slot is in empty set!!!! slot:{}>empty_offset:{}", slot, empty_offset);
+                        };
+                    }*/
+                    if (_debug) {
+                        auto empty = frame_buffer.read(slot);
+                        $if ((read_promise<uint>(empty, "coro_token") & token_mask) != 0u) {
+                            device_log("wrong compact for frame {} at kernel {} when dispatch {}", slot, (read_promise<uint>(empty, "coro_token") & token_mask), dispatch_x());
+                        };
+                    }
+                    auto frame = frame_buffer.read(empty_offset + x);
+                    frame_buffer.write(slot, frame);
+                    Var<FrameType> empty_frame;
+                    initialize_coroframe(empty_frame, def<uint3>(0, 0, 0));
+                    if (is_soa) {
+                        frame_buffer.write(empty_offset + x, empty_frame, {1});
+                    } else {
+                        frame_buffer.write(empty_offset + x, empty_frame);
+                    }
+                };
+            };
+        };
+        _compact_shader = device.compile(_compact_kernel_2);
         Kernel1D _initialize_kernel = [&](BufferUInt count, Var<Container> frame_buffer, UInt n) {
             auto x = dispatch_x();
             $if (x < n) {

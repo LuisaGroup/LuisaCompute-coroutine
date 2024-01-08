@@ -426,15 +426,51 @@ struct luisa_compute_extension {};
         Expr(const SOA<S> &soa) noexcept;                                                                            \
                                                                                                                      \
         template<typename I>                                                                                         \
+        [[nodiscard]] auto read_coro_id(I &&index) const noexcept {                                                  \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            constexpr auto i = 0u;                                                                                   \
+            auto type = Type::of<uint3>();                                                                           \
+            uint stride = ((type->size() + sizeof(uint) - 1u) / sizeof(uint));                                       \
+            auto id = dsl::def(std::forward<I>(index));                                                              \
+            auto data = builder->call(                                                                               \
+                type, CallOp::BYTE_BUFFER_READ,                                                                      \
+                {_buffer.expression(),                                                                               \
+                 detail::extract_expression((_member_offsets[i] +                                                    \
+                                             (id + _element_offset) * stride) *                                      \
+                                            (uint)sizeof(uint))});                                                   \
+            auto v = builder->local(type);                                                                           \
+            builder->assign(v, data);                                                                                \
+            return Var<uint3>{v};                                                                                    \
+        }                                                                                                            \
+                                                                                                                     \
+        template<typename I>                                                                                         \
+        [[nodiscard]] auto read_coro_token(I &&index) const noexcept {                                               \
+            auto builder = detail::FunctionBuilder::current();                                                       \
+            constexpr auto i = 1u;                                                                                   \
+            auto type = Type::of<uint>();                                                                            \
+            uint stride = ((type->size() + sizeof(uint) - 1u) / sizeof(uint));                                       \
+            auto id = dsl::def(std::forward<I>(index));                                                              \
+            auto data = builder->call(                                                                               \
+                type, CallOp::BYTE_BUFFER_READ,                                                                      \
+                {_buffer.expression(),                                                                               \
+                 detail::extract_expression((_member_offsets[i] +                                                    \
+                                             (id + _element_offset) * stride) *                                      \
+                                            (uint)sizeof(uint))});                                                   \
+            auto v = builder->local(type);                                                                           \
+            builder->assign(v, data);                                                                                \
+            return Var<uint>{v};                                                                                     \
+        }                                                                                                            \
+                                                                                                                     \
+        template<typename I>                                                                                         \
         [[nodiscard]] auto read(I &&index) const noexcept {                                                          \
             auto builder = detail::FunctionBuilder::current();                                                       \
             auto type = Type::of<S>() -> corotype();                                                                 \
             auto ret = builder->local(Type::of<S>());                                                                \
             auto member_index = 0u;                                                                                  \
+            auto id = dsl::def(std::forward<I>(index));                                                              \
             for (auto i = 0u; i < type->members().size(); ++i) {                                                     \
                 auto &mem = type->members()[i];                                                                      \
                 uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                                    \
-                auto id = dsl::def(std::forward<I>(index));                                                          \
                 auto data = builder->call(                                                                           \
                     mem, CallOp::BYTE_BUFFER_READ,                                                                   \
                     {_buffer.expression(),                                                                           \
@@ -452,11 +488,11 @@ struct luisa_compute_extension {};
             auto type = Type::of<S>() -> corotype();                                                                 \
             auto ret = builder->local(Type::of<S>());                                                                \
             auto member_index = 0u;                                                                                  \
+            auto id = dsl::def(std::forward<I>(index));                                                              \
             for (auto r_mem = 0u; r_mem < members.size(); ++r_mem) {                                                 \
                 auto i = members[r_mem];                                                                             \
                 auto &mem = type->members()[i];                                                                      \
                 uint stride = ((mem->size() + sizeof(uint) - 1u) / sizeof(uint));                                    \
-                auto id = dsl::def(std::forward<I>(index));                                                          \
                 auto data = builder->call(                                                                           \
                     mem, CallOp::BYTE_BUFFER_READ,                                                                   \
                     {_buffer.expression(),                                                                           \
@@ -473,10 +509,10 @@ struct luisa_compute_extension {};
             auto builder = detail::FunctionBuilder::current();                                                       \
             auto type = Type::of<S>() -> corotype();                                                                 \
             auto member_index = 0u;                                                                                  \
+            auto id = dsl::def(std::forward<I>(index));                                                              \
             for (auto i = 0u; i < type->members().size(); ++i) {                                                     \
                 auto &mem = type->members()[i];                                                                      \
                 auto stride = (((uint)mem->size() + (uint)sizeof(uint) - 1u) / (uint)sizeof(uint));                  \
-                auto id = dsl::def(std::forward<I>(index));                                                          \
                 builder->call(CallOp::BYTE_BUFFER_WRITE,                                                             \
                               {_buffer.expression(),                                                                 \
                                detail::extract_expression((_member_offsets[i] +                                      \
@@ -491,11 +527,11 @@ struct luisa_compute_extension {};
             auto builder = detail::FunctionBuilder::current();                                                       \
             auto type = Type::of<S>() -> corotype();                                                                 \
             auto member_index = 0u;                                                                                  \
+            auto id = dsl::def(std::forward<I>(index));                                                              \
             for (auto w_mem = 0u; w_mem < members.size(); ++w_mem) {                                                 \
                 auto i = members[w_mem];                                                                             \
                 auto &mem = type->members()[i];                                                                      \
                 auto stride = (((uint)mem->size() + (uint)sizeof(uint) - 1u) / (uint)sizeof(uint));                  \
-                auto id = dsl::def(std::forward<I>(index));                                                          \
                 builder->call(CallOp::BYTE_BUFFER_WRITE,                                                             \
                               {_buffer.expression(),                                                                 \
                                detail::extract_expression((_member_offsets[i] +                                      \
@@ -570,8 +606,7 @@ struct luisa_compute_extension {};
     private:                                                                                                         \
         SOA(ByteBuffer buffer, size_t size) noexcept                                                                 \
             : _buffer{std::move(buffer)},                                                                            \
-              SOAView<S> { &buffer, 0u, size, 0u, size }                                                             \
-        {                                                                                                            \
+              SOAView<S>{&buffer, 0u, size, 0u, size} {                                                              \
             this->_bufferview = &_buffer;                                                                            \
         }                                                                                                            \
                                                                                                                      \

@@ -161,7 +161,7 @@ private:
     uint _max_sub_coro;
     uint _max_frame_count;
     bool _debug;
-    void _await_step(Stream &stream) noexcept;
+    void _await_step(Stream &stream) noexcept override;
     radix_sort::temp_storage _sort_temp_storage;
     radix_sort _sort_token;
     radix_sort _sort_hint;
@@ -748,9 +748,8 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
             if (_debug) {
                 LUISA_INFO("Gen {} new frame", gen_count);
             }
-            if (_host_count[0] != _max_frame_count) {
+            if (_host_count[0] != _max_frame_count && use_compact) {
                 stream << _clear_shader(_global_buffer, 1).dispatch(1u);
-                stream << synchronize();
                 stream
                     << _compact_shader(_resume_index.view(_host_offset[0], _host_count[0]), _frame, _max_frame_count - _host_count[0], _max_frame_count).dispatch(_host_count[0]);
             }

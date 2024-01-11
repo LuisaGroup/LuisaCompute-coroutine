@@ -134,7 +134,7 @@ impl<'a> CoroUseDefAnalysis<'a> {
         result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
-        if helpers.replayable.detect(node_ref) {
+        if helpers.replayable.detect(node_ref) || node_ref.is_argument() {
             // the value is replayable, so we don't need to pass it through the frame
             return;
         }
@@ -159,6 +159,10 @@ impl<'a> CoroUseDefAnalysis<'a> {
         result: &mut CoroScopeUseDef,
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
+        if node_ref.is_argument() {
+            // the value is an argument
+            return;
+        }
         let (root, access_chain) = AccessTree::access_chain_from_gep_chain(node_ref);
         let access_chain =
             AccessTree::partially_evaluate_access_chain(&access_chain, &mut helpers.const_eval);

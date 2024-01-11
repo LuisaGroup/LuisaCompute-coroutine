@@ -365,7 +365,7 @@ impl<'a> CoroScopeMaterializer<'a> {
             node
         } else {
             let node = self.ref_or_local(old_node, ctx, state);
-            if node.is_local() || node.is_gep() {
+            if node.is_local() || node.is_gep() || node.is_reference_argument() {
                 state.builder.load(node)
             } else {
                 node
@@ -381,7 +381,7 @@ impl<'a> CoroScopeMaterializer<'a> {
         state: &mut CoroScopeMaterializerState,
     ) {
         let var = self.ref_or_local(old_node, ctx, state);
-        assert!(var.is_gep() || var.is_local());
+        assert!(var.is_gep() || var.is_local() || var.is_reference_argument());
         state.builder.update(var, new_value);
     }
 

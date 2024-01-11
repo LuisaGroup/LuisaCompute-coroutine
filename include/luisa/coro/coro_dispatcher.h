@@ -140,6 +140,7 @@ private:
     bool static constexpr is_soa = true;
     bool sort_base_gather = true;
     bool static constexpr use_compact = true;
+    bool static constexpr sort_at_compact = false;
     Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
     luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
@@ -288,8 +289,9 @@ public:
                 count.atomic(nxt).fetch_add(1u);
             }
         };
-        ShaderOption o{.enable_fast_math = false};
+        ShaderOption o{};
         _gen_shader = device.compile(gen_kernel, o);
+        _gen_shader.set_name("gen");
         _resume_shaders.resize(max_sub_coro);
         for (int i = 1; i < max_sub_coro; ++i) {
             Kernel1D resume_kernel = [&](BufferUInt index, BufferUInt count, Var<Container> frame_buffer, UInt n, Var<Args>... args) {
@@ -316,7 +318,6 @@ public:
                     };
                 }
                 (*coroutine)[i](frame, args...);
-                auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
                 if constexpr (is_soa) {
                     frame_buffer.write(frame_id, frame, coroutine->graph().node(i)->output_state_members);
                 } else {
@@ -324,10 +325,22 @@ public:
                 }
                 //if (debug)
                 //    device_log("resume kernel {} : id {} goto kernel {}", i, frame_id, nxt);
-                count.atomic(nxt).fetch_add(1u);
+
+                if (!sort_base_gather) {
+                    auto nxt = read_promise<uint>(frame, "coro_token") & token_mask;
+                    $switch (nxt) {
+                        for (int i = 0; i < max_sub_coro; ++i) {
+                            $case (i) {
+                                count.atomic(i).fetch_add(1u);
+                            };
+                        }
+                    };
+                    //count.atomic(nxt).fetch_add(1u);
+                }
             };
             if (_debug) o.name = "resume" + std::to_string(i);
             _resume_shaders[i] = device.compile(resume_kernel, o);
+            _resume_shaders[i].set_name("resume" + std::to_string(i));
         }
         Kernel1D _prefix_kernel = [&](BufferUInt count, BufferUInt prefix, UInt n) {
             $if (dispatch_x() == 0) {
@@ -361,44 +374,6 @@ public:
             index.write(q_id, x);
         };
         _gather_shader = device.compile(_collect_kernel);
-        Kernel1D _compact_kernel = [&](BufferUInt index, Var<Container> frame_buffer, UInt empty_offset, UInt n) {
-            //_global_buffer->write(0u, 0u);
-            auto x = dispatch_x();
-            $if (empty_offset + x < n) {
-                auto frame = frame_buffer.read(empty_offset + x);
-                $if ((read_promise<uint>(frame, "coro_token") & token_mask) != 0u) {
-
-                    auto res = _global_buffer->atomic(0).fetch_add(1u);
-                    auto slot = index.read(res);
-                    if (!sort_base_gather) {
-                        $while (slot >= empty_offset) {
-                            res = _global_buffer->atomic(0).fetch_add(1u);
-                            slot = index.read(res);
-                        };
-                    }
-                    /*if (_debug) {
-                        $if (slot >= empty_offset) {
-                            device_log("compact: new slot is in empty set!!!! slot:{}>empty_offset:{}", slot, empty_offset);
-                        };
-                    }*/
-                    if (_debug) {
-                        auto empty = frame_buffer.read(slot);
-                        $if ((read_promise<uint>(empty, "coro_token") & token_mask) != 0u) {
-                            device_log("wrong compact for frame {} at kernel {} when dispatch {}", slot, (read_promise<uint>(empty, "coro_token") & token_mask), dispatch_x());
-                        };
-                    }
-                    frame_buffer.write(slot, frame);
-                    Var<FrameType> empty_frame;
-                    initialize_coroframe(empty_frame, def<uint3>(0, 0, 0));
-                    if (is_soa) {
-                        frame_buffer.write(empty_offset + x, empty_frame, {1});
-
-                    } else {
-                        frame_buffer.write(empty_offset + x, empty_frame);
-                    }
-                };
-            };
-        };
         Kernel1D _compact_kernel_2 = [&](BufferUInt index, Var<Container> frame_buffer, UInt empty_offset, UInt n) {
             //_global_buffer->write(0u, 0u);
             auto x = dispatch_x();
@@ -438,6 +413,8 @@ public:
             };
         };
         _compact_shader = device.compile(_compact_kernel_2);
+        _compact_shader.set_name("compact");
+
         Kernel1D _initialize_kernel = [&](BufferUInt count, Var<Container> frame_buffer, UInt n) {
             auto x = dispatch_x();
             $if (x < n) {
@@ -738,7 +715,7 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
             for (int i = 0; i < _max_sub_coro; ++i) {
                 LUISA_INFO("kernel {}: total {}", i, _host_count[i]);
             }
-        if (_host_count[0] > _max_frame_count * (0.66) && !all_dispatched()) {
+        if (_host_count[0] > _max_frame_count * (0.5) && !all_dispatched()) {
             auto gen_count = std::min(this->_dispatch_size - this->_dispatch_counter, _host_count[0]);
             if (_debug) {
                 LUISA_INFO("Gen {} new frame", gen_count);

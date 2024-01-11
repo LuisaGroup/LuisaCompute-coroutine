@@ -10,7 +10,7 @@ using namespace luisa;
 using namespace luisa::compute;
 
 struct alignas(4) CoroFrame {};
-LUISA_COROFRAME_STRUCT(CoroFrame){};
+LUISA_COROFRAME_STRUCT(CoroFrame) {};
 
 int main(int argc, char *argv[]) {
     Context context{argv[0]};

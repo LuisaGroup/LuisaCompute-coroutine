@@ -127,14 +127,19 @@ uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
     return token;
 }
 
-void FunctionBuilder::bind_promise_(const Expression *expr, const luisa::string &name) noexcept {
+void FunctionBuilder::bind_promise_(const Expression *expr, luisa::string name) noexcept {
     check_is_coroutine();
-    _create_and_append_statement<CoroBindStmt>(expr, name);
+    _create_and_append_statement<CoroBindStmt>(expr, std::move(name));
 }
-const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const luisa::string &name) noexcept {
+
+const MemberExpr *FunctionBuilder::read_promise_(const Type *type, const Expression *expr, luisa::string_view name) noexcept {
     LUISA_ASSERT(expr->type()->is_coroframe(), "Promise reading is only allowed for CoroFrame type");
     auto var = expr->type()->member(name);
     if (var != -1) {
+        auto mem_type = expr->type()->corotype()->members()[var];
+        LUISA_ASSERT(*mem_type == *type,
+                     "Promise '{}' type mismatch: expected {}, got {}.",
+                     name, type->description(), mem_type->description());
         return _create_expression<MemberExpr>(expr->type()->corotype()->members()[var], expr, var);
     }
     return nullptr;

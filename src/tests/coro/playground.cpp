@@ -28,21 +28,20 @@ int main(int argc, char *argv[]) {
     };
 
     Kernel1D mega_kernel = [&] {
-        Var<CoroFrame> frame;
         device_log("scheduler: init");
-        initialize_coroframe(frame, dispatch_id());
+        auto frame = make_coroframe<CoroFrame>(dispatch_id());
         device_log("scheduler: enter entry");
         auto a = def(0);
         coro(frame, a);
         device_log("scheduler: exit entry");
         $loop {
-            auto token = read_promise<uint>(frame, "coro_token");
+            auto token = frame->target_token();
             $switch (token) {
                 for (auto i = 1u; i <= coro.suspend_count(); i++) {
                     $case (i) {
                         device_log("scheduler: enter coro {}, a = {}", i, a);
                         coro[i](frame, a);
-                        device_log("promise x: {}", read_promise<int>(frame, "x"));
+                        device_log("promise x: {}", frame->promise<int>("x"));
                         device_log("scheduler: exit coro {}, a = {}", i, a);
                     };
                 }

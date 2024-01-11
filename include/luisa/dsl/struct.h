@@ -348,6 +348,18 @@ struct luisa_compute_extension {};
         Expr(Expr &&another) noexcept = default;                                             \
         Expr(const Expr &another) noexcept = default;                                        \
         Expr &operator=(Expr) noexcept = delete;                                             \
+        template<typename T>                                                                 \
+        [[nodiscard]] auto promise(luisa::string_view name) const noexcept {                 \
+            return luisa::compute::dsl::def<T>(                                              \
+                luisa::compute::detail::FunctionBuilder::current()->read_promise_(           \
+                    luisa::compute::Type::of<T>(), this->_expression, name));                \
+        }                                                                                    \
+        [[nodiscard]] auto target_token() const noexcept {                                   \
+            return this->promise<uint>("coro_token");                                        \
+        }                                                                                    \
+        [[nodiscard]] auto coro_id() const noexcept {                                        \
+            return this->promise<uint3>("coro_id");                                          \
+        }                                                                                    \
     };                                                                                       \
     namespace detail {                                                                       \
     template<>                                                                               \
@@ -373,6 +385,18 @@ struct luisa_compute_extension {};
         }                                                                                    \
         [[nodiscard]] auto operator->() const noexcept {                                     \
             return reinterpret_cast<const luisa_compute_extension<this_type> *>(this);       \
+        }                                                                                    \
+        template<typename T>                                                                 \
+        [[nodiscard]] auto promise(luisa::string_view name) const noexcept {                 \
+            return luisa::compute::dsl::def<T>(                                              \
+                luisa::compute::detail::FunctionBuilder::current()->read_promise_(           \
+                    luisa::compute::Type::of<T>(), this->_expression, name));                \
+        }                                                                                    \
+        [[nodiscard]] auto target_token() const noexcept {                                   \
+            return this->promise<uint>("coro_token");                                        \
+        }                                                                                    \
+        [[nodiscard]] auto coro_id() const noexcept {                                        \
+            return this->promise<uint3>("coro_id");                                          \
         }                                                                                    \
     };                                                                                       \
     }                                                                                        \

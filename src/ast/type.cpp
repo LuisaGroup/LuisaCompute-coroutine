@@ -724,7 +724,7 @@ void Type::set_member_name(size_t index, luisa::string name) noexcept {
     detail::_set_member_name(this, index, std::move(name));
 }
 
-size_t Type::member(const luisa::string &name) const noexcept {
+size_t Type::member(luisa::string_view name) const noexcept {
     if (name == "coro_id") return 0;
     if (name == "coro_token") return 1u;
     auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;

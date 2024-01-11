@@ -575,8 +575,9 @@ impl<'a> CoroUseDefAnalysis<'a> {
                     self.mark_use(*arg, kills, result, helpers);
                 }
             }
-            Instruction::CoroRegister { value, .. } => {
-                self.mark_use(*value, kills, result, helpers);
+            Instruction::CoroRegister { .. } => {
+                // processed as a special case in the coroutine graph
+                // self.mark_use(*value, kills, result, helpers);
             }
             _ => {}
         }

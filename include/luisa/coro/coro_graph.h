@@ -1,7 +1,7 @@
 #pragma once
 
 #include <luisa/core/dll_export.h>
-#include <luisa/core/stl/map.h>
+#include <luisa/core/stl/unordered_map.h>
 #include <luisa/coro/coro_node.h>
 
 namespace luisa::compute::inline coro {
@@ -12,13 +12,13 @@ private:
     luisa::unordered_map<uint /* token */, CoroNode> _nodes;
     uint _entry;
     const Type *_state_type;
-    luisa::map<uint, uint> _designated_state_members;
+    luisa::unordered_map<luisa::string, uint> _designated_state_members;
 
 public:
     // for construction only
     CoroGraph(uint entry, const Type *state_type) noexcept;
     [[nodiscard]] CoroNode *add_node(uint token, CoroNode::Func f) noexcept;
-    void designate_state_member(uint var_id, uint index) noexcept;
+    void designate_state_member(luisa::string name, uint index) noexcept;
 
 public:
     [[nodiscard]] const CoroNode *entry() const noexcept;
@@ -26,7 +26,7 @@ public:
     [[nodiscard]] auto &nodes() const noexcept { return _nodes; }
     [[nodiscard]] auto state_type() const noexcept { return _state_type; }
     [[nodiscard]] auto &designated_state_members() const noexcept { return _designated_state_members; }
-    [[nodiscard]] uint designated_state_member(uint var_id) const noexcept;
+    [[nodiscard]] uint designated_state_member(luisa::string_view name) const noexcept;
 };
 
 }// namespace luisa::compute::inline coro

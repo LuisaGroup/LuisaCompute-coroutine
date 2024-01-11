@@ -32,7 +32,7 @@ pub(crate) struct CoroFrame<'a> {
     pub interface_type: CArc<Type>,
     pub fields: Vec<CoroFrameField>,
     pub designated_fields: Vec<NodeRef>,
-    pub designated_field_ids: Vec<u32>,
+    pub designated_field_names: Vec<String>,
 }
 
 impl<'a> CoroFrame<'a> {
@@ -114,7 +114,7 @@ impl<'a> CoroFrame<'a> {
             interface_type: CArc::null(),
             fields: Vec::new(),
             designated_fields: Vec::new(),
-            designated_field_ids: Vec::new(),
+            designated_field_names: Vec::new(),
         };
         for (&node, &tree_node) in transition_graph.union_states.nodes.iter() {
             if !designated_nodes.contains(&node) && for_aggregates == !node.type_().is_primitive() {
@@ -169,17 +169,17 @@ impl<'a> CoroFrame<'a> {
         self.interface_type = Type::struct_of(alignment as u32, fields);
     }
 
-    fn _layout_designated_fields(&mut self) {
+    fn _layout_designated_fields(&mut self, stable_indices: &HashMap<NodeRef, u32>) {
         let mut designated_nodes: Vec<_> = self
             .graph
             .designated_values
             .iter()
-            .map(|(&var, &node)| (var, node))
+            .map(|(var, &node)| (var, node))
             .collect();
-        designated_nodes.sort_by_key(|(var, node)| (node.type_().alignment(), *var));
+        designated_nodes.sort_by_key(|(_, node)| (node.type_().alignment(), stable_indices[node]));
         for (var, node) in designated_nodes {
             self.designated_fields.push(node);
-            self.designated_field_ids.push(var);
+            self.designated_field_names.push(var.clone());
         }
     }
 
@@ -196,9 +196,9 @@ impl<'a> CoroFrame<'a> {
             interface_type: CArc::null(),
             fields: [agg_desc.fields, prim_desc.fields].concat(),
             designated_fields: Vec::new(),
-            designated_field_ids: Vec::new(),
+            designated_field_names: Vec::new(),
         };
-        desc._layout_designated_fields();
+        desc._layout_designated_fields(stable_indices);
         desc._compute_interface_type();
         desc
     }
@@ -425,7 +425,7 @@ impl<'a> CoroFrame<'a> {
             println!(
                 "Designated Field {} (identifier = {}): {:?}",
                 i,
-                self.designated_field_ids[i],
+                self.designated_field_names[i],
                 node.type_().as_ref()
             );
         }

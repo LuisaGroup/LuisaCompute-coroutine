@@ -1026,11 +1026,11 @@ impl<'a> CoroScopeMaterializer<'a> {
         let designated_filed_offset = self.frame.get_designated_field_offset();
         let designated_fields: Vec<_> = self
             .frame
-            .designated_field_ids
+            .designated_field_names
             .iter()
             .enumerate()
-            .map(|(i, &id)| CoroFrameDesignatedField {
-                var: id,
+            .map(|(i, name)| CoroFrameDesignatedField {
+                name: CBoxedSlice::from(name.as_bytes()),
                 index: i as u32 + designated_filed_offset,
             })
             .collect();

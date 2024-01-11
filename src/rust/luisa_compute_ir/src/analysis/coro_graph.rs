@@ -101,7 +101,7 @@ pub(crate) enum CoroInstruction {
 #[derive(Clone, Debug)]
 pub(crate) struct CoroScope {
     pub instructions: Vec<CoroInstrRef>, // indices into the graph nodes
-    pub designated_values: HashMap<u32, NodeRef>, // map from designated value token to IR node
+    pub designated_values: HashMap<String, NodeRef>, // map from designated value token to IR node
 }
 
 // This struct is a direct translation from the IR to the coroutine graph without
@@ -321,7 +321,7 @@ pub(crate) struct CoroGraph {
     pub entry: CoroScopeRef,    // the index of the entry scope (the root scope)
     pub tokens: BTreeMap<u32, CoroScopeRef>, // map from split mark token to scope index
     pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
-    pub designated_values: HashMap<u32, NodeRef>, // map from designated value token to IR node, collected from all the scopes
+    pub designated_values: HashMap<String, NodeRef>, // map from designated value token to IR node, collected from all the scopes
 }
 
 // Method:
@@ -1026,7 +1026,7 @@ impl CoroGraph {
     fn collect_designated_values_in_simple(
         &self,
         node_ref: NodeRef,
-        values: &mut HashMap<u32, NodeRef>,
+        values: &mut HashMap<String, NodeRef>,
     ) {
         macro_rules! collect_in_block {
             ($block: expr) => {
@@ -1064,8 +1064,8 @@ impl CoroGraph {
                 collect_in_block!(on_triangle_hit);
                 collect_in_block!(on_procedural_hit);
             }
-            Instruction::CoroRegister { value, var, .. } => {
-                values.insert(*var, value.clone());
+            Instruction::CoroRegister { value, name, .. } => {
+                values.insert(name.to_string(), value.clone());
             }
             _ => {}
         }
@@ -1074,7 +1074,7 @@ impl CoroGraph {
     fn collect_designated_values(
         &self,
         instructions: &Vec<CoroInstrRef>,
-        values: &mut HashMap<u32, NodeRef>,
+        values: &mut HashMap<String, NodeRef>,
     ) {
         for instr_ref in instructions.iter() {
             match &self.instructions[instr_ref.0] {
@@ -1310,7 +1310,7 @@ impl CoroGraph {
         // collect the designated values from all the scopes
         for scope in graph.scopes.iter() {
             for (var, value) in scope.designated_values.iter() {
-                graph.designated_values.insert(*var, value.clone());
+                graph.designated_values.insert(var.clone(), value.clone());
             }
         }
         graph

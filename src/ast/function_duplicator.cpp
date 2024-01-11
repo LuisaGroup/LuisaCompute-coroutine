@@ -391,11 +391,12 @@ private:
                 }();
                 auto new_token = fb->suspend_(token_name);
                 LUISA_ASSERT(token == new_token, "Invalid coroutine token.");
+                break;
             }
             case Statement::Tag::COROBIND: {
-                // TODO: fix this...
                 auto s = static_cast<const CoroBindStmt *>(stmt);
-                fb->_create_and_append_statement<CoroBindStmt>(s->token(), s->expression(), s->var_id());
+                fb->bind_promise_(s->token(), s->expression(), luisa::string{s->name()});
+                break;
             }
         }
     }

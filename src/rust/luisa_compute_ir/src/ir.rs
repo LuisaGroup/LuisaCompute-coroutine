@@ -1316,7 +1316,7 @@ pub enum Instruction {
     CoroRegister {
         token: u32,
         value: NodeRef,
-        var: u32,
+        name: CBoxedSlice<u8>,
     },
 }
 
@@ -1484,11 +1484,13 @@ impl Debug for Instruction {
             Instruction::CoroResume { token } => {
                 write!(f, "CoroResume({})", token)
             }
-            Instruction::CoroRegister { token, value, var } => {
+            Instruction::CoroRegister { token, value, name } => {
                 write!(
                     f,
                     "CoroRegister(token:{}, value:{}, var:{})",
-                    token, value.0, var
+                    token,
+                    value.0,
+                    name.to_string()
                 )
             }
         }
@@ -1995,7 +1997,7 @@ impl CallableModuleRef {
 #[repr(C)]
 #[derive(Debug, Serialize, Clone)]
 pub struct CoroFrameDesignatedField {
-    pub var: u32,
+    pub name: CBoxedSlice<u8>,
     pub index: u32,
 }
 
@@ -3041,9 +3043,9 @@ impl IrBuilder {
         self.append(new_node);
         new_node
     }
-    pub fn coro_register(&mut self, token: u32, value: NodeRef, var: u32) -> NodeRef {
+    pub fn coro_register(&mut self, token: u32, value: NodeRef, name: CBoxedSlice<u8>) -> NodeRef {
         let node = Node::new(
-            CArc::new(Instruction::CoroRegister { token, value, var }),
+            CArc::new(Instruction::CoroRegister { token, value, name }),
             Type::void(),
         );
         let node = new_node(&self.pools, node);

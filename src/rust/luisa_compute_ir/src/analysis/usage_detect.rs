@@ -168,7 +168,7 @@ impl UsageDetector {
             crate::ir::Instruction::Comment(_) => {}
 
             crate::ir::Instruction::CoroSplitMark { .. } => {}
-            crate::ir::Instruction::CoroRegister { token, value, var } => {
+            crate::ir::Instruction::CoroRegister { value, .. } => {
                 self.mark(*value, UsageMark::READ);
             }
             crate::ir::Instruction::CoroSuspend { .. }

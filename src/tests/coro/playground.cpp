@@ -21,8 +21,8 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [&](Var<CoroFrame> &, Int &a) noexcept {
         $for (i, 10) {
             device_log("before {}: {}", i, a);
-            $suspend("a", std::make_pair(make_int2(a), "x"));
-            device_log("after {}: {}", i, a);
+            $suspend("a", std::make_pair(make_int2(i, a), "x"));
+            // device_log("after {}: {}", i, a);
             a += 1;
         };
     };
@@ -42,6 +42,7 @@ int main(int argc, char *argv[]) {
                     $case (i) {
                         device_log("scheduler: enter coro {}, a = {}", i, a);
                         coro[i](frame, a);
+                        device_log("promise x: {}", read_promise<int2>(frame, "x"));
                         device_log("scheduler: exit coro {}, a = {}", i, a);
                     };
                 }

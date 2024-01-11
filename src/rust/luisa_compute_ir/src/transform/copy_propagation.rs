@@ -136,14 +136,14 @@ impl CopyPropagationImpl {
                     }
                 }
             }
-            Instruction::CoroRegister { token, value, var } => {
+            Instruction::CoroRegister { token, value, name } => {
                 let value_new = self.use_root.root(value);
 
                 if value_new != *value {
                     node.get_mut().instruction = CArc::new(Instruction::CoroRegister {
                         token: *token,
                         value: value_new,
-                        var: *var,
+                        name: name.clone(),
                     })
                 }
             }

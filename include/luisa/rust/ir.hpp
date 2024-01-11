@@ -295,7 +295,7 @@ struct CallableModuleRef {
 };
 
 struct CoroFrameDesignatedField {
-    uint32_t var;
+    CBoxedSlice<uint8_t> name;
     uint32_t index;
 };
 
@@ -880,7 +880,7 @@ struct Instruction {
     struct CoroRegister_Body {
         uint32_t token;
         NodeRef value;
-        uint32_t var;
+        CBoxedSlice<uint8_t> name;
     };
 
     Tag tag;

@@ -178,11 +178,11 @@ public:
                             uint max_frame_count = 2000000, luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           _max_frame_count{max_frame_count}, _stream{stream}, _debug{debug}, _frame{device.create_soa<FrameType>(max_frame_count)} {
-        if (device.backend_name() != "cuda") {//only cuda can sort
+        /*if (device.backend_name() != "cuda") {//only cuda can sort
             sort_base_gather = false;
             hint_token = {};
             LUISA_INFO("Using wavefront dispatcher without cuda, the sorting will be disabled!");
-        }
+        }*/
         bool use_sort = sort_base_gather | !hint_token.empty();
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;

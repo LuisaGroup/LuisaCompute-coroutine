@@ -340,7 +340,7 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
             return;
         case Type::Tag::BUFFER: {
             if ((static_cast<uint>(usage) & static_cast<uint>(Usage::WRITE)) != 0)
-                str << "RW"sv;
+                str << "globallycoherent RW"sv;
             auto ele = type.element();
             // StructuredBuffer
             if (ele != nullptr) {
@@ -1861,7 +1861,7 @@ void CodegenUtility::PostprocessCodegenProperties(vstd::StringBuilder &finalResu
         finalResult << "];\n"sv;
     }
 }
-uint CodegenUtility::AddPrinter(vstd::string_view name, Type const* structType){
+uint CodegenUtility::AddPrinter(vstd::string_view name, Type const *structType) {
     auto z = opt->printer.size();
     opt->printer.emplace_back(name, structType);
     return z;

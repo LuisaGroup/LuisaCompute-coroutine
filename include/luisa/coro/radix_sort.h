@@ -167,6 +167,8 @@ public:
             Shared<uint> block_bin{DIGIT};
             //Shared<uint> local_rank{ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT};
             ArrayUInt<ONESWEEP_ITEM_COUNT> local_rank;
+            ArrayUInt<ONESWEEP_ITEM_COUNT> local_key;
+
             $for (i, 0u, ceil_div(ONESWEEP_BLOCK_SIZE / WARP_SIZE * DIGIT, ONESWEEP_BLOCK_SIZE)) {
                 $if (i * ONESWEEP_BLOCK_SIZE + thread_x() < ONESWEEP_BLOCK_SIZE / WARP_SIZE * DIGIT) {
                     warp_prefix[i * ONESWEEP_BLOCK_SIZE + thread_x()] = 0u;
@@ -189,25 +191,22 @@ public:
                         key = key_in.read(read_pos);
                     }
                 };
+                local_key[i] = key;
                 key = (key >> low_bit) & ((1 << BIT) - 1);
-                auto prefix = def<uint>(0u);
-                auto total = def<uint>(0u);
+                auto matched = def<uint>(0xffff'ffff);
                 ///general case function
                 if (device.backend_name() == "cuda") {
-                    auto matched = match_any(key);
-                    prefix = popcount(matched & ((1u << lane_id) - 1));
-                    total = popcount(matched);
+                    matched = match_any(key);
                 } else {
-                    for (auto j = 0u; j < WARP_SIZE; ++j) {
-                        auto x = warp_read_lane(key, j);
-                        auto now_pre = warp_prefix_count_bits(key == x);
-                        auto now_tot = warp_active_count_bits(key == x);
-                        $if (j == lane_id) {
-                            prefix = now_pre;
-                            total = now_tot;
-                        };
+
+                    for (auto j = 0u; j < BIT; ++j) {
+                        auto x = ((key >> j) & 1);
+                        auto y = warp_active_bit_or(x << lane_id);
+                        matched = matched & (y ^ (ite(x == 1u, 0u, 0xffff'ffff)));
                     }
                 }
+                auto prefix = popcount(matched & ((1u << lane_id) - 1));
+                auto total = popcount(matched);
 
                 auto warp_pre = warp_prefix[warp_id * DIGIT + key];
                 $if (prefix == 0u) {
@@ -231,10 +230,17 @@ public:
                     auto global_pre = def<uint>(0u);
                     $while (ptr >= 0) {
                         auto read_v = def<uint>(0u);
-                        $while ((read_v == 0u)) {
+                        if (device.backend_name() == "cuda") {
+                            $while ((read_v == 0u)) {
+                                read_v = bin.read(ptr * DIGIT + cur_dig);
+                                thread_fence();//flush cache
+                            };
+                        } else {//dx cache is flushed with globallycoherent
                             read_v = bin.read(ptr * DIGIT + cur_dig);
-                            thread_fence();
-                        };
+                            $if (!warp_active_all(read_v != 0u)) {
+                                $continue;
+                            };
+                        }
                         global_pre += (read_v & BIN_VAL_MASK);
                         $if ((read_v & BIN_GLOBAL_MASK) != 0) {
                             $break;
@@ -242,7 +248,7 @@ public:
                         ptr -= 1;
                     };
                     bin.write(bid * DIGIT + cur_dig, (global_pre + digit_pre) | BIN_GLOBAL_MASK);
-                    block_bin[cur_dig] = global_pre;
+                    block_bin[cur_dig] = global_pre + hist_buffer.read(cur_dig);
                 };
             };
             sync_block();
@@ -251,16 +257,10 @@ public:
                 auto read_pos = block_offset + warp_offset + i * WARP_SIZE + lane_id;
                 $if (read_pos < n) {
                     UInt warp_rank = local_rank[i];
-                    auto key_v = def<uint>(ALL_MASK);
-                    if (is_first) {
-                        key_v = (*get_key)(read_pos);
-                    } else {
-                        key_v = key_in.read(read_pos);
-                    }
+                    auto key_v = local_key[i];
                     auto key = (key_v >> low_bit) & ((1 << BIT) - 1);
                     warp_rank += warp_prefix[warp_id * DIGIT + key];//offset between warp in a block
                     warp_rank += block_bin[key];                    //offset between block in global
-                    warp_rank += hist_buffer.read(key);             //offset between digits
                     key_out.write(warp_rank, key_v);
                     auto val = def<uint>(0u);
                     if (is_first) {

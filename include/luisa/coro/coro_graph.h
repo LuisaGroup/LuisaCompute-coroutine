@@ -25,6 +25,7 @@ public:
     [[nodiscard]] const CoroNode *node(uint token) const noexcept;
     [[nodiscard]] auto &nodes() const noexcept { return _nodes; }
     [[nodiscard]] auto state_type() const noexcept { return _state_type; }
+    [[nodiscard]] auto &designated_state_members() const noexcept { return _designated_state_members; }
     [[nodiscard]] uint designated_state_member(uint var_id) const noexcept;
 };
 

@@ -471,14 +471,27 @@ template<typename U, typename V, typename... Args>
     return rets;
 }
 
-template<typename... Args>
-inline auto suspend(luisa::string &&desc, Args &&...args) noexcept {
+template<typename S, typename... Args>
+    requires std::convertible_to<S, luisa::string_view>
+inline auto suspend(S &&desc, Args &&...args) noexcept {
     detail::comment(luisa::string{"CoroSplitMark("}.append(desc).append(")"));
     auto rets = suspend_get_var_list(std::forward<Args>(args)...);
     for (auto &ret : rets) {
         detail::FunctionBuilder::current()->bind_promise_(ret.first, ret.second);
     }
-    return detail::FunctionBuilder::current()->suspend_(desc);
+    return detail::FunctionBuilder::current()->suspend_(luisa::string{desc});
+}
+
+inline auto suspend() noexcept {
+    using namespace std::string_view_literals;
+    return compute::dsl::suspend(""sv);
+}
+
+template<typename S, typename... Args>
+    requires(!std::convertible_to<S, luisa::string_view>)
+inline auto suspend(S &&first, Args &&...args) noexcept {
+    using namespace std::string_view_literals;
+    return compute::dsl::suspend(""sv, std::forward<S>(first), std::forward<Args>(args)...);
 }
 
 inline void return_() noexcept {

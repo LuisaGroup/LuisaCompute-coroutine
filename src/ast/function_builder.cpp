@@ -118,9 +118,10 @@ void FunctionBuilder::check_is_coroutine() noexcept {
     LUISA_ASSERT(_tag == Tag::COROUTINE,
                  "Coroutine intrinsics are only allowed in coroutines.");
 }
-uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
+uint FunctionBuilder::suspend_(luisa::string desc) noexcept {
     check_is_coroutine();
     uint token = _coro_tokens.size() + 1;
+    if (desc.empty()) { desc = luisa::format("__internal_suspend_{}", token); }
     auto [_, success] = _coro_tokens.insert(std::make_pair(desc, token));
     LUISA_ASSERT(success, "Duplicated suspend token '{}' description.", desc);
     _create_and_append_statement<SuspendStmt>(token);

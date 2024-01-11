@@ -21,15 +21,17 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [&](Var<CoroFrame> &, Int &a) noexcept {
         $for (i, 10) {
             device_log("before {}: {}", i, a);
-            $suspend("a", std::make_pair(a, "x"));
+            auto token = $suspend(std::make_pair(a, "x"));
             // device_log("after {}: {}", i, a);
             a += 1;
+            $suspend();
         };
     };
 
     Kernel1D mega_kernel = [&] {
         device_log("scheduler: init");
         auto frame = make_coroframe<CoroFrame>(dispatch_id());
+        device_log("coro_id = {}", frame->coro_id());
         device_log("scheduler: enter entry");
         auto a = def(0);
         coro(frame, a);

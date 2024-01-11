@@ -448,12 +448,11 @@ impl Mem2RegImpl {
                     self.process_block(*on_procedural_hit);
                     self.exit_block(vec![*on_triangle_hit, *on_procedural_hit], block);
                 }
-                Instruction::CoroRegister { token, value, name } => {
+                Instruction::CoroRegister { value, name } => {
                     let value_new = self.record_use(block, *value, node);
 
                     if value_new != *value {
                         node.get_mut().instruction = CArc::new(Instruction::CoroRegister {
-                            token: *token,
                             value: value_new,
                             name: name.clone(),
                         })

@@ -476,8 +476,7 @@ inline auto suspend(luisa::string &&desc, Args &&...args) noexcept {
     detail::comment(luisa::string{"CoroSplitMark("}.append(desc).append(")"));
     auto rets = suspend_get_var_list(std::forward<Args>(args)...);
     for (auto &ret : rets) {
-        detail::FunctionBuilder::current()->bind_promise_(
-            0 /* not used */, ret.first, ret.second);
+        detail::FunctionBuilder::current()->bind_promise_(ret.first, ret.second);
     }
     return detail::FunctionBuilder::current()->suspend_(desc);
 }

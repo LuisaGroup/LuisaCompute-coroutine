@@ -395,7 +395,7 @@ private:
             }
             case Statement::Tag::COROBIND: {
                 auto s = static_cast<const CoroBindStmt *>(stmt);
-                fb->bind_promise_(s->token(), s->expression(), luisa::string{s->name()});
+                fb->bind_promise_(s->expression(), luisa::string{s->name()});
                 break;
             }
         }

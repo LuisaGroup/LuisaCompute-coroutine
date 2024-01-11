@@ -2128,11 +2128,10 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 builder.coro_split_mark(token)
             }
             "COROBIND" => {
-                let token = j["coro_token"].as_u32().unwrap();
                 let expr = self._convert_expression(&j["expression"], false);
                 let name = j["name"].as_str().unwrap();
                 let (builder, ..) = self.unwrap_ctx();
-                builder.coro_register(token, expr, CBoxedSlice::from(name.as_bytes()))
+                builder.coro_register(expr, CBoxedSlice::from(name.as_bytes()))
             }
             "PRINT" => {
                 let fmt = j["format"].as_str().unwrap().to_string();

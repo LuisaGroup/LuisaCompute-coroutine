@@ -518,7 +518,6 @@ public:
 class CoroBindStmt : public Statement {
 
 private:
-    const uint _token;
     const Expression *_expr;
     luisa::string _name;
 
@@ -526,10 +525,9 @@ private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
 
 public:
-    explicit CoroBindStmt(const uint token, const Expression *expr, luisa::string name) noexcept
-        : Statement{Tag::COROBIND}, _token{token}, _expr{expr}, _name{std::move(name)} {
+    explicit CoroBindStmt(const Expression *expr, luisa::string name) noexcept
+        : Statement{Tag::COROBIND}, _expr{expr}, _name{std::move(name)} {
     }
-    [[nodiscard]] auto token() const noexcept { return _token; }
     [[nodiscard]] auto name() const noexcept { return luisa::string_view{_name}; }
     [[nodiscard]] auto expression() const noexcept { return _expr; }
     LUISA_STATEMENT_COMMON()

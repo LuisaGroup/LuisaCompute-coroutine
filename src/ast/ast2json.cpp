@@ -1017,7 +1017,6 @@ private:
         j["coro_token"] = stmt->token();
     }
     void _convert_corobind_stmt(JSON &j, const CoroBindStmt *stmt) noexcept {
-        j["coro_token"] = stmt->token();
         j["name"] = stmt->name();
         j["expression"] = _convert_expr(stmt->expression());
     }

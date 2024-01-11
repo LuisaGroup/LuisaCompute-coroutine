@@ -878,7 +878,6 @@ struct Instruction {
     };
 
     struct CoroRegister_Body {
-        uint32_t token;
         NodeRef value;
         CBoxedSlice<uint8_t> name;
     };

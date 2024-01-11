@@ -439,10 +439,9 @@ impl DisplayIR {
             Instruction::CoroSuspend { token } => {
                 self.output += format!("CoroSuspend({})", token).as_str();
             }
-            Instruction::CoroRegister { token, value, name } => {
+            Instruction::CoroRegister { value, name } => {
                 let temp = format!(
-                    "CoroRegister(at {}, ${}, to {})\n",
-                    token,
+                    "CoroRegister(${} to {})\n",
                     self.get(value),
                     name.to_string()
                 );

@@ -409,7 +409,7 @@ public:
     /// initialize coroframe
     void initialize_coroframe(const Expression *expr, const Expression *coro_id) noexcept;
     /// bind local to promise
-    void bind_promise_(uint coro_token, const Expression *var, const luisa::string &name) noexcept;
+    void bind_promise_(const Expression *var, const luisa::string &name) noexcept;
     /// read local from promise
     const MemberExpr *read_promise_(const Expression *expr, const luisa::string &name) noexcept;
     /// Return coroutine id in coroframe

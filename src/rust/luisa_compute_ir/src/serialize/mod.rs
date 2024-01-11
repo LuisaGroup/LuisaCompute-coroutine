@@ -163,7 +163,6 @@ pub enum SerializedInstruction {
         token: u32,
     },
     CoroRegister {
-        token: u32,
         value: SerializedNodeRef,
         name: Vec<u8>,
     },

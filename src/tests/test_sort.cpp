@@ -265,13 +265,21 @@ int main(int argc, char *argv[]) {
     Clock clock;
     stream << synchronize();
     clock.tic();
+    LUISA_INFO("Sort start!");
     for (int i = 0; i < 1; ++i) {
         sort_instance.sort(stream, order_in, rank, key_out, order_out, n);
     }
-    auto gpu_time = clock.toc();
+    auto time = clock.toc();
+    LUISA_INFO("Sync! time:{}", time);
+    clock.tic();
+    //stream << synchronize();
+    time = clock.toc();
+    LUISA_INFO("end! time:{}", time);
     stream << key_out.copy_to(x_rank.data());
     stream << order_out.copy_to(x_order.data());
     stream << synchronize();
+    LUISA_INFO("copied!");
+
     int pre = 0;
     /*
     for(int i=0;i<n;++i){
@@ -283,6 +291,9 @@ printf("%u ",x_vec[i]);
     }
     printf("\n");
     */
+    for (int i = 0; i < 10; ++i) {
+        LUISA_INFO("key[{}]: std:{},our:{} | order[{}]:std:{},our:{}", i, x_kv[i].first, x_rank[i], i, x_kv[i].second, x_order[i]);
+    }
     for (int i = 0; i < n; ++i) {
         LUISA_ASSERT(x_rank[i] == x_kv[i].first, "not same as eastl::sort! at {},std:{},our:{}", i, x_kv[i].first, x_rank[i]);
         LUISA_ASSERT(x_order[i] == x_kv[i].second, "not same as eastl::sort! at {},std:{},our:{}", i, x_kv[i].second, x_order[i]);

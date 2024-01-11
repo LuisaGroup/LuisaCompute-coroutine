@@ -144,8 +144,12 @@ public:
                 };
             };
         };
-        ExternalCallable<void()> thread_fence{"([] { __threadfence(); })"};
-        ExternalCallable<uint(uint)> match_any{"([](unsigned int x) { return __match_any_sync(0xffff'ffff,x); })"};
+        ExternalCallable<void()> thread_fence{device.backend_name() == "cuda" ?
+                                                  "([] { __threadfence(); })" :
+                                                  "AllMemoryBarrier"};
+        ExternalCallable<uint(uint)> match_any{device.backend_name() == "cuda" ?
+                                                   "([](unsigned int x) { return __match_any_sync(0xffff'ffff,x); })" :
+                                                   "([](unsigned int x) { return 0u; })"};
         uint ONESWEEP_TOT_BLOCK = ceil_div(MAXN, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT);
         bool is_first = true;
         auto onesweep_base = [&](BufferUInt key_in, BufferUInt key_out,
@@ -189,18 +193,22 @@ public:
                 auto prefix = def<uint>(0u);
                 auto total = def<uint>(0u);
                 ///general case function
-                /*for(auto j=0u;j<WARP_SIZE;++j){
-                auto x=warp_read_lane(key,j);
-                auto now_pre=warp_prefix_count_bits(key==x);
-                auto now_tot= warp_active_count_bits(key==x);
-                $if(j==lane_id){
-                    prefix=now_pre;
-                    total=now_tot;
-                };
-            }*/
-                auto matched = match_any(key);
-                prefix = popcount(matched & ((1u << lane_id) - 1));
-                total = popcount(matched);
+                if (device.backend_name() == "cuda") {
+                    auto matched = match_any(key);
+                    prefix = popcount(matched & ((1u << lane_id) - 1));
+                    total = popcount(matched);
+                } else {
+                    for (auto j = 0u; j < WARP_SIZE; ++j) {
+                        auto x = warp_read_lane(key, j);
+                        auto now_pre = warp_prefix_count_bits(key == x);
+                        auto now_tot = warp_active_count_bits(key == x);
+                        $if (j == lane_id) {
+                            prefix = now_pre;
+                            total = now_tot;
+                        };
+                    }
+                }
+
                 auto warp_pre = warp_prefix[warp_id * DIGIT + key];
                 $if (prefix == 0u) {
                     warp_prefix[warp_id * DIGIT + key] = warp_pre + total;
@@ -303,11 +311,11 @@ public:
             stream << clear_shader(_temp.launch_count).dispatch(1u);
             stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
             if (i == 0) {
-                stream << synchronize();
+                //stream << synchronize();
                 stream << onesweep_first_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                                 _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)
                               .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
-                stream << synchronize();
+                //stream << synchronize();
             } else {
                 stream << onesweep_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                           _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n)

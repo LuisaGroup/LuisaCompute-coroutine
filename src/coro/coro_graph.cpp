@@ -21,19 +21,19 @@ CoroNode *CoroGraph::add_node(uint token, CoroNode::Func f) noexcept {
     return &(iter->second);
 }
 
-uint CoroGraph::designated_state_member(luisa::string_view name) const noexcept {
-    auto iter = _designated_state_members.find(name);
+uint CoroGraph::designated_state_member(uint var_id) const noexcept {
+    auto iter = _designated_state_members.find(var_id);
     LUISA_ASSERT(iter != _designated_state_members.cend(),
-                 "State member '{}' not designated.", name);
+                 "State member '{}' not designated.", var_id);
     return iter->second;
 }
 
 CoroGraph::CoroGraph(uint entry, const Type *state_type) noexcept
     : _entry{entry}, _state_type{state_type} {}
 
-void CoroGraph::designate_state_member(luisa::string_view name, uint index) noexcept {
-    auto [iter, success] = _designated_state_members.emplace(name, index);
-    LUISA_ASSERT(success, "State member '{}' already designated.", name);
+void CoroGraph::designate_state_member(uint var_id, uint index) noexcept {
+    auto [iter, success] = _designated_state_members.emplace(var_id, index);
+    LUISA_ASSERT(success, "State member '{}' already designated.", var_id);
 }
 
 }// namespace luisa::compute::inline coro

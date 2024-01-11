@@ -165,6 +165,10 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
             auto field = m->get()->coro_frame_output_fields.ptr[mem];
             node->output_state_members.push_back(field);
         }
+        for (auto field : luisa::span{m->get()->coro_frame_designated_fields.ptr,
+                                      m->get()->coro_frame_designated_fields.len}) {
+            graph.designate_state_member(field.var, field.index);
+        }
         LUISA_VERBOSE_WITH_LOCATION("Converted IR to AST for "
                                     "kernel with hash {:016x}. "
                                     "Coroutine transform is done.",

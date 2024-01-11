@@ -2274,6 +2274,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             subroutines: CBoxedSlice::new(Vec::new()),
             coro_frame_input_fields: CBoxedSlice::new(Vec::new()),
             coro_frame_output_fields: CBoxedSlice::new(Vec::new()),
+            coro_frame_designated_fields: CBoxedSlice::new(Vec::new()),
             pools: self.pools.clone(),
         }
     }

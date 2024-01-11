@@ -21,7 +21,7 @@ int main(int argc, char *argv[]) {
     Coroutine coro = [&](Var<CoroFrame> &, Int &a) noexcept {
         $for (i, 10) {
             device_log("before {}: {}", i, a);
-            $suspend("a");
+            $suspend("a", std::make_pair(make_int2(a), "x"));
             device_log("after {}: {}", i, a);
             a += 1;
         };

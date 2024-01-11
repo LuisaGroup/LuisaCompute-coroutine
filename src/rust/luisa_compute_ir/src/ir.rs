@@ -1993,6 +1993,13 @@ impl CallableModuleRef {
 }
 
 #[repr(C)]
+#[derive(Debug, Serialize, Clone)]
+pub struct CoroFrameDesignatedField {
+    pub var: u32,
+    pub index: u32,
+}
+
+#[repr(C)]
 #[derive(Debug, Serialize)]
 pub struct CallableModule {
     pub module: Module,
@@ -2003,6 +2010,7 @@ pub struct CallableModule {
     pub subroutine_ids: CBoxedSlice<u32>,
     pub coro_frame_input_fields: CBoxedSlice<u32>,
     pub coro_frame_output_fields: CBoxedSlice<u32>,
+    pub coro_frame_designated_fields: CBoxedSlice<CoroFrameDesignatedField>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
@@ -2256,6 +2264,7 @@ impl ModuleDuplicator {
                 subroutine_ids: callable.subroutine_ids.clone(),
                 coro_frame_input_fields: callable.coro_frame_input_fields.clone(),
                 coro_frame_output_fields: callable.coro_frame_output_fields.clone(),
+                coro_frame_designated_fields: callable.coro_frame_designated_fields.clone(),
                 cpu_custom_ops: callable.cpu_custom_ops.clone(),
                 pools: callable.pools.clone(),
             }

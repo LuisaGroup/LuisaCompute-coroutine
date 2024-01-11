@@ -7,6 +7,7 @@
 
 use crate::ir::{collect_nodes, BasicBlock, Func, Instruction, Module, NodeRef};
 use crate::safe;
+use log::debug;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -100,6 +101,7 @@ pub(crate) enum CoroInstruction {
 #[derive(Clone, Debug)]
 pub(crate) struct CoroScope {
     pub instructions: Vec<CoroInstrRef>, // indices into the graph nodes
+    pub designated_values: HashMap<u32, NodeRef>, // map from designated value token to IR node
 }
 
 // This struct is a direct translation from the IR to the coroutine graph without
@@ -319,6 +321,7 @@ pub(crate) struct CoroGraph {
     pub entry: CoroScopeRef,    // the index of the entry scope (the root scope)
     pub tokens: BTreeMap<u32, CoroScopeRef>, // map from split mark token to scope index
     pub instructions: Vec<CoroInstruction>, // all the instructions in the graph
+    pub designated_values: HashMap<u32, NodeRef>, // map from designated value token to IR node, collected from all the scopes
 }
 
 // Method:
@@ -1020,6 +1023,86 @@ impl CoroGraph {
         }
     }
 
+    fn collect_designated_values_in_simple(
+        &self,
+        node_ref: NodeRef,
+        values: &mut HashMap<u32, NodeRef>,
+    ) {
+        macro_rules! collect_in_block {
+            ($block: expr) => {
+                for node in $block.iter() {
+                    self.collect_designated_values_in_simple(node, values);
+                }
+            };
+        }
+        match node_ref.get().instruction.as_ref() {
+            Instruction::Loop { body, .. } => {
+                collect_in_block!(body);
+            }
+            Instruction::If {
+                true_branch,
+                false_branch,
+                ..
+            } => {
+                collect_in_block!(true_branch);
+                collect_in_block!(false_branch);
+            }
+            Instruction::Switch { cases, default, .. } => {
+                for case in cases.iter() {
+                    collect_in_block!(&case.block);
+                }
+                collect_in_block!(default);
+            }
+            Instruction::AdScope { body, .. } => {
+                collect_in_block!(body);
+            }
+            Instruction::RayQuery {
+                on_triangle_hit,
+                on_procedural_hit,
+                ..
+            } => {
+                collect_in_block!(on_triangle_hit);
+                collect_in_block!(on_procedural_hit);
+            }
+            Instruction::CoroRegister { value, var, .. } => {
+                values.insert(*var, value.clone());
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_designated_values(
+        &self,
+        instructions: &Vec<CoroInstrRef>,
+        values: &mut HashMap<u32, NodeRef>,
+    ) {
+        for instr_ref in instructions.iter() {
+            match &self.instructions[instr_ref.0] {
+                CoroInstruction::Simple(node) => {
+                    self.collect_designated_values_in_simple(*node, values);
+                }
+                CoroInstruction::If {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    self.collect_designated_values(&true_branch, values);
+                    self.collect_designated_values(&false_branch, values);
+                }
+                CoroInstruction::Switch { cases, default, .. } => {
+                    for case in cases.iter() {
+                        self.collect_designated_values(&case.body, values);
+                    }
+                    self.collect_designated_values(&default, values);
+                }
+                CoroInstruction::Loop { body, .. } => {
+                    self.collect_designated_values(&body, values);
+                }
+                _ => { /* do nothing */ }
+            }
+        }
+    }
+
     fn construct_subscope(
         graph: &mut CoroGraph,
         preliminary: &CoroPreliminaryGraph,
@@ -1028,6 +1111,7 @@ impl CoroGraph {
     ) -> CoroScope {
         let mut subscope = CoroScope {
             instructions: Vec::new(),
+            designated_values: HashMap::new(),
         };
         let mut stack = ancestors.clone();
         stack.push(current);
@@ -1061,6 +1145,13 @@ impl CoroGraph {
         }
         // minor simplifications
         Self::remove_unreachable_from_block(graph, &mut subscope.instructions);
+        // collect the designated values
+        Self::collect_designated_values(
+            graph,
+            &subscope.instructions,
+            &mut subscope.designated_values,
+        );
+        // return
         subscope
     }
 
@@ -1201,6 +1292,7 @@ impl CoroGraph {
             tokens: BTreeMap::new(),
             // clone so that the indices are not changed when we add new instructions
             instructions: preliminary_graph.instructions.clone(),
+            designated_values: HashMap::new(),
         };
         let entry = preliminary_graph.instr(preliminary_graph.entry_scope);
         if let CoroInstruction::EntryScope { body: entry_body } = entry {
@@ -1214,6 +1306,12 @@ impl CoroGraph {
             );
         } else {
             panic!("Unexpected instruction.");
+        }
+        // collect the designated values from all the scopes
+        for scope in graph.scopes.iter() {
+            for (var, value) in scope.designated_values.iter() {
+                graph.designated_values.insert(*var, value.clone());
+            }
         }
         graph
     }

@@ -458,14 +458,18 @@ private:
     Shader1D<Buffer<uint>, uint, Args...> _pt_shader;
     Shader1D<Buffer<uint>> _clear_shader;
     Buffer<uint> _global;
+    Buffer<FrameType> _global_frame;
+    Shader1D<Buffer<FrameType>, uint> _initialize_shader;
     uint _max_sub_coro;
     uint _max_thread_count;
     uint _block_size;
+    uint _global_size;
     bool _dispatched;
     bool _done;
     void _await_step(Stream &stream) noexcept;
     void _await_all(Stream &stream) noexcept;
     bool _debug;
+    bool use_global = true;
     Stream &_stream;
 public:
     bool all_dispatched() const noexcept;
@@ -473,20 +477,27 @@ public:
     PersistentCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream &stream,
                              uint max_thread_count = 1024 * 128, uint block_size = 128, uint fetch_size = 128, bool debug = false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
-          _max_thread_count{max_thread_count}, _block_size{block_size}, _debug{debug}, _stream{stream} {
+          _max_thread_count{(max_thread_count+block_size-1)/block_size*block_size}, _block_size{block_size}, _debug{debug}, _stream{stream} {
         _global = device.create_buffer<uint>(1);
+        auto q_fac = 1u;
         uint max_sub_coro = coroutine->suspend_count() + 1;
+        auto g_fac=(uint)std::max((int)(max_sub_coro-q_fac-1),0);
+        auto global_queue_size= block_size * g_fac;
+        if(use_global) {
+            _global_frame = device.create_buffer<FrameType>(_max_thread_count*g_fac);
+            _global_size = _max_thread_count*g_fac;
+        }
         _max_sub_coro = max_sub_coro;
         _dispatched = false;
         _done = false;
         Kernel1D main_kernel = [&](BufferUInt global, UInt dispatch_size, Var<Args>... args) {
             set_block_size(block_size, 1, 1);
-            auto q_fac = 1u;
             auto shared_queue_size = block_size * q_fac;
             Shared<FrameType> frames{shared_queue_size};
             Shared<uint> path_id{shared_queue_size};
             Shared<uint> work_counter{max_sub_coro};
             Shared<uint> work_offset{2u};
+            //Shared<uint> all_token{use_global?(shared_queue_size+global_queue_size):shared_queue_size};
             Shared<uint> workload{2};
             Shared<uint> work_stat{2};//0 max_count,1 max_id
             //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
@@ -496,7 +507,7 @@ public:
             };
             $if (thread_x() < max_sub_coro) {
                 $if (thread_x() == 0) {
-                    work_counter[thread_x()] = shared_queue_size;
+                    work_counter[thread_x()] = use_global?(shared_queue_size+global_queue_size):shared_queue_size;
                 }
                 $else {
                     work_counter[thread_x()] = 0u;
@@ -569,19 +580,68 @@ public:
                 work_offset[0] = 0;
                 work_offset[1] = 0;
                 sync_block();
-                $for (index, 0u, q_fac) {//collect indices
-                    auto frame = frames[index * block_size + thread_x()];
-                    $if ((read_promise<uint>(frame, "coro_token") & token_mask) == work_stat[1]) {
-                        auto id = work_offset.atomic(0).fetch_add(1u);
-                        path_id[id] = index * block_size + thread_x();
+                if(!use_global) {
+                    $for (index, 0u, q_fac) {//collect indices
+                        auto frame = frames[index * block_size + thread_x()];
+                        $if ((read_promise<uint>(frame, "coro_token") & token_mask) == work_stat[1]) {
+                            auto id = work_offset.atomic(0).fetch_add(1u);
+                            path_id[id] = index * block_size + thread_x();
+                        };
                     };
-                };
+                }else{
+                    $for(index, 0u, q_fac) {//collect switch out indices
+                        auto state = frames[index * block_size + thread_x()];
+                        $if((read_promise<uint>(state, "coro_token") & token_mask) != work_stat[1]) {
+                            auto id = work_offset.atomic(0).fetch_add(1u);
+                            path_id[id] = index * block_size + thread_x();
+                        };
+                    };
+                    sync_block();
+                    $if(shared_queue_size - work_offset[0] < block_size) {//no enough work
+                        $for(index, 0u, g_fac) {                           //swap frames
+                            auto global_id = block_x() * global_queue_size + index * block_size + thread_x();
+                            auto g_state = _global_frame->read(global_id);
+                            auto coro_token=(read_promise<uint>(g_state, "coro_token") & token_mask);
+                            $if(coro_token == work_stat[1]) {
+                                auto id = work_offset.atomic(1).fetch_add(1u);
+                                $if(id < work_offset[0]) {
+                                    auto dst = path_id[id];
+                                    $if(coro_token != 0u) {
+                                        $if((read_promise<uint>(frames[dst], "coro_token") & token_mask) != 0u) {
+                                            auto temp=frames[dst];
+                                            frames[dst]=g_state;
+                                            _global_frame->write(global_id,temp);
+                                        }
+                                        $else {
+                                            auto temp=frames[dst];
+                                            frames[dst]=g_state;
+                                            _global_frame->write(global_id,temp);
+                                        };
+                                    }
+                                    $else {
+                                        $if((read_promise<uint>(frames[dst], "coro_token") & token_mask) != 0u) {
+                                            auto temp=frames[dst];
+                                            frames[dst]=g_state;
+                                            _global_frame->write(global_id,temp);
+                                        };
+                                    };
+                                };
+                            };
+                        };
+                    };
+                }
                 auto gen_st = workload[0];
                 sync_block();
                 auto pid = def(0u);
-                pid = path_id[thread_x()];
+                if (use_global) {
+                    pid = thread_x();
+                } else {
+                    pid = path_id[thread_x()];
+                }
                 auto launch_condition = def(true);
-                launch_condition = (thread_x() < work_offset[0]);
+                if (!use_global) {
+                    launch_condition = (thread_x() < work_offset[0]);
+                }
                 $if (launch_condition) {
                     $switch (read_promise<uint>(frames[pid], "coro_token") & token_mask) {
                         $case (0u) {
@@ -616,7 +676,16 @@ public:
         Kernel1D clear = [&](BufferUInt global) {
             global->write(dispatch_x(), 0u);
         };
+        Kernel1D initialize_frame = [&](Var<Buffer<FrameType>> frame_buffer, UInt n) {
+            auto x = dispatch_x();
+            $if (x < n) {
+                auto frame = def<FrameType>();
+                initialize_coroframe(frame, def<uint3>(0, 0, 0));
+                frame_buffer.write(x,frame);
+            };
+        };
         _clear_shader = device.compile(clear);
+        _initialize_shader = device.compile(initialize_frame);
         stream << _clear_shader(_global).dispatch(1u);
     }
     void operator()(prototype_to_coro_dispatcher_t<Args>... args, uint dispatch_size) noexcept override {
@@ -624,6 +693,8 @@ public:
         _dispatched = false;
         _done = false;
         _stream << _clear_shader(_global).dispatch(1u);
+        if(use_global)
+            _stream << _initialize_shader(_global_frame, _global_size).dispatch(_global_size);
     }
 };
 

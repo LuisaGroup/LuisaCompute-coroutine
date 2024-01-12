@@ -93,6 +93,7 @@ public:
         while ((1u << BIT) < DIGIT) {
             BIT += 1;
         }
+        LUISA_ASSERT(mode==1||((1<<BIT)==DIGIT),"radix sort should have digit as power of 2");
         if (get_key_set == nullptr) {
             get_key_set = get_key;
         }
@@ -261,7 +262,9 @@ public:
                     auto key = (key_v >> low_bit) & ((1 << BIT) - 1);
                     warp_rank += warp_prefix[warp_id * DIGIT + key];//offset between warp in a block
                     warp_rank += block_bin[key];                    //offset between block in global
-                    key_out.write(warp_rank, key_v);
+                    if(mode!=1) {
+                        key_out.write(warp_rank, key_v);
+                    }
                     auto val = def<uint>(0u);
                     if (is_first) {
                         val = (*get_val)(read_pos);

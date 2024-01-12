@@ -140,6 +140,9 @@ impl<'a> CoroUseDefAnalysis<'a> {
         }
         // otherwise, check if the value is dominated by defs in the current scope
         let (root, access_chain) = AccessTree::access_chain_from_gep_chain(node_ref);
+        if root.is_reference_argument() {
+            return;
+        }
         let access_chain =
             AccessTree::partially_evaluate_access_chain(&access_chain, &mut helpers.const_eval);
         if !kills.contains(root, access_chain.as_slice()) {
@@ -160,6 +163,9 @@ impl<'a> CoroUseDefAnalysis<'a> {
         helpers: &mut CoroDefUseHelperAnalyses,
     ) {
         let (root, access_chain) = AccessTree::access_chain_from_gep_chain(node_ref);
+        if root.is_reference_argument() {
+            return;
+        }
         let access_chain =
             AccessTree::partially_evaluate_access_chain(&access_chain, &mut helpers.const_eval);
         result
@@ -569,8 +575,9 @@ impl<'a> CoroUseDefAnalysis<'a> {
                     self.mark_use(*arg, kills, result, helpers);
                 }
             }
-            Instruction::CoroRegister { value, .. } => {
-                self.mark_use(*value, kills, result, helpers);
+            Instruction::CoroRegister { .. } => {
+                // processed as a special case in the coroutine graph
+                // self.mark_use(*value, kills, result, helpers);
             }
             _ => {}
         }

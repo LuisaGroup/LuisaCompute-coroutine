@@ -1,8 +1,8 @@
 pub mod convert;
 use crate::ir::{Binding, KernelModule, Primitive};
 
-use serde::{Deserialize, Serialize};
 use half::f16;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SerializedKernelModule {
@@ -143,7 +143,7 @@ pub enum SerializedInstruction {
     },
     AdScope {
         body: SerializedBlockRef,
-        forward:bool,
+        forward: bool,
     },
     AdDetach(SerializedBlockRef),
     RayQuery {
@@ -153,7 +153,7 @@ pub enum SerializedInstruction {
     },
     Comment(Vec<u8>),
     Assert(SerializedNodeRef, Vec<u8>),
-    CoroSplitMark{
+    CoroSplitMark {
         token: u32,
     },
     CoroSuspend {
@@ -163,15 +163,13 @@ pub enum SerializedInstruction {
         token: u32,
     },
     CoroRegister {
-        token: u32,
         value: SerializedNodeRef,
-        var: u32,
+        name: Vec<u8>,
     },
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum SerializedFunc {
-
     ZeroInitializer,
 
     Assume,

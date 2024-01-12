@@ -70,6 +70,9 @@ private:
     luisa::unordered_set<const TypeImpl *, TypeHash> _type_set;
     mutable std::recursive_mutex _mutex;
 
+public:
+    [[nodiscard]] auto &mutex() const noexcept { return _mutex; }
+
 private:
     [[nodiscard]] const TypeImpl *_decode(luisa::string_view desc) noexcept;
     [[nodiscard]] static auto _compute_hash(luisa::string_view desc) noexcept {
@@ -160,6 +163,7 @@ const Type *TypeRegistry::custom_type(luisa::string_view name) noexcept {
     t->description = name;
     return _register(t);
 }
+
 const Type *TypeRegistry::coroframe_type(luisa::string_view name) noexcept {
     // validate name
     LUISA_ASSERT(!name.empty() &&
@@ -201,7 +205,9 @@ const Type *TypeRegistry::coroframe_type(luisa::string_view name) noexcept {
     t->description = name;
     return _register(t);
 }
+
 void _update(Type *dst, const Type *src) {
+    std::scoped_lock lock{TypeRegistry::instance().mutex()};
     auto dst_inst = static_cast<TypeImpl *>(dst);
     auto src_inst = static_cast<const TypeImpl *>(src);
     dst_inst->alignment = src_inst->alignment;
@@ -212,12 +218,31 @@ void _update(Type *dst, const Type *src) {
     dst_inst->members.push_back(src);
     //dst_inst->description = src_inst->description;
 }
+
 size_t _add_member(Type *type, const luisa::string &name) {
+    std::scoped_lock lock{TypeRegistry::instance().mutex()};
     auto inst = static_cast<TypeImpl *>(type);
     size_t id = inst->member_names.size();
     auto ret = inst->member_names.insert(std::make_pair(name, id));
     return ret.second ? id : -1;
 }
+
+void _set_member_name(Type *type, size_t index, luisa::string name) {
+    std::scoped_lock lock{TypeRegistry::instance().mutex()};
+    auto inst = static_cast<TypeImpl *>(type);
+    auto old_iter = inst->member_names.find(name);
+    if (old_iter != inst->member_names.end() &&
+        old_iter->second != index) [[unlikely]] {
+        LUISA_ERROR_WITH_LOCATION(
+            "Duplicate member name at index {}: {}.",
+            index, name);
+    }
+    LUISA_ASSERT(index < inst->members.size() || index < inst->corotype()->members().size(),
+                 "Invalid member index: {} (total = {}).",
+                 index, std::max(inst->members.size(), inst->corotype()->members().size()));
+    inst->member_names.insert_or_assign(std::move(name), index);
+}
+
 size_t TypeRegistry::type_count() const noexcept {
     std::lock_guard lock{_mutex};
     return _types.size();
@@ -678,18 +703,28 @@ const Type *Type::structure(std::initializer_list<const Type *> members) noexcep
 const Type *Type::custom(luisa::string_view name) noexcept {
     return detail::TypeRegistry::instance().custom_type(name);
 }
+
 const Type *Type::coroframe(luisa::string_view name) noexcept {
     return detail::TypeRegistry::instance().coroframe_type(name);
 }
+
 void Type::update_from(const Type *type) {
     detail::_update(this, type);
 }
+
 size_t Type::add_member(const luisa::string &name) noexcept {
-    LUISA_ASSERT(name != "coro_id" && name != "coro_token", "{} is a reserved name for coroframe type.", name);
+    LUISA_ASSERT(name != "coro_id" && name != "coro_token",
+                 "{} is a reserved name for coroframe type.", name);
     return detail::_add_member(this, name);
 }
 
-size_t Type::member(const luisa::string &name) const noexcept {
+void Type::set_member_name(size_t index, luisa::string name) noexcept {
+    LUISA_ASSERT(name != "coro_id" && name != "coro_token",
+                 "{} is a reserved name for coroframe type.", name);
+    detail::_set_member_name(this, index, std::move(name));
+}
+
+size_t Type::member(luisa::string_view name) const noexcept {
     if (name == "coro_id") return 0;
     if (name == "coro_token") return 1u;
     auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;

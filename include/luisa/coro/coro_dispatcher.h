@@ -68,7 +68,7 @@ protected:
 protected:
 public:
     CoroDispatcherBase(Coroutine<FuncType> *coro_ptr, Device &device) noexcept
-        : _coro{std::move(coro_ptr)}, _device{device} {
+        : _coro{std::move(coro_ptr)}, _device{device}, _dispatch_size{} {
     }
     [[nodiscard]] virtual bool all_dispatched() const noexcept = 0;
     [[nodiscard]] virtual bool all_done() const noexcept = 0;

@@ -18,9 +18,9 @@ use crate::analysis::coro_use_def::CoroUseDefAnalysis;
 use crate::analysis::replayable_values::ReplayableValueAnalysis;
 use crate::analysis::utility::{AccessChainIndex, AccessTree};
 use crate::ir::{
-    collect_nodes, new_node, BasicBlock, CallableModule, CallableModuleRef, Const, CurveBasisSet,
-    Func, Instruction, IrBuilder, Module, ModuleFlags, ModuleKind, Node, NodeRef, Primitive,
-    SwitchCase, Type,
+    collect_nodes, new_node, BasicBlock, CallableModule, CallableModuleRef, Const,
+    CoroFrameDesignatedField, CurveBasisSet, Func, Instruction, IrBuilder, Module, ModuleFlags,
+    ModuleKind, Node, NodeRef, Primitive, SwitchCase, Type,
 };
 use crate::transform::canonicalize_control_flow::CanonicalizeControlFlow;
 use crate::transform::defer_load::DeferLoad;
@@ -365,7 +365,7 @@ impl<'a> CoroScopeMaterializer<'a> {
             node
         } else {
             let node = self.ref_or_local(old_node, ctx, state);
-            if node.is_local() || node.is_gep() {
+            if node.is_local() || node.is_gep() || node.is_reference_argument() {
                 state.builder.load(node)
             } else {
                 node
@@ -381,7 +381,7 @@ impl<'a> CoroScopeMaterializer<'a> {
         state: &mut CoroScopeMaterializerState,
     ) {
         let var = self.ref_or_local(old_node, ctx, state);
-        assert!(var.is_gep() || var.is_local());
+        assert!(var.is_gep() || var.is_local() || var.is_reference_argument());
         state.builder.update(var, new_value);
     }
 
@@ -833,9 +833,8 @@ impl<'a> CoroScopeMaterializer<'a> {
             Instruction::Comment(msg) => {
                 state.builder.comment(msg.clone());
             }
-            Instruction::CoroRegister { var, value, token } => {
-                let value = self.value_or_load(value.clone(), ctx, state);
-                todo!();
+            Instruction::CoroRegister { .. } => {
+                // nothing to do
             }
             _ => unreachable!(),
         }
@@ -1024,6 +1023,17 @@ impl<'a> CoroScopeMaterializer<'a> {
         };
         // compute the input/output coro frame fields so that the frontend scheduler can optimize the I/O
         let (in_fields, out_fields) = self.frame.collect_io_fields(self.scope, ctx.uses_coro_id);
+        let designated_filed_offset = self.frame.get_designated_field_offset();
+        let designated_fields: Vec<_> = self
+            .frame
+            .designated_field_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| CoroFrameDesignatedField {
+                name: CBoxedSlice::from(name.as_bytes()),
+                index: i as u32 + designated_filed_offset,
+            })
+            .collect();
         // create the callable module
         CallableModule {
             module,
@@ -1034,6 +1044,7 @@ impl<'a> CoroScopeMaterializer<'a> {
             subroutine_ids: CBoxedSlice::new(Vec::new()),
             coro_frame_input_fields: CBoxedSlice::new(in_fields),
             coro_frame_output_fields: CBoxedSlice::new(out_fields),
+            coro_frame_designated_fields: CBoxedSlice::new(designated_fields),
             cpu_custom_ops: CBoxedSlice::new(Vec::new()),
             pools: self.coro.pools.clone(),
         }

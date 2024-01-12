@@ -141,6 +141,13 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
         auto coroframe = corotype;
         auto coroframe_new = converted->arguments()[0].type();
         coroframe->update_from(coroframe_new);
+        for (auto &&field : luisa::span{m->get()->coro_frame_designated_fields.ptr,
+                                        m->get()->coro_frame_designated_fields.len}) {
+            auto name = luisa::string_view{reinterpret_cast<const char *>(field.name.ptr), field.name.len};
+            if (!name.empty() && name.back() == '\0') { name = name.substr(0, name.size() - 1); }
+            graph.designate_state_member(luisa::string{name}, field.index);
+            coroframe->set_member_name(field.index, luisa::string{name});
+        }
         const_cast<FunctionBuilder *>(converted.get())->coroframe_replace(corotype);
         for (int i = 0; i < subroutines.len; ++i) {
             auto sub = IR2AST::build(subroutines.ptr[i]._0.get());

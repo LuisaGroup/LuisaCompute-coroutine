@@ -2128,11 +2128,10 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 builder.coro_split_mark(token)
             }
             "COROBIND" => {
-                let token = j["coro_token"].as_u32().unwrap();
                 let expr = self._convert_expression(&j["expression"], false);
-                let var = j["var_id"].as_u32().unwrap();
+                let name = j["name"].as_str().unwrap();
                 let (builder, ..) = self.unwrap_ctx();
-                builder.coro_register(token, expr, var)
+                builder.coro_register(expr, CBoxedSlice::from(name.as_bytes()))
             }
             "PRINT" => {
                 let fmt = j["format"].as_str().unwrap().to_string();
@@ -2274,6 +2273,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             subroutines: CBoxedSlice::new(Vec::new()),
             coro_frame_input_fields: CBoxedSlice::new(Vec::new()),
             coro_frame_output_fields: CBoxedSlice::new(Vec::new()),
+            coro_frame_designated_fields: CBoxedSlice::new(Vec::new()),
             pools: self.pools.clone(),
         }
     }

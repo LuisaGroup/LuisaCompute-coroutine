@@ -156,16 +156,21 @@ impl<'a> CoroTransitionGraphBuilder<'a> {
                     // propagate the alive states from the target subscopes
                     let target_use_def = &self.use_def.scopes[&edge.target];
                     let target_outlets = &gg.nodes[&edge.target].outlets;
-                    let new_alive_states =
+                    let mut new_live_states =
                         target_outlets
                             .iter()
                             .fold(edge.live_states.clone(), |acc, (_, e)| {
                                 let killed = &target_use_def.internal_kills[&e.target];
                                 acc.union(&e.live_states.subtract(killed))
                             });
-                    if new_alive_states != edge.live_states {
+                    // special: add also the designated values, they may be used anywhere externally
+                    for (_, &designated) in &self.graph.designated_values {
+                        new_live_states.insert(designated, &[]);
+                    }
+                    // check if fixed point is reached
+                    if new_live_states != edge.live_states {
                         any_change = true;
-                        edge.live_states = new_alive_states;
+                        edge.live_states = new_live_states;
                     }
                 }
             }
@@ -193,11 +198,13 @@ impl<'a> CoroTransitionGraphBuilder<'a> {
             node.union_states_to_load = node
                 .outlets
                 .iter()
-                .fold(external_use.clone(), |acc, (_, e)| acc.union(&e.states_to_load));
-            node.union_states_to_save = node
-                .outlets
-                .iter()
-                .fold(AccessTree::new(), |acc, (_, e)| acc.union(&e.states_to_save));
+                .fold(external_use.clone(), |acc, (_, e)| {
+                    acc.union(&e.states_to_load)
+                });
+            node.union_states_to_save =
+                node.outlets.iter().fold(AccessTree::new(), |acc, (_, e)| {
+                    acc.union(&e.states_to_save)
+                });
         }
     }
 

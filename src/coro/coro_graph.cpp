@@ -31,7 +31,7 @@ uint CoroGraph::designated_state_member(luisa::string_view name) const noexcept 
 CoroGraph::CoroGraph(uint entry, const Type *state_type) noexcept
     : _entry{entry}, _state_type{state_type} {}
 
-void CoroGraph::designate_state_member(luisa::string_view name, uint index) noexcept {
+void CoroGraph::designate_state_member(luisa::string name, uint index) noexcept {
     auto [iter, success] = _designated_state_members.emplace(name, index);
     LUISA_ASSERT(success, "State member '{}' already designated.", name);
 }

@@ -12,7 +12,9 @@
 use crate::analysis::coro_graph::{CoroGraph, CoroInstrRef, CoroInstruction, CoroScopeRef};
 use crate::analysis::coro_transition_graph::CoroTransitionGraph;
 use crate::analysis::utility::{AccessChainIndex, AccessTree, AccessTreeNodeRef};
-use crate::ir::{BasicBlock, Const, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF};
+use crate::ir::{
+    BasicBlock, Const, Func, Instruction, IrBuilder, NodeRef, Primitive, Type, INVALID_REF,
+};
 use crate::{CArc, CBoxedSlice, TypeOf};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -29,6 +31,8 @@ pub(crate) struct CoroFrame<'a> {
     pub transition_graph: &'a CoroTransitionGraph,
     pub interface_type: CArc<Type>,
     pub fields: Vec<CoroFrameField>,
+    pub designated_fields: Vec<NodeRef>,
+    pub designated_field_names: Vec<String>,
 }
 
 impl<'a> CoroFrame<'a> {
@@ -103,14 +107,17 @@ impl<'a> CoroFrame<'a> {
         stable_indices: &HashMap<NodeRef, u32>,
         for_aggregates: bool,
     ) -> Self {
+        let designated_nodes: HashSet<_> = graph.designated_values.values().cloned().collect();
         let mut desc = CoroFrame {
             graph,
             transition_graph: transition_graph,
             interface_type: CArc::null(),
             fields: Vec::new(),
+            designated_fields: Vec::new(),
+            designated_field_names: Vec::new(),
         };
         for (&node, &tree_node) in transition_graph.union_states.nodes.iter() {
-            if for_aggregates == !node.type_().is_primitive() {
+            if !designated_nodes.contains(&node) && for_aggregates == !node.type_().is_primitive() {
                 desc.add_node(
                     node.type_().as_ref(),
                     Some(AccessTreeNodeRef::new(
@@ -150,11 +157,30 @@ impl<'a> CoroFrame<'a> {
             <u32 as TypeOf>::type_(),           // target coro token
         ];
         fields.extend(self.fields.iter().map(|field| field.type_.to_type()));
+        fields.extend(
+            self.designated_fields
+                .iter()
+                .map(|node| node.type_().clone()),
+        );
         let alignment = self
             .fields
             .iter()
             .fold(16, |acc, field| std::cmp::max(acc, field.type_.size()));
         self.interface_type = Type::struct_of(alignment as u32, fields);
+    }
+
+    fn _layout_designated_fields(&mut self, stable_indices: &HashMap<NodeRef, u32>) {
+        let mut designated_nodes: Vec<_> = self
+            .graph
+            .designated_values
+            .iter()
+            .map(|(var, &node)| (var, node))
+            .collect();
+        designated_nodes.sort_by_key(|(_, node)| (node.type_().alignment(), stable_indices[node]));
+        for (var, node) in designated_nodes {
+            self.designated_fields.push(node);
+            self.designated_field_names.push(var.clone());
+        }
     }
 
     fn new(
@@ -166,10 +192,13 @@ impl<'a> CoroFrame<'a> {
         let prim_desc = Self::_build(graph, transition_graph, stable_indices, false);
         let mut desc = CoroFrame {
             graph,
-            transition_graph: transition_graph,
+            transition_graph,
             interface_type: CArc::null(),
             fields: [agg_desc.fields, prim_desc.fields].concat(),
+            designated_fields: Vec::new(),
+            designated_field_names: Vec::new(),
         };
+        desc._layout_designated_fields(stable_indices);
         desc._compute_interface_type();
         desc
     }
@@ -216,6 +245,21 @@ impl<'a> CoroFrame<'a> {
                 b.update(p_mapped, value);
             }
         }
+        // process designated fields
+        let designated_field_offset = self.get_designated_field_offset();
+        for (index, &node) in self.designated_fields.iter().enumerate() {
+            if load_tree.contains(node, &[]) {
+                let mapped = mapping
+                    .entry(node)
+                    .or_insert_with(|| b.local_zero_init(node.type_().clone()))
+                    .clone();
+                let field_index = b.const_(Const::Uint32(designated_field_offset + index as u32));
+                let field_type = node.type_().clone();
+                let p_value = b.gep(frame, &[field_index], field_type.clone());
+                let value = b.load(p_value);
+                b.update(mapped, value);
+            }
+        }
         mapping
     }
 
@@ -249,21 +293,47 @@ impl<'a> CoroFrame<'a> {
                 .collect();
             if save_tree.contains(root, &chain) {
                 let mapped = mapping[&root].clone();
-                let p_mapped = if field.chain.is_empty() {
-                    mapped
+                let value = if field.chain.is_empty() {
+                    if mapped.is_lvalue() {
+                        b.load(mapped)
+                    } else {
+                        mapped
+                    }
                 } else {
                     let chain: Vec<_> = field
                         .chain
                         .iter()
                         .map(|&i| b.const_(Const::Uint32(i as u32)))
                         .collect();
-                    b.gep(mapped, chain.as_slice(), field.type_.to_type())
+                    if mapped.is_lvalue() {
+                        let p_mapped = b.gep(mapped, chain.as_slice(), field.type_.to_type());
+                        b.load(p_mapped)
+                    } else {
+                        let mut args = vec![mapped];
+                        args.extend(chain);
+                        b.call(Func::ExtractElement, &args, field.type_.to_type())
+                    }
                 };
-                let value = b.load(p_mapped);
                 let field_index = b.const_(Const::Uint32(
                     2/* skip coro_id and token */ + field_index as u32,
                 ));
                 let p_field = b.gep(frame, &[field_index], field.type_.to_type());
+                b.update(p_field, value);
+            }
+        }
+        // save designated fields
+        for (index, &node) in self.designated_fields.iter().enumerate() {
+            if save_tree.contains(node, &[]) {
+                let mapped = mapping[&node].clone();
+                let value = if mapped.is_lvalue() {
+                    b.load(mapped)
+                } else {
+                    mapped
+                };
+                let field_index = b.const_(Const::Uint32(
+                    self.get_designated_field_offset() + index as u32,
+                ));
+                let p_field = b.gep(frame, &[field_index], node.type_().clone());
                 b.update(p_field, value);
             }
         }
@@ -283,7 +353,17 @@ impl<'a> CoroFrame<'a> {
                 indices.insert((i + 2/* skip coro_id and coro_token */) as u32);
             }
         }
+        // designated fields
+        for (index, &node) in self.designated_fields.iter().enumerate() {
+            if tree.contains(node, &[]) {
+                indices.insert(self.get_designated_field_offset() + index as u32);
+            }
+        }
         indices
+    }
+
+    pub fn get_designated_field_offset(&self) -> u32 {
+        2/* skip coro_id and token */ + self.fields.len() as u32
     }
 
     pub fn collect_io_fields(
@@ -340,6 +420,14 @@ impl<'a> CoroFrame<'a> {
         println!("=========================== CoroFrame ===========================");
         for (i, field) in self.fields.iter().enumerate() {
             println!("Field {}: {:?}", i, field);
+        }
+        for (i, &node) in self.designated_fields.iter().enumerate() {
+            println!(
+                "Designated Field {} (identifier = {}): {:?}",
+                i,
+                self.designated_field_names[i],
+                node.type_().as_ref()
+            );
         }
         println!("Total Size = {}", self.interface_type.size());
     }

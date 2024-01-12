@@ -27,13 +27,13 @@ uint64_t ReturnStmt::_compute_hash() const noexcept {
 }
 
 uint64_t SuspendStmt::_compute_hash() const noexcept {
-    return luisa::hash<uint>{}(_token);
+    return luisa::hash_value(_token);
 }
+
 uint64_t CoroBindStmt::_compute_hash() const noexcept {
-    auto id1 = luisa::hash<uint>{}(_token);
-    auto id2 = luisa::hash<uint>{}(_var_id);
+    auto id2 = luisa::hash_value(_name);
     auto expr = _expr->hash();
-    return hash_combine({id1, id2, expr});
+    return hash_combine({id2, expr});
 }
 
 uint64_t ScopeStmt::_compute_hash() const noexcept {

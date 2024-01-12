@@ -1314,9 +1314,8 @@ pub enum Instruction {
         token: u32,
     },
     CoroRegister {
-        token: u32,
         value: NodeRef,
-        var: u32,
+        name: CBoxedSlice<u8>,
     },
 }
 
@@ -1484,11 +1483,12 @@ impl Debug for Instruction {
             Instruction::CoroResume { token } => {
                 write!(f, "CoroResume({})", token)
             }
-            Instruction::CoroRegister { token, value, var } => {
+            Instruction::CoroRegister { value, name } => {
                 write!(
                     f,
-                    "CoroRegister(token:{}, value:{}, var:{})",
-                    token, value.0, var
+                    "CoroRegister(name: {}, value: {})",
+                    name.to_string(),
+                    value.0,
                 )
             }
         }
@@ -1993,6 +1993,13 @@ impl CallableModuleRef {
 }
 
 #[repr(C)]
+#[derive(Debug, Serialize, Clone)]
+pub struct CoroFrameDesignatedField {
+    pub name: CBoxedSlice<u8>,
+    pub index: u32,
+}
+
+#[repr(C)]
 #[derive(Debug, Serialize)]
 pub struct CallableModule {
     pub module: Module,
@@ -2003,6 +2010,7 @@ pub struct CallableModule {
     pub subroutine_ids: CBoxedSlice<u32>,
     pub coro_frame_input_fields: CBoxedSlice<u32>,
     pub coro_frame_output_fields: CBoxedSlice<u32>,
+    pub coro_frame_designated_fields: CBoxedSlice<CoroFrameDesignatedField>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
@@ -2256,6 +2264,7 @@ impl ModuleDuplicator {
                 subroutine_ids: callable.subroutine_ids.clone(),
                 coro_frame_input_fields: callable.coro_frame_input_fields.clone(),
                 coro_frame_output_fields: callable.coro_frame_output_fields.clone(),
+                coro_frame_designated_fields: callable.coro_frame_designated_fields.clone(),
                 cpu_custom_ops: callable.cpu_custom_ops.clone(),
                 pools: callable.pools.clone(),
             }
@@ -3032,9 +3041,9 @@ impl IrBuilder {
         self.append(new_node);
         new_node
     }
-    pub fn coro_register(&mut self, token: u32, value: NodeRef, var: u32) -> NodeRef {
+    pub fn coro_register(&mut self, value: NodeRef, name: CBoxedSlice<u8>) -> NodeRef {
         let node = Node::new(
-            CArc::new(Instruction::CoroRegister { token, value, var }),
+            CArc::new(Instruction::CoroRegister { value, name }),
             Type::void(),
         );
         let node = new_node(&self.pools, node);

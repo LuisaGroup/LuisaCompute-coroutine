@@ -294,6 +294,11 @@ struct CallableModuleRef {
     CArc<CallableModule> _0;
 };
 
+struct CoroFrameDesignatedField {
+    CBoxedSlice<uint8_t> name;
+    uint32_t index;
+};
+
 struct CpuCustomOp {
     uint8_t *data;
     /// func(data, args); func should modify args in place
@@ -311,6 +316,7 @@ struct CallableModule {
     CBoxedSlice<uint32_t> subroutine_ids;
     CBoxedSlice<uint32_t> coro_frame_input_fields;
     CBoxedSlice<uint32_t> coro_frame_output_fields;
+    CBoxedSlice<CoroFrameDesignatedField> coro_frame_designated_fields;
     CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
     CArc<ModulePools> pools;
 };
@@ -872,9 +878,8 @@ struct Instruction {
     };
 
     struct CoroRegister_Body {
-        uint32_t token;
         NodeRef value;
-        uint32_t var;
+        CBoxedSlice<uint8_t> name;
     };
 
     Tag tag;

@@ -118,25 +118,29 @@ void FunctionBuilder::check_is_coroutine() noexcept {
     LUISA_ASSERT(_tag == Tag::COROUTINE,
                  "Coroutine intrinsics are only allowed in coroutines.");
 }
-uint FunctionBuilder::suspend_(const luisa::string desc) noexcept {
+uint FunctionBuilder::suspend_(luisa::string desc) noexcept {
     check_is_coroutine();
     uint token = _coro_tokens.size() + 1;
+    if (desc.empty()) { desc = luisa::format("__internal_suspend_{}", token); }
     auto [_, success] = _coro_tokens.insert(std::make_pair(desc, token));
     LUISA_ASSERT(success, "Duplicated suspend token '{}' description.", desc);
     _create_and_append_statement<SuspendStmt>(token);
     return token;
 }
-void FunctionBuilder::bind_promise_(const uint coro_token, const Expression *expr, const luisa::string &name) noexcept {
+
+void FunctionBuilder::bind_promise_(const Expression *expr, luisa::string name) noexcept {
     check_is_coroutine();
-    auto type = _arguments[0].type();
-    auto res = const_cast<Type *>(type)->add_member(name);
-    LUISA_ASSERT(res != -1, "Failed in promise binding");
-    _create_and_append_statement<CoroBindStmt>(coro_token, expr, res);
+    _create_and_append_statement<CoroBindStmt>(expr, std::move(name));
 }
-const MemberExpr *FunctionBuilder::read_promise_(const Expression *expr, const luisa::string &name) noexcept {
+
+const MemberExpr *FunctionBuilder::read_promise_(const Type *type, const Expression *expr, luisa::string_view name) noexcept {
     LUISA_ASSERT(expr->type()->is_coroframe(), "Promise reading is only allowed for CoroFrame type");
     auto var = expr->type()->member(name);
     if (var != -1) {
+        auto mem_type = expr->type()->corotype()->members()[var];
+        LUISA_ASSERT(*mem_type == *type,
+                     "Promise '{}' type mismatch: expected {}, got {}.",
+                     name, type->description(), mem_type->description());
         return _create_expression<MemberExpr>(expr->type()->corotype()->members()[var], expr, var);
     }
     return nullptr;

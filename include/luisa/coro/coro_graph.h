@@ -1,7 +1,6 @@
 #pragma once
 
 #include <luisa/core/dll_export.h>
-#include <luisa/core/stl/memory.h>
 #include <luisa/core/stl/unordered_map.h>
 #include <luisa/coro/coro_node.h>
 
@@ -19,13 +18,14 @@ public:
     // for construction only
     CoroGraph(uint entry, const Type *state_type) noexcept;
     [[nodiscard]] CoroNode *add_node(uint token, CoroNode::Func f) noexcept;
-    void designate_state_member(luisa::string_view name, uint index) noexcept;
+    void designate_state_member(luisa::string name, uint index) noexcept;
 
 public:
     [[nodiscard]] const CoroNode *entry() const noexcept;
     [[nodiscard]] const CoroNode *node(uint token) const noexcept;
     [[nodiscard]] auto &nodes() const noexcept { return _nodes; }
     [[nodiscard]] auto state_type() const noexcept { return _state_type; }
+    [[nodiscard]] auto &designated_state_members() const noexcept { return _designated_state_members; }
     [[nodiscard]] uint designated_state_member(luisa::string_view name) const noexcept;
 };
 

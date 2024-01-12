@@ -235,6 +235,17 @@ public:
                                 read_v = bin.read(ptr * DIGIT + cur_dig);
                                 thread_fence();//flush cache
                             };
+                        } else if (device.backend_name() == "metal") {
+                            auto num_tries = def(0u);
+                            $while ((read_v == 0u)) {
+                                ExternalCallable<uint(Buffer<uint>, uint)> read_coherent{"buffer_read_coherent"};
+                                read_v = read_coherent(bin, ptr * DIGIT + cur_dig);
+                                num_tries += 1;
+                                $if (num_tries > 10000u) {
+                                    device_log("read_coherent failed: {}", ptr * DIGIT + cur_dig);
+                                    $break;
+                                };
+                            };
                         } else {//dx cache is flushed with globallycoherent
                             read_v = bin.read(ptr * DIGIT + cur_dig);
                             $if (!warp_active_all(read_v != 0u)) {

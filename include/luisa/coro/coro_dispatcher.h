@@ -481,7 +481,7 @@ public:
         _global = device.create_buffer<uint>(1);
         auto q_fac = 1u;
         uint max_sub_coro = coroutine->suspend_count() + 1;
-        auto g_fac=(uint)std::max((int)(max_sub_coro-q_fac-1),0);
+        auto g_fac=(uint)std::max((int)(max_sub_coro-q_fac),0);
         auto global_queue_size= block_size * g_fac;
         if(use_global) {
             _global_frame = device.create_buffer<FrameType>(_max_thread_count*g_fac);
@@ -497,12 +497,13 @@ public:
             Shared<uint> path_id{shared_queue_size};
             Shared<uint> work_counter{max_sub_coro};
             Shared<uint> work_offset{2u};
-            //Shared<uint> all_token{use_global?(shared_queue_size+global_queue_size):shared_queue_size};
+            Shared<uint> all_token{use_global?(shared_queue_size+global_queue_size):shared_queue_size};
             Shared<uint> workload{2};
             Shared<uint> work_stat{2};//0 max_count,1 max_id
             //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
             //Shared<uint> tag_offset{pipeline().surfaces().size()};
             $for (index, 0u, q_fac) {
+                all_token[index * block_size + thread_x()] = 0u;
                 initialize_coroframe(frames[index * block_size + thread_x()], def<uint3>(0, 0, 0));
             };
             $if (thread_x() < max_sub_coro) {
@@ -582,16 +583,16 @@ public:
                 sync_block();
                 if(!use_global) {
                     $for (index, 0u, q_fac) {//collect indices
-                        auto frame = frames[index * block_size + thread_x()];
-                        $if ((read_promise<uint>(frame, "coro_token") & token_mask) == work_stat[1]) {
+                        auto frame_token = all_token[index * block_size + thread_x()];
+                        $if (frame_token == work_stat[1]) {
                             auto id = work_offset.atomic(0).fetch_add(1u);
                             path_id[id] = index * block_size + thread_x();
                         };
                     };
                 }else{
                     $for(index, 0u, q_fac) {//collect switch out indices
-                        auto state = frames[index * block_size + thread_x()];
-                        $if((read_promise<uint>(state, "coro_token") & token_mask) != work_stat[1]) {
+                        auto frame_token = all_token[index * block_size + thread_x()];
+                        $if (frame_token != work_stat[1]) {
                             auto id = work_offset.atomic(0).fetch_add(1u);
                             path_id[id] = index * block_size + thread_x();
                         };
@@ -600,29 +601,34 @@ public:
                     $if(shared_queue_size - work_offset[0] < block_size) {//no enough work
                         $for(index, 0u, g_fac) {                           //swap frames
                             auto global_id = block_x() * global_queue_size + index * block_size + thread_x();
-                            auto g_state = _global_frame->read(global_id);
-                            auto coro_token=(read_promise<uint>(g_state, "coro_token") & token_mask);
+                            auto g_queue_id=index * block_size + thread_x();
+                            auto coro_token=all_token[shared_queue_size+g_queue_id];
                             $if(coro_token == work_stat[1]) {
                                 auto id = work_offset.atomic(1).fetch_add(1u);
                                 $if(id < work_offset[0]) {
                                     auto dst = path_id[id];
+                                    auto frame_token = all_token[dst];
                                     $if(coro_token != 0u) {
-                                        $if((read_promise<uint>(frames[dst], "coro_token") & token_mask) != 0u) {
-                                            auto temp=frames[dst];
+                                        $if(frame_token != 0u) {
+                                            auto g_state = _global_frame->read(global_id);
+                                            _global_frame->write(global_id,frames[dst]);
                                             frames[dst]=g_state;
-                                            _global_frame->write(global_id,temp);
+                                            all_token[dst]=coro_token;
+                                            all_token[shared_queue_size+g_queue_id]=frame_token;
+
                                         }
                                         $else {
-                                            auto temp=frames[dst];
+                                            auto g_state = _global_frame->read(global_id);
                                             frames[dst]=g_state;
-                                            _global_frame->write(global_id,temp);
+                                            all_token[dst]=coro_token;
+                                            all_token[shared_queue_size+g_queue_id]=frame_token;
                                         };
                                     }
                                     $else {
-                                        $if((read_promise<uint>(frames[dst], "coro_token") & token_mask) != 0u) {
-                                            auto temp=frames[dst];
-                                            frames[dst]=g_state;
-                                            _global_frame->write(global_id,temp);
+                                        $if(frame_token != 0u) {
+                                            _global_frame->write(global_id,frames[dst]);
+                                            all_token[dst]=coro_token;
+                                            all_token[shared_queue_size+g_queue_id]=frame_token;
                                         };
                                     };
                                 };
@@ -643,7 +649,7 @@ public:
                     launch_condition = (thread_x() < work_offset[0]);
                 }
                 $if (launch_condition) {
-                    $switch (read_promise<uint>(frames[pid], "coro_token") & token_mask) {
+                    $switch (all_token[pid]) {
                         $case (0u) {
                             $if (gen_st + thread_x() < workload[1]) {
                                 work_counter.atomic(0u).fetch_sub(1u);
@@ -651,6 +657,7 @@ public:
                                 initialize_coroframe(frames[pid], def<uint3>(gen_st + thread_x(), 0, 0));
                                 (*coroutine)(frames[pid], args...);//only work when kernel 0s are continue
                                 auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;
+                                all_token[pid]=nxt;
                                 work_counter.atomic(nxt).fetch_add(1u);
                                 workload.atomic(0).fetch_add(1u);
                             };
@@ -659,7 +666,9 @@ public:
                             $case (i) {
                                 work_counter.atomic(i).fetch_sub(1u);
                                 (*coroutine)[i](frames[pid], args...);
-                                work_counter.atomic(read_promise<uint>(frames[pid], "coro_token") & token_mask).fetch_add(1u);
+                                auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;
+                                all_token[pid]=nxt;
+                                work_counter.atomic(nxt).fetch_add(1u);
                             };
                         }
                     };

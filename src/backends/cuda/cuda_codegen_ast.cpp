@@ -384,7 +384,7 @@ private:
         auto rq_index = static_cast<uint>(_outline_infos.size());
         if (!captured_elements.empty() ||
             !captured_resources.empty()) {
-            _codegen->_scratch << "struct alignas(4) LCRayQueryCtx" << rq_index << " {";
+            _codegen->_scratch << "struct LCRayQueryCtx" << rq_index << " {";
             for (auto &&v : captured_resources) {
                 _codegen->_scratch << "\n  ";
                 _codegen->_emit_variable_decl(f, v, false);
@@ -573,6 +573,7 @@ public:
             for (auto &&v : captured_resources) {
                 _codegen->_emit_indent();
                 _codegen->_emit_variable_name(v);
+                _codegen->_scratch << ",\n";
             }
             for (auto &&v : captured_elements) {
                 _codegen->_emit_indent();

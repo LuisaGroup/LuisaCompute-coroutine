@@ -341,7 +341,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                     let node = Self::_cast(builder, &dst.element(), node);
                     builder.call(Func::Vec, &[node], dst.clone())
                 }
-                _ => panic!("Invalid cast."),
+                _ => panic!("Invalid cast: {:?} -> {:?}", src.as_ref(), dst.as_ref()),
             }
         }
     }

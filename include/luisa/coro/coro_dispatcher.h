@@ -68,8 +68,8 @@ protected:
 protected:
 public:
     CoroDispatcherBase(Coroutine<FuncType> *coro_ptr, Device &device) noexcept
-        : _coro{std::move(coro_ptr)}, _device{device}, _dispatch_size{} {
-    }
+        : _coro{std::move(coro_ptr)}, _device{device}, _dispatch_size{} {}
+    virtual ~CoroDispatcherBase() noexcept = default;
     [[nodiscard]] virtual bool all_dispatched() const noexcept = 0;
     [[nodiscard]] virtual bool all_done() const noexcept = 0;
     [[nodiscard]] CoroAwait<FuncType> await_step() noexcept;
@@ -175,7 +175,9 @@ public:
     bool all_done() const noexcept;
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream &stream,
-                            uint max_frame_count = 2000000, luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
+                            uint max_frame_count = 2000000,
+                            // bool use_soa = true, bool sort_token_on_gather = false,
+                            luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           _max_frame_count{max_frame_count}, _stream{stream}, _debug{debug}, _frame{device.create_soa<FrameType>(max_frame_count)} {
         /*if (device.backend_name() != "cuda") {//only cuda can sort

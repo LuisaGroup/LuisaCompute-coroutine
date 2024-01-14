@@ -49,6 +49,7 @@ add_subdirectory(osl)
 add_subdirectory(gui)
 add_subdirectory(backends)
 add_subdirectory(ir_v2)
+add_subdirectory(clangcxx)
 
 add_library(compute INTERFACE)
 
@@ -64,7 +65,8 @@ target_link_libraries(compute INTERFACE
         luisa-compute-backends
         luisa-compute-ir
         luisa-compute-coro
-        luisa-compute-ir-v2)
+        luisa-compute-ir-v2
+        luisa-compute-clangcxx)
 
 if (LUISA_COMPUTE_ENABLE_CUDA_EXT_LCUB)
     target_link_libraries(compute INTERFACE luisa-compute-cuda-ext-lcub)

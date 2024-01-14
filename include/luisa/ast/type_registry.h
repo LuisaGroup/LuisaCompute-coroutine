@@ -52,34 +52,34 @@ struct TypeDesc {
 
 // scalar
 #define LUISA_MAKE_SCALAR_AND_VECTOR_TYPE_DESC_SPECIALIZATION(S, desc) \
-  template<>                                                           \
-  struct TypeDesc<S> {                                                 \
-    static constexpr luisa::string_view description() noexcept {       \
-      using namespace std::string_view_literals;                       \
-      return #desc##sv;                                                \
-    }                                                                  \
-  };                                                                   \
-  template<>                                                           \
-  struct TypeDesc<Vector<S, 2>> {                                      \
-    static constexpr luisa::string_view description() noexcept {       \
-      using namespace std::string_view_literals;                       \
-      return "vector<" #desc ",2>"sv;                                  \
-    }                                                                  \
-  };                                                                   \
-  template<>                                                           \
-  struct TypeDesc<Vector<S, 3>> {                                      \
-    static constexpr luisa::string_view description() noexcept {       \
-      using namespace std::string_view_literals;                       \
-      return "vector<" #desc ",3>"sv;                                  \
-    }                                                                  \
-  };                                                                   \
-  template<>                                                           \
-  struct TypeDesc<Vector<S, 4>> {                                      \
-    static constexpr luisa::string_view description() noexcept {       \
-      using namespace std::string_view_literals;                       \
-      return "vector<" #desc ",4>"sv;                                  \
-    }                                                                  \
-  };
+    template<>                                                         \
+    struct TypeDesc<S> {                                               \
+        static constexpr luisa::string_view description() noexcept {   \
+            using namespace std::string_view_literals;                 \
+            return #desc##sv;                                          \
+        }                                                              \
+    };                                                                 \
+    template<>                                                         \
+    struct TypeDesc<Vector<S, 2>> {                                    \
+        static constexpr luisa::string_view description() noexcept {   \
+            using namespace std::string_view_literals;                 \
+            return "vector<" #desc ",2>"sv;                            \
+        }                                                              \
+    };                                                                 \
+    template<>                                                         \
+    struct TypeDesc<Vector<S, 3>> {                                    \
+        static constexpr luisa::string_view description() noexcept {   \
+            using namespace std::string_view_literals;                 \
+            return "vector<" #desc ",3>"sv;                            \
+        }                                                              \
+    };                                                                 \
+    template<>                                                         \
+    struct TypeDesc<Vector<S, 4>> {                                    \
+        static constexpr luisa::string_view description() noexcept {   \
+            using namespace std::string_view_literals;                 \
+            return "vector<" #desc ",4>"sv;                            \
+        }                                                              \
+    };
 
 LUISA_MAKE_SCALAR_AND_VECTOR_TYPE_DESC_SPECIALIZATION(bool, bool)
 LUISA_MAKE_SCALAR_AND_VECTOR_TYPE_DESC_SPECIALIZATION(byte, byte)
@@ -96,12 +96,18 @@ LUISA_MAKE_SCALAR_AND_VECTOR_TYPE_DESC_SPECIALIZATION(double, double)
 
 #undef LUISA_MAKE_SCALAR_AND_VECTOR_TYPE_DESC_SPECIALIZATION
 
+template<>
+struct TypeDesc<long>
+    : public TypeDesc<canonical_c_long> {};
+
+template<>
+struct TypeDesc<unsigned long>
+    : public TypeDesc<canonical_c_ulong> {};
+
 template<typename T>
     requires std::is_enum_v<T>
 struct TypeDesc<T>
-    : TypeDesc<std::conditional_t<
-          std::is_signed_v<std::underlying_type_t<T>>,
-          int, uint>> {};
+    : TypeDesc<std::underlying_type_t<T>> {};
 
 // array
 template<typename T, size_t N>
@@ -311,69 +317,69 @@ constexpr auto is_valid_reflection_v = is_valid_reflection<S, M, O>::value;
 
 // struct
 #define LUISA_STRUCTURE_MAP_MEMBER_TO_DESC(m) \
-  luisa::compute::detail::TypeDesc<std::remove_cvref_t<decltype(std::declval<this_type>().m)>>::description()
+    luisa::compute::detail::TypeDesc<std::remove_cvref_t<decltype(std::declval<this_type>().m)>>::description()
 #define LUISA_STRUCTURE_MAP_MEMBER_TO_TYPE(m) \
-  std::remove_cvref_t<decltype(std::declval<this_type>().m)>
+    std::remove_cvref_t<decltype(std::declval<this_type>().m)>
 
 #ifdef _MSC_VER// force the built-in offsetof(), otherwise clangd would complain that it's not constant
 #define LUISA_STRUCTURE_MAP_MEMBER_TO_OFFSET(m) \
-  __builtin_offsetof(this_type, m)
+    __builtin_offsetof(this_type, m)
 #else
 #define LUISA_STRUCTURE_MAP_MEMBER_TO_OFFSET(m) \
-  offsetof(this_type, m)
+    offsetof(this_type, m)
 #endif
 
-#define LUISA_MAKE_STRUCTURE_TYPE_DESC_SPECIALIZATION(S, ...)          \
-  template<>                                                           \
-  struct luisa::compute::struct_member_tuple<S> {                      \
-    using this_type = S;                                               \
-    using type = std::tuple<                                           \
-        LUISA_MAP_LIST(                                                \
-            LUISA_STRUCTURE_MAP_MEMBER_TO_TYPE,                        \
-            ##__VA_ARGS__)>;                                           \
-    using offset = std::integer_sequence<                              \
-        size_t,                                                        \
-        LUISA_MAP_LIST(                                                \
-            LUISA_STRUCTURE_MAP_MEMBER_TO_OFFSET,                      \
-            ##__VA_ARGS__)>;                                           \
-    static_assert(alignof(this_type) >= 4);                            \
-    static_assert(luisa::compute::detail::is_valid_reflection_v<       \
-                  this_type, type, offset>);                           \
-  };                                                                   \
-  template<>                                                           \
-  struct luisa::compute::detail::TypeDesc<S> {                         \
-    using this_type = S;                                               \
-    static luisa::string_view description() noexcept {                 \
-      static auto s = luisa::compute::detail::make_struct_description( \
-          alignof(S),                                                  \
-          {LUISA_MAP_LIST(LUISA_STRUCTURE_MAP_MEMBER_TO_DESC,          \
-                          ##__VA_ARGS__)});                            \
-      return s;                                                        \
-    }                                                                  \
-  };
+#define LUISA_MAKE_STRUCTURE_TYPE_DESC_SPECIALIZATION(S, ...)                \
+    template<>                                                               \
+    struct luisa::compute::struct_member_tuple<S> {                          \
+        using this_type = S;                                                 \
+        using type = std::tuple<                                             \
+            LUISA_MAP_LIST(                                                  \
+                LUISA_STRUCTURE_MAP_MEMBER_TO_TYPE,                          \
+                ##__VA_ARGS__)>;                                             \
+        using offset = std::integer_sequence<                                \
+            size_t,                                                          \
+            LUISA_MAP_LIST(                                                  \
+                LUISA_STRUCTURE_MAP_MEMBER_TO_OFFSET,                        \
+                ##__VA_ARGS__)>;                                             \
+        static_assert(alignof(this_type) >= 4);                              \
+        static_assert(luisa::compute::detail::is_valid_reflection_v<         \
+                      this_type, type, offset>);                             \
+    };                                                                       \
+    template<>                                                               \
+    struct luisa::compute::detail::TypeDesc<S> {                             \
+        using this_type = S;                                                 \
+        static luisa::string_view description() noexcept {                   \
+            static auto s = luisa::compute::detail::make_struct_description( \
+                alignof(S),                                                  \
+                {LUISA_MAP_LIST(LUISA_STRUCTURE_MAP_MEMBER_TO_DESC,          \
+                                ##__VA_ARGS__)});                            \
+            return s;                                                        \
+        }                                                                    \
+    };
 #define LUISA_STRUCT_REFLECT(S, ...) \
-  LUISA_MAKE_STRUCTURE_TYPE_DESC_SPECIALIZATION(S, __VA_ARGS__)
+    LUISA_MAKE_STRUCTURE_TYPE_DESC_SPECIALIZATION(S, __VA_ARGS__)
 
-#define LUISA_CUSTOM_STRUCT_REFLECT(S, name)                      \
-  template<>                                                      \
-  struct luisa::compute::is_custom_struct<S> : std::true_type {}; \
-  template<>                                                      \
-  struct luisa::compute::detail::TypeDesc<S> {                    \
-    static constexpr luisa::string_view description() noexcept {  \
-      return name;                                                \
-    }                                                             \
-  };
+#define LUISA_CUSTOM_STRUCT_REFLECT(S, name)                         \
+    template<>                                                       \
+    struct luisa::compute::is_custom_struct<S> : std::true_type {};  \
+    template<>                                                       \
+    struct luisa::compute::detail::TypeDesc<S> {                     \
+        static constexpr luisa::string_view description() noexcept { \
+            return name;                                             \
+        }                                                            \
+    };
 
-#define LUISA_COROFRAME_STRUCT_REFLECT(S, name)                      \
-  template<>                                                         \
-  struct canonical_layout<S> {                                       \
-    using type = std::tuple<S>;                                      \
-  };                                                                 \
-  template<>                                                         \
-  struct luisa::compute::is_coroframe_struct<S> : std::true_type {}; \
-  template<>                                                         \
-  struct luisa::compute::detail::TypeDesc<S> {                       \
-    static constexpr luisa::string_view description() noexcept {     \
-      return name;                                                   \
-    }                                                                \
-  };
+#define LUISA_COROFRAME_STRUCT_REFLECT(S, name)                        \
+    template<>                                                         \
+    struct canonical_layout<S> {                                       \
+        using type = std::tuple<S>;                                    \
+    };                                                                 \
+    template<>                                                         \
+    struct luisa::compute::is_coroframe_struct<S> : std::true_type {}; \
+    template<>                                                         \
+    struct luisa::compute::detail::TypeDesc<S> {                       \
+        static constexpr luisa::string_view description() noexcept {   \
+            return name;                                               \
+        }                                                              \
+    };

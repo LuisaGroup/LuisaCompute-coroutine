@@ -3,6 +3,7 @@ table.insert(_config_rules, "lc-rename-ext")
 local rename_rule_idx = table.getn(_config_rules)
 includes("ext/EASTL")
 includes("ext/spdlog")
+includes("ext/reproc")
 table.remove(_config_rules, rename_rule_idx)
 includes("core")
 includes("vstl")
@@ -30,4 +31,7 @@ if get_config("enable_ir") then
 end
 if get_config("enable_api") then
 	includes("api")
+end
+if get_config("enable_clangcxx") then
+	includes("clangcxx")
 end

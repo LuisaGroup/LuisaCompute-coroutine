@@ -450,6 +450,16 @@ impl<'a> CoroScopeMaterializer<'a> {
                 );
                 process_return!(call)
             }
+            Func::External(c) => {
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|&a| self.value_or_load(a, ctx, state))
+                    .collect();
+                let call = state
+                    .builder
+                    .call(Func::External(c.clone()), args.as_slice(), ret.type_().clone());
+                process_return!(call)
+            }
             // replayable but need special handling
             Func::Unreachable(_) => {
                 let call = state.builder.call(func.clone(), &[], ret.type_().clone());

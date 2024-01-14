@@ -1128,6 +1128,20 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
             args[0]->accept(vis);
             str << ".Abort()"sv;
             return;
+        case CallOp::RAY_QUERY_PROCEED:
+            args[0]->accept(vis);
+            str << ".Proceed()"sv;
+            return;
+        case CallOp::RAY_QUERY_IS_TRIANGLE_CANDIDATE:
+            str << '(';
+            args[0]->accept(vis);
+            str << ".CandidateType()==CANDIDATE_NON_OPAQUE_TRIANGLE)"sv;
+            return;
+        case CallOp::RAY_QUERY_IS_PROCEDURAL_CANDIDATE:
+            str << '(';
+            args[0]->accept(vis);
+            str << ".CandidateType()!=CANDIDATE_NON_OPAQUE_TRIANGLE)"sv;
+            return;
         case CallOp::ZERO: {
             str << "_zero("sv;
             GetTypeName(*expr->type(), str, Usage::READ, true);
@@ -1529,7 +1543,7 @@ void CodegenUtility::CodegenVertex(Function vert, vstd::StringBuilder &result, b
     opt->arguments.clear();
     opt->arguments.reserve(args.size() - 1);
     size_t idx = 0;
-    for (auto &&i : vstd::ite_range(args.begin() + 1, args.end())) {
+    for (auto &&i : vstd::make_ite_range(args.subspan(1))) {
         opt->arguments.try_emplace(i.uid(), idx);
         ++idx;
     }
@@ -2046,10 +2060,10 @@ CodegenResult CodegenUtility::Codegen(
     CodegenFunction(kernel, codegenData, nonEmptyCbuffer);
 
     opt->funcType = CodegenStackData::FuncType::Callable;
-    auto argRange = vstd::range_impl(vstd::cache_end_range(kernel.arguments()) | vstd::value_range());
+    auto argRange = vstd::make_ite_range(kernel.arguments()).i_range();
     uint bind_count = 2;
     if (nonEmptyCbuffer) {
-        GenerateCBuffer({static_cast<vstd::IRange<Variable> *>(&argRange)}, varData, bind_count);
+        GenerateCBuffer({&argRange}, varData, bind_count);
     }
     if (isSpirV) {
         varData << R"(cbuffer CB:register(b1){
@@ -2226,8 +2240,8 @@ uint obj_id:register(b0);
 uint iid:SV_INSTANCEID;
 };
 )"sv;
-    auto vertRange = vstd::range_impl(vstd::cache_end_range(vstd::ite_range(vertFunc.arguments().begin() + 1, vertFunc.arguments().end())) | vstd::value_range());
-    auto pixelRange = vstd::range_impl(vstd::ite_range(pixelFunc.arguments().begin() + 1, pixelFunc.arguments().end()) | vstd::value_range());
+    auto vertRange = vstd::make_ite_range(vertFunc.arguments().subspan(1)).i_range();
+    auto pixelRange = vstd::make_ite_range(pixelFunc.arguments().subspan(1)).i_range();
     std::initializer_list<vstd::IRange<Variable> *> funcs = {&vertRange, &pixelRange};
 
     bool nonEmptyCbuffer = IsCBufferNonEmpty(funcs);

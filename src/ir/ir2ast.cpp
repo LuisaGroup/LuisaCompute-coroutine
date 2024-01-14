@@ -931,6 +931,36 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
         }
         case ir::Func::Tag::CpuCustomOp:
             LUISA_ERROR_WITH_LOCATION("CpuCustomOp is not implemented.");
+        case ir::Func::Tag::External: {
+            auto fb = detail::FunctionBuilder::current();
+            auto name = luisa::string{luisa::string_view{(const char *)func.external._0.ptr, func.external._0.len}};
+            auto arg_types = luisa::vector<const Type *>{};
+            auto arg_usage = luisa::vector<Usage>{};
+            auto converted_args = luisa::vector<const Expression *>{};
+            for (const auto &arg_ref : args) {
+                converted_args.push_back(_convert_node(arg_ref));
+                auto arg = ir::luisa_compute_ir_node_get(arg_ref);
+                arg_types.push_back(_convert_type(arg->type_.get()));
+                auto &inst = *arg->instruction.get();
+                switch (inst.tag) {
+                    case ir::Instruction::Tag::Argument:
+                        arg_usage.push_back(inst.argument.by_value ? Usage::READ : Usage::READ_WRITE);
+                        break;
+                    case ir::Instruction::Tag::Local:
+                        arg_usage.push_back(Usage::READ_WRITE);
+                        break;
+                    default:
+                        arg_usage.push_back(Usage::READ);
+                }
+            }
+
+            auto callable = luisa::make_shared<ExternalFunction>(
+                name,
+                type,
+                arg_types,
+                arg_usage);
+            return fb->call(type, callable, luisa::span{converted_args});
+        }
         case ir::Func::Tag::Unknown0: [[fallthrough]];
         case ir::Func::Tag::Unknown1: LUISA_NOT_IMPLEMENTED();
         case ir::Func::Tag::ShaderExecutionReorder: return builtin_func(2, CallOp::SHADER_EXECUTION_REORDER);
@@ -960,9 +990,9 @@ const Expression *IR2AST::_convert_instr_call(const ir::Node *node) noexcept {
 
         case ir::Func::Tag::CoroId: return builtin_func(1, CallOp::CORO_ID);
         case ir::Func::Tag::CoroToken: return builtin_func(1, CallOp::CORO_TOKEN);
-        case ir::Func::Tag::AddressOf: LUISA_NOT_IMPLEMENTED();
-        case ir::Func::Tag::BufferAddress: LUISA_NOT_IMPLEMENTED();
-        case ir::Func::Tag::BindlessBufferAddress: LUISA_NOT_IMPLEMENTED();
+        case ir::Func::Tag::AddressOf: return builtin_func(1, CallOp::ADDRESS_OF);
+        case ir::Func::Tag::BufferAddress: return builtin_func(1, CallOp::BUFFER_ADDRESS);
+        case ir::Func::Tag::BindlessBufferAddress: return builtin_func(1, CallOp::BINDLESS_BUFFER_ADDRESS);
     }
     return nullptr;
 }
@@ -1151,7 +1181,7 @@ void IR2AST::_convert_instr_print(const ir::Node *node) noexcept {
     for (auto arg : args) {
         converted_args.push_back(_convert_node(arg));
     }
-    detail::FunctionBuilder::current()->print_(fmt, converted_args);
+    detail::FunctionBuilder::current()->print_(luisa::string{fmt}, converted_args);
 }
 
 const Expression *IR2AST::_convert_constant(const ir::Const &const_) noexcept {
@@ -1163,6 +1193,10 @@ const Expression *IR2AST::_convert_constant(const ir::Const &const_) noexcept {
         case ir::Const::Tag::Bool: return b->literal(Type::of<bool>(), const_.bool_._0);
         case ir::Const::Tag::Int32: return b->literal(Type::of<int>(), const_.int32._0);
         case ir::Const::Tag::Uint32: return b->literal(Type::of<uint>(), const_.uint32._0);
+        case ir::Const::Tag::Int16: return b->literal(Type::of<short>(), const_.int16._0);
+        case ir::Const::Tag::Uint16: return b->literal(Type::of<ushort>(), const_.uint16._0);
+        case ir::Const::Tag::Int8: return b->literal(Type::of<byte>(), const_.int8._0);
+        case ir::Const::Tag::Uint8: return b->literal(Type::of<ubyte>(), const_.uint8._0);
         case ir::Const::Tag::Int64: return b->literal(Type::of<slong>(), const_.int64._0);
         case ir::Const::Tag::Uint64: return b->literal(Type::of<ulong>(), const_.uint64._0);
         case ir::Const::Tag::Float16: return b->literal(Type::of<half>(), luisa::bit_cast<half>(const_.float16._0));
@@ -1189,6 +1223,8 @@ const Expression *IR2AST::_convert_constant(const ir::Const &const_) noexcept {
                 LUISA_IR2AST_DECODE_CONST_VEC(uint)
                 LUISA_IR2AST_DECODE_CONST_VEC(short)
                 LUISA_IR2AST_DECODE_CONST_VEC(ushort)
+                LUISA_IR2AST_DECODE_CONST_VEC(byte)
+                LUISA_IR2AST_DECODE_CONST_VEC(ubyte)
                 LUISA_IR2AST_DECODE_CONST_VEC(slong)
                 LUISA_IR2AST_DECODE_CONST_VEC(ulong)
                 LUISA_IR2AST_DECODE_CONST_VEC(half)

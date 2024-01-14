@@ -1064,6 +1064,9 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::RAY_QUERY_COMMIT_TRIANGLE: _scratch << "ray_query_commit_triangle"; break;
         case CallOp::RAY_QUERY_COMMIT_PROCEDURAL: _scratch << "ray_query_commit_procedural"; break;
         case CallOp::RAY_QUERY_TERMINATE: _scratch << "ray_query_terminate"; break;
+        case CallOp::RAY_QUERY_PROCEED: _scratch << "ray_query_next"; break;
+        case CallOp::RAY_QUERY_IS_TRIANGLE_CANDIDATE: _scratch << "ray_query_is_triangle_candidate"; break;
+        case CallOp::RAY_QUERY_IS_PROCEDURAL_CANDIDATE: _scratch << "!ray_query_is_triangle_candidate"; break;
         case CallOp::REDUCE_SUM: _scratch << "lc_reduce_sum"; break;
         case CallOp::REDUCE_PRODUCT: _scratch << "lc_reduce_prod"; break;
         case CallOp::REDUCE_MIN: _scratch << "lc_reduce_min"; break;
@@ -1108,6 +1111,9 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::SHADER_EXECUTION_REORDER: _scratch << "lc_shader_execution_reorder"; break;
         case CallOp::CORO_ID: _scratch << "lc_coro_id"; break;
         case CallOp::CORO_TOKEN: _scratch << "lc_coro_token"; break;
+        case CallOp::ADDRESS_OF: LUISA_NOT_IMPLEMENTED();
+        case CallOp::BUFFER_ADDRESS: LUISA_NOT_IMPLEMENTED();
+        case CallOp::BINDLESS_BUFFER_ADDRESS: LUISA_NOT_IMPLEMENTED();
     }
     _scratch << "(";
     if (auto op = expr->op(); is_atomic_operation(op)) {

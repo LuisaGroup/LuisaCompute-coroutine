@@ -105,7 +105,7 @@ struct LC_AST_API StmtVisitor {
   void accept(StmtVisitor &visitor) const override { visitor.visit(this); }
 
 /// Break statement
-class BreakStmt final : public Statement {
+class LC_AST_API BreakStmt final : public Statement {
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -116,7 +116,7 @@ public:
 };
 
 /// Continue statement
-class ContinueStmt : public Statement {
+class LC_AST_API ContinueStmt : public Statement {
 
 private:
     [[nodiscard]] uint64_t _compute_hash() const noexcept override;
@@ -127,7 +127,7 @@ public:
 };
 
 /// Return statement
-class ReturnStmt : public Statement {
+class LC_AST_API ReturnStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -152,7 +152,7 @@ public:
 };
 
 /// Scope statement
-class ScopeStmt : public Statement {
+class LC_AST_API ScopeStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -170,7 +170,7 @@ public:
 };
 
 /// Assign statement
-class AssignStmt : public Statement {
+class LC_AST_API AssignStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -200,7 +200,7 @@ public:
 };
 
 /// If statement
-class IfStmt : public Statement {
+class LC_AST_API IfStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -232,7 +232,7 @@ public:
 };
 
 /// Loop statement
-class LoopStmt : public Statement {
+class LC_AST_API LoopStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -249,7 +249,7 @@ public:
 };
 
 /// Expression statement
-class ExprStmt : public Statement {
+class LC_AST_API ExprStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -274,7 +274,7 @@ public:
 };
 
 /// Switch statement
-class SwitchStmt : public Statement {
+class LC_AST_API SwitchStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -302,7 +302,7 @@ public:
 };
 
 /// Case statement of switch
-class SwitchCaseStmt : public Statement {
+class LC_AST_API SwitchCaseStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -330,7 +330,7 @@ public:
 };
 
 /// Default statement of switch
-class SwitchDefaultStmt : public Statement {
+class LC_AST_API SwitchDefaultStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -347,7 +347,7 @@ public:
 };
 
 /// For statement
-class ForStmt : public Statement {
+class LC_AST_API ForStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -386,7 +386,7 @@ public:
 };
 
 /// Comment statement
-class CommentStmt : public Statement {
+class LC_AST_API CommentStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -457,7 +457,7 @@ public:
 //   ...
 // }
 
-class RayQueryStmt : public Statement {
+class LC_AST_API RayQueryStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -482,7 +482,7 @@ public:
     LUISA_STATEMENT_COMMON()
 };
 
-class AutoDiffStmt : public Statement {
+class LC_AST_API AutoDiffStmt : public Statement {
     friend class CallableLibrary;
 
 private:
@@ -499,7 +499,7 @@ public:
 };
 
 /// Suspend statement
-class SuspendStmt : public Statement {
+class LC_AST_API SuspendStmt : public Statement {
 
 private:
     const uint _token;
@@ -514,8 +514,9 @@ public:
     [[nodiscard]] auto token() const noexcept { return _token; }
     LUISA_STATEMENT_COMMON()
 };
+
 /// Bind Promise statement
-class CoroBindStmt : public Statement {
+class LC_AST_API CoroBindStmt : public Statement {
 
 private:
     const Expression *_expr;
@@ -533,7 +534,7 @@ public:
     LUISA_STATEMENT_COMMON()
 };
 
-class PrintStmt : public Statement {
+class LC_AST_API PrintStmt : public Statement {
     friend class CallableLibrary;
 
 private:

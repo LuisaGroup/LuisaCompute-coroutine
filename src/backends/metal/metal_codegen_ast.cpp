@@ -957,18 +957,8 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
             _scratch << ">";
             break;
         }
-        case CallOp::BYTE_BUFFER_WRITE: {
-            _scratch << "byte_buffer_write<";
-            _emit_type_name(expr->type());
-            _scratch << ">";
-            break;
-        }
-        case CallOp::BYTE_BUFFER_SIZE: {
-            _scratch << "byte_buffer_size<";
-            _emit_type_name(expr->type());
-            _scratch << ">";
-            break;
-        }
+        case CallOp::BYTE_BUFFER_WRITE: _scratch << "byte_buffer_write"; break;
+        case CallOp::BYTE_BUFFER_SIZE: _scratch << "byte_buffer_size"; break;
         case CallOp::TEXTURE_READ: _scratch << "texture_read"; break;
         case CallOp::TEXTURE_WRITE: _scratch << "texture_write"; break;
         case CallOp::TEXTURE_SIZE: _scratch << "texture_size"; break;

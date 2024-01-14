@@ -138,7 +138,7 @@ private:
     using FrameType = std::remove_reference_t<FrameRef>;
     using Container = compute::SOA<FrameType>;
     bool static constexpr is_soa = true;
-    bool sort_base_gather = true;
+    bool sort_base_gather = false;
     bool static constexpr use_compact = true;
     bool static constexpr sort_at_compact = false;
     Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;

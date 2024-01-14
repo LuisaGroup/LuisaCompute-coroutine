@@ -132,15 +132,27 @@ public:
     }
 };
 
+struct WavefrontCoroDispatcherConfig {
+    uint max_instance_count = 2_M;
+    bool soa = true;
+    bool sort = false;
+    bool compact = true;
+    bool debug = false;
+    luisa::vector<luisa::string> hint_fields;
+};
+
 template<typename FrameRef, typename... Args>
 class WavefrontCoroDispatcher : public CoroDispatcherBase<void(FrameRef, Args...)> {
+
+public:
+    using Config = WavefrontCoroDispatcherConfig;
+
 private:
     using FrameType = std::remove_reference_t<FrameRef>;
     using Container = compute::SOA<FrameType>;
-    bool static constexpr is_soa = true;
+    bool is_soa = true;
     bool sort_base_gather = false;
-    bool static constexpr use_compact = true;
-    bool static constexpr sort_at_compact = false;
+    bool use_compact = true;
     Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
     luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
@@ -174,25 +186,28 @@ public:
     bool all_dispatched() const noexcept;
     bool all_done() const noexcept;
 
-    WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream &stream,
-                            uint max_frame_count = 2000000,
-                            // bool use_soa = true, bool sort_token_on_gather = false,
-                            luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
+    WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine,
+                            Device &device, Stream &stream,
+                            const WavefrontCoroDispatcherConfig &config) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
-          _max_frame_count{max_frame_count}, _stream{stream}, _debug{debug}, _frame{device.create_soa<FrameType>(max_frame_count)} {
+          is_soa{config.soa},
+          sort_base_gather{config.sort && config.hint_fields.empty()},
+          use_compact{config.compact},
+          _max_frame_count{config.max_instance_count},
+          _stream{stream}, _debug{config.debug},
+          _frame{device.create_soa<FrameType>(config.max_instance_count)} {
         /*if (device.backend_name() != "cuda") {//only cuda can sort
             sort_base_gather = false;
             hint_token = {};
             LUISA_INFO("Using wavefront dispatcher without cuda, the sorting will be disabled!");
         }*/
-        bool use_sort = sort_base_gather | !hint_token.empty();
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
-        _resume_index = device.create_buffer<uint>(max_frame_count);
-        if (use_sort) {
-            _temp_index = device.create_buffer<uint>(max_frame_count);
-            _temp_key[0] = device.create_buffer<uint>(max_frame_count);
-            _temp_key[1] = device.create_buffer<uint>(max_frame_count);
+        _resume_index = device.create_buffer<uint>(_max_frame_count);
+        if (config.sort) {
+            _temp_index = device.create_buffer<uint>(_max_frame_count);
+            _temp_key[0] = device.create_buffer<uint>(_max_frame_count);
+            _temp_key[1] = device.create_buffer<uint>(_max_frame_count);
         }
         _resume_count = device.create_buffer<uint>(max_sub_coro);
         _resume_offset = device.create_buffer<uint>(max_sub_coro);
@@ -205,7 +220,7 @@ public:
         _host_offset.resize(max_sub_coro);
         _host_count.resize(max_sub_coro);
         _have_hint.resize(max_sub_coro, false);
-        for (auto &token : hint_token) {
+        for (auto &token : config.hint_fields) {
             auto id = coroutine->coro_tokens().find(token);
             if (id != coroutine->coro_tokens().end())
                 _have_hint[id->second] = true;
@@ -215,15 +230,15 @@ public:
         for (auto i = 0u; i < max_sub_coro; i++) {
             if (i) {
                 _host_count[i] = 0;
-                _host_offset[i] = max_frame_count;
+                _host_offset[i] = _max_frame_count;
             } else {
-                _host_count[i] = max_frame_count;
+                _host_count[i] = _max_frame_count;
                 _host_offset[i] = 0;
             }
         }
         Callable get_coro_token = [&](UInt index) {
-            $if (index > max_frame_count) {
-                device_log("index {} out of range {}", index, max_frame_count);
+            $if (index > _max_frame_count) {
+                device_log("index {} out of range {}", index, _max_frame_count);
             };
             auto frame = _frame->read(index);
             return read_promise<uint>(frame, "coro_token") & token_mask;
@@ -236,7 +251,7 @@ public:
             return _resume_index->read(index);
         };
         Callable get_coro_hint = [&](UInt index) {
-            if (hint_token.size() != 0) {
+            if (!config.hint_fields.empty()) {
                 auto id = keep_index(index);
                 auto frame = _frame->read(id);
 
@@ -245,15 +260,15 @@ public:
                 return def<uint>(0u);
             }
         };
-        if (use_sort) {
-            _sort_temp_storage = radix_sort::temp_storage(device, max_frame_count, std::max(128u, max_sub_coro));
+        if (config.sort) {
+            _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(128u, max_sub_coro));
         }
         if (sort_base_gather) {
-            _sort_token = radix_sort(device, max_frame_count, _sort_temp_storage,
+            _sort_token = radix_sort(device, _max_frame_count, _sort_temp_storage,
                                      &get_coro_token, &id, &get_coro_token, 1, max_sub_coro);
         }
-        if (!hint_token.empty()) {
-            _sort_hint = radix_sort(device, max_frame_count, _sort_temp_storage,
+        if (!config.hint_fields.empty()) {
+            _sort_hint = radix_sort(device, _max_frame_count, _sort_temp_storage,
                                     &get_coro_hint, &keep_index);
         }
 
@@ -281,7 +296,7 @@ public:
             }
 
             (*coroutine)(frame, args...);
-            if constexpr (is_soa) {
+            if (is_soa) {
                 frame_buffer.write(frame_id, frame, coroutine->graph().node(0u)->output_state_members);
             } else {
                 frame_buffer.write(frame_id, frame);
@@ -303,7 +318,7 @@ public:
                 };
                 auto frame_id = index.read(x);
                 Var<FrameType> frame;
-                if constexpr (is_soa) {
+                if (is_soa) {
                     //frame = frame_buffer.read(frame_id);
                     frame = frame_buffer.read(frame_id, coroutine->graph().node(i)->input_state_members);
                 } else {
@@ -320,7 +335,7 @@ public:
                     };
                 }
                 (*coroutine)[i](frame, args...);
-                if constexpr (is_soa) {
+                if (is_soa) {
                     frame_buffer.write(frame_id, frame, coroutine->graph().node(i)->output_state_members);
                 } else {
                     frame_buffer.write(frame_id, frame);
@@ -424,7 +439,7 @@ public:
                 initialize_coroframe(frame, def<uint3>(0, 0, 0));
             };
             $if (x < max_sub_coro) {
-                count.write(x, ite(x == 0, max_frame_count, 0u));
+                count.write(x, ite(x == 0, _max_frame_count, 0u));
             };
         };
         Kernel1D clear = [&](BufferUInt buffer, UInt n) {
@@ -453,8 +468,20 @@ public:
         _stream << _initialize_shader(_resume_count, _frame, _max_frame_count).dispatch(_max_frame_count);
     }
 };
+
+struct PersistentCoroDispatcherConfig {
+    uint max_thread_count = 128_k;
+    uint block_size = 128;
+    uint fetch_size = 128;
+    bool debug = false;
+};
+
 template<typename FrameRef, typename... Args>
 class PersistentCoroDispatcher : public CoroDispatcherBase<void(FrameRef, Args...)> {
+
+public:
+    using Config = PersistentCoroDispatcherConfig;
+
 private:
     using FrameType = std::remove_reference_t<FrameRef>;
     Shader1D<Buffer<uint>, uint, Args...> _pt_shader;
@@ -472,19 +499,22 @@ private:
 public:
     bool all_dispatched() const noexcept;
     bool all_done() const noexcept;
-    PersistentCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream &stream,
-                             uint max_thread_count = 1024 * 128, uint block_size = 128, uint fetch_size = 128, bool debug = false) noexcept
+    PersistentCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine,
+                             Device &device, Stream &stream,
+                             const PersistentCoroDispatcherConfig &config) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
-          _max_thread_count{max_thread_count}, _block_size{block_size}, _debug{debug}, _stream{stream} {
+          _max_thread_count{config.max_thread_count},
+          _block_size{config.block_size},
+          _debug{config.debug}, _stream{stream} {
         _global = device.create_buffer<uint>(1);
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
         _dispatched = false;
         _done = false;
         Kernel1D main_kernel = [&](BufferUInt global, UInt dispatch_size, Var<Args>... args) {
-            set_block_size(block_size, 1, 1);
+            set_block_size(config.block_size, 1, 1);
             auto q_fac = 1u;
-            auto shared_queue_size = block_size * q_fac;
+            auto shared_queue_size = config.block_size * q_fac;
             Shared<FrameType> frames{shared_queue_size};
             Shared<uint> path_id{shared_queue_size};
             Shared<uint> work_counter{max_sub_coro};
@@ -494,7 +524,7 @@ public:
             //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
             //Shared<uint> tag_offset{pipeline().surfaces().size()};
             $for (index, 0u, q_fac) {
-                initialize_coroframe(frames[index * block_size + thread_x()], def<uint3>(0, 0, 0));
+                initialize_coroframe(frames[index * config.block_size + thread_x()], def<uint3>(0, 0, 0));
             };
             $if (thread_x() < max_sub_coro) {
                 $if (thread_x() == 0) {
@@ -541,12 +571,12 @@ public:
                 }
             };*/
                 sync_block();
-                $if (thread_x() == block_size - 1) {
+                $if (thread_x() == config.block_size - 1) {
                     $if ((workload[0] >= workload[1]) & (rem_global[0] == 1u)) {//fetch new workload
-                        workload[0] = global.atomic(0u).fetch_add(block_size * fetch_size);
+                        workload[0] = global.atomic(0u).fetch_add(config.block_size * config.fetch_size);
                         if (_debug)
                             device_log("block {}, fetch workload: {}", block_x(), workload[0]);
-                        workload[1] = min(workload[0] + block_size * fetch_size, dispatch_size);
+                        workload[1] = min(workload[0] + config.block_size * config.fetch_size, dispatch_size);
                         $if (workload[0] >= dispatch_size) {
                             rem_global[0] = 0u;
                         };
@@ -572,10 +602,10 @@ public:
                 work_offset[1] = 0;
                 sync_block();
                 $for (index, 0u, q_fac) {//collect indices
-                    auto frame = frames[index * block_size + thread_x()];
+                    auto frame = frames[index * config.block_size + thread_x()];
                     $if ((read_promise<uint>(frame, "coro_token") & token_mask) == work_stat[1]) {
                         auto id = work_offset.atomic(0).fetch_add(1u);
-                        path_id[id] = index * block_size + thread_x();
+                        path_id[id] = index * config.block_size + thread_x();
                     };
                 };
                 auto gen_st = workload[0];

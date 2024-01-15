@@ -135,7 +135,7 @@ public:
 struct WavefrontCoroDispatcherConfig {
     uint max_instance_count = 2_M;
     bool soa = true;
-    bool sort = false;
+    bool atomic = false;
     bool compact = true;
     bool debug = false;
     luisa::vector<luisa::string> hint_fields;
@@ -191,7 +191,7 @@ public:
                             const WavefrontCoroDispatcherConfig &config, uint hint_range=UINT32_MAX) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           is_soa{config.soa},
-          sort_base_gather{config.sort && config.hint_fields.empty()},
+          sort_base_gather{!config.atomic},
           use_compact{config.compact},
           _max_frame_count{config.max_instance_count},
           _stream{stream}, _debug{config.debug},
@@ -201,10 +201,11 @@ public:
             hint_token = {};
             LUISA_INFO("Using wavefront dispatcher without cuda, the sorting will be disabled!");
         }*/
+        bool use_sort = sort_base_gather||!config.hint_fields.empty();
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
         _resume_index = device.create_buffer<uint>(_max_frame_count);
-        if (config.sort) {
+        if (use_sort) {
             _temp_index = device.create_buffer<uint>(_max_frame_count);
             _temp_key[0] = device.create_buffer<uint>(_max_frame_count);
             _temp_key[1] = device.create_buffer<uint>(_max_frame_count);
@@ -262,7 +263,7 @@ public:
                 return def<uint>(0u);
             }
         };
-        if (config.sort) {
+        if (use_sort) {
             _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(std::min(hint_range,128u), max_sub_coro));
         }
         if (sort_base_gather) {

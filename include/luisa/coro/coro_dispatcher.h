@@ -240,7 +240,6 @@ public:
                 auto id = keep_index(index,val);
                 auto frame = _frame->read(id);
                 auto x=read_promise<uint>(frame, "coro_hint");
-                x=0;
                 return x;
             } else {
                 return def<uint>(0u);

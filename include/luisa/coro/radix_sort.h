@@ -11,7 +11,7 @@ namespace luisa::compute {
 namespace radix_sort {
 const uint HIST_BLOCK_SIZE = 128;
 const uint SM_COUNT = 256;
-const uint ONESWEEP_BLOCK_SIZE = 256;
+const uint ONESWEEP_BLOCK_SIZE = 128;
 const uint ONESWEEP_ITEM_COUNT = 32;
 const uint WARP_LOG = 5;
 const uint WARP_SIZE = 1 << WARP_LOG;

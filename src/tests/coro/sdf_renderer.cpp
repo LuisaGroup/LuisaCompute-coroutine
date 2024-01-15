@@ -8,7 +8,7 @@ using namespace luisa::compute;
 
 struct alignas(4) CoroFrame {};
 
-LUISA_COROFRAME_STRUCT(CoroFrame){};
+LUISA_COROFRAME_STRUCT(CoroFrame) {};
 
 int main(int argc, char *argv[]) {
 
@@ -212,8 +212,18 @@ int main(int argc, char *argv[]) {
 
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
     //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
-    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, resolution.x * resolution.y, {}, false};
-    //coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256u, 128u, 3u, false};
+    // coro::WavefrontCoroDispatcherConfig wf_config{
+    //     .max_instance_count = resolution.x * resolution.y,
+    //     .debug = false,
+    // };
+    // coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, wf_config};
+    coro::PersistentCoroDispatcherConfig config{
+        .max_thread_count = 256u * 256u,
+        .block_size = 128u,
+        .fetch_size = 3u,
+        .debug = false,
+    };
+    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, config};
     stream << clear_shader().dispatch(resolution)
            << synchronize();
     /*for (auto i = 0u; i < 100u; i++) {

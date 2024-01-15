@@ -42,6 +42,7 @@
 
 #include "extensions/cuda_dstorage.h"
 #include "extensions/cuda_denoiser.h"
+#include "extensions/cuda_pinned_memory.h"
 
 #ifdef LUISA_COMPUTE_ENABLE_NVTT
 #include "extensions/cuda_texture_compression.h"
@@ -139,6 +140,19 @@ CUDADevice::CUDADevice(Context &&ctx,
     // prepare default shaders
     with_handle([&] {
         auto error = cuModuleLoadData(&_builtin_kernel_module, builtin_kernel_ptx.data());
+        auto retry_with_ptx_version_patched = [this](auto error, auto &builtin_kernel_ptx) noexcept -> CUresult {
+            const char *error_string = nullptr;
+            cuGetErrorString(error, &error_string);
+            LUISA_WARNING_WITH_LOCATION(
+                "Failed to load built-in kernels: {}. "
+                "Re-trying with patched PTX version...",
+                error_string ? error_string : "Unknown error");
+            CUDAShader::_patch_ptx_version(builtin_kernel_ptx);
+            return cuModuleLoadData(&_builtin_kernel_module, builtin_kernel_ptx.data());
+        };
+        if (error == CUDA_ERROR_UNSUPPORTED_PTX_VERSION) {
+            error = retry_with_ptx_version_patched(error, builtin_kernel_ptx);
+        }
         if (error != CUDA_SUCCESS) {
             const char *error_string = nullptr;
             cuGetErrorString(error, &error_string);
@@ -150,6 +164,9 @@ CUDADevice::CUDADevice(Context &&ctx,
             options.front() = "-arch=compute_60";
             builtin_kernel_ptx = _compiler->compile(builtin_kernel_src, "luisa_builtin.cu", options);
             error = cuModuleLoadData(&_builtin_kernel_module, builtin_kernel_ptx.data());
+            if (error == CUDA_ERROR_UNSUPPORTED_PTX_VERSION) {
+                error = retry_with_ptx_version_patched(error, builtin_kernel_ptx);
+            }
         }
         LUISA_CHECK_CUDA(error);
         LUISA_CHECK_CUDA(cuModuleGetFunction(
@@ -209,7 +226,7 @@ BufferCreationInfo CUDADevice::create_buffer(const Type *element,
             return new_with_allocator<CUDAIndirectDispatchBuffer>(elem_count);
         });
         info.handle = reinterpret_cast<uint64_t>(buffer);
-        info.native_handle = reinterpret_cast<void *>(buffer->handle());
+        info.native_handle = reinterpret_cast<void *>(buffer->device_address());
         info.element_stride = sizeof(CUDAIndirectDispatchBuffer::Dispatch);
         info.total_size_bytes = buffer->size_bytes();
     } else if (element == Type::of<void>()) {
@@ -220,7 +237,7 @@ BufferCreationInfo CUDADevice::create_buffer(const Type *element,
                         new_with_allocator<CUDABuffer>(size);
         });
         info.handle = reinterpret_cast<uint64_t>(buffer);
-        info.native_handle = reinterpret_cast<void *>(buffer->handle());
+        info.native_handle = reinterpret_cast<void *>(buffer->device_address());
     } else {
         info.element_stride = CUDACompiler::type_size(element);
         info.total_size_bytes = info.element_stride * elem_count;
@@ -229,7 +246,7 @@ BufferCreationInfo CUDADevice::create_buffer(const Type *element,
                         new_with_allocator<CUDABuffer>(size);
         });
         info.handle = reinterpret_cast<uint64_t>(buffer);
-        info.native_handle = reinterpret_cast<void *>(buffer->handle());
+        info.native_handle = reinterpret_cast<void *>(buffer->device_address());
     }
     return info;
 }
@@ -754,7 +771,7 @@ ShaderCreationInfo CUDADevice::load_shader(luisa::string_view name_in,
         .checksum = 0u,
         .kind = CUDAShaderMetadata::Kind::UNKNOWN,
         .max_register_count = 0u,
-        .block_size = uint3{1u, 1u, 1u},
+        .block_size = make_uint3(0u),
         .argument_types = [arg_types] {
             luisa::vector<luisa::string> types;
             types.reserve(arg_types.size());
@@ -930,6 +947,7 @@ DeviceExtension *CUDADevice::extension(luisa::string_view name) noexcept {
     LUISA_COMPUTE_CREATE_CUDA_EXTENSION(Denoiser, _denoiser_ext)
 #endif
     LUISA_COMPUTE_CREATE_CUDA_EXTENSION(DStorage, _dstorage_ext)
+    LUISA_COMPUTE_CREATE_CUDA_EXTENSION(PinnedMemory, _pinned_memory_ext)
 #ifdef LUISA_COMPUTE_ENABLE_NVTT
     LUISA_COMPUTE_CREATE_CUDA_EXTENSION(TexCompress, _tex_comp_ext)
 #endif

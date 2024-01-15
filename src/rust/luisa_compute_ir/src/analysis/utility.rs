@@ -904,6 +904,7 @@ pub(crate) fn is_primitives_read_only_function(func: &Func, args: &CBoxedSlice<N
 
         Func::Unknown0 => todo!(),
         Func::Unknown1 => todo!(),
+        Func::External(_) => true,
     }
 }
 

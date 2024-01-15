@@ -949,6 +949,8 @@ pub enum Func {
     // ArgT -> ArgT
     CpuCustomOp(CArc<CpuCustomOp>),
 
+    External(CBoxedSlice<u8>),
+
     ShaderExecutionReorder, // (uint hint, uint hint_bits): void
 
     Unknown0,
@@ -1818,6 +1820,7 @@ impl NodeRef {
             _ => false,
         }
     }
+
     pub fn is_primitive(&self) -> bool {
         match self.type_().as_ref() {
             Type::Primitive(..) => true,
@@ -1833,6 +1836,7 @@ impl NodeRef {
     pub fn is_local_primitive(&self) -> bool {
         self.is_primitive() && self.is_local()
     }
+
     pub fn is_reference_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { by_value } => !*by_value,

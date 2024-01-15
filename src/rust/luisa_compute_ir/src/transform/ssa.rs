@@ -93,8 +93,9 @@ impl ToSSAImpl {
     ) {
         let value = self.promote(value, builder, record);
         if var.is_local() || var.is_reference_argument() {
-            record.phis.insert(var);
-
+            if !record.defined.contains(&var) {
+                record.phis.insert(var);
+            }
             if !self.local_defs.contains(&var) {
                 builder.update(var, value);
                 // this outter variable is not previously seen
@@ -104,7 +105,6 @@ impl ToSSAImpl {
                     record.stored.insert_at_top(var, val);
                 }
             }
-
             record.stored.insert(var, value);
         } else {
             // the hardpart

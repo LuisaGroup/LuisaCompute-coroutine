@@ -1,10 +1,7 @@
-use crate::ir::collect_nodes;
+use crate::ir::{collect_nodes, CallableModule, KernelModule};
 use crate::{
     context::is_type_equal,
-    ir::{
-        BasicBlock, CallableModule, Func, Instruction, KernelModule, Module, NodeRef, PhiIncoming,
-        SwitchCase, Type,
-    },
+    ir::{BasicBlock, Func, Instruction, Module, NodeRef, PhiIncoming, SwitchCase, Type},
     Pooled,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};

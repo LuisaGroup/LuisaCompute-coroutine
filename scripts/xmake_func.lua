@@ -27,7 +27,7 @@ option("_lc_bin_dir")
 set_default(false)
 set_showmenu(false)
 add_deps("enable_mimalloc", "enable_unity_build", "enable_simd", "dx_backend", "vk_backend", "cuda_backend",
-				"metal_backend", "cpu_backend", "enable_tests", "py_include", "py_linkdir", "py_libs",
+				"metal_backend", "cpu_backend", "enable_tests", "enable_clangcxx", "py_include", "py_linkdir", "py_libs",
 				"enable_ir", "enable_api", "enable_dsl", "enable_gui", "bin_dir", "_lc_enable_py", "_lc_vk_path", "_lc_enable_rust", "_lc_config_public")
 before_check(function(option)
 	local v = import("options", {
@@ -112,9 +112,6 @@ before_check(function(option)
 	-- checking rust
 	import("lib.detect.find_tool")
 	local rust_cargo = find_tool("cargo") ~= nil
-	if not rust_cargo then
-		utils.warning("Cargo not installed, IR module and CPU backend disabled.")
-	end
 	local enable_ir = option:dep("enable_ir")
 	local cpu_backend = option:dep("cpu_backend")
 	if not enable_ir:enabled() then

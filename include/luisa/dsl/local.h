@@ -43,7 +43,7 @@ public:
         fb->assign(_expression, another._expression);
     }
     Local &operator=(const Local &rhs) noexcept {
-        if (&rhs != this) [[likely]] {
+        if (std::addressof(rhs) != this) [[likely]] {
             if (_size != rhs._size) [[unlikely]] {
                 detail::local_array_error_sizes_missmatch(_size, rhs._size);
             }
@@ -59,6 +59,7 @@ public:
 
     [[nodiscard]] auto expression() const noexcept { return _expression; }
     [[nodiscard]] auto size() const noexcept { return _size; }
+    [[nodiscard]] auto type() const noexcept { return _expression->type(); }
 
     template<typename U>
         requires is_integral_expr_v<U>
@@ -76,6 +77,18 @@ public:
 
     template<typename I, typename U>
     void write(I &&i, U &&u) const noexcept { (*this)[std::forward<I>(i)] = std::forward<U>(u); }
+
+    // for autodiff; see definitions in dsl/builtin.h
+    void requires_grad() const noexcept;
+    void backward() const noexcept;
+    void backward(const Local<T> grad) const noexcept;
+    [[nodiscard]] Local<T> grad() const noexcept;
+    Local<T> detach() const noexcept;
+
+    [[nodiscard]] Var<uint64_t> address() const noexcept {
+        return def<uint64_t>(detail::FunctionBuilder::current()->call(
+            Type::of<uint64_t>(), CallOp::ADDRESS_OF, {_expression}));
+    }
 };
 
 }// namespace luisa::compute
@@ -94,4 +107,3 @@ template<typename T>
                   LUISA_DISABLE_DSL_ADDRESS_OF_MESSAGE);
     std::abort();
 }
-

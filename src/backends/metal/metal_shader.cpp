@@ -162,10 +162,12 @@ void MetalShader::launch(MetalCommandEncoder &encoder,
     };
 
     auto warn_empty_launch = [&]() noexcept {
+#ifndef NDEBUG
         LUISA_WARNING_WITH_LOCATION(
             "Empty launch detected. "
             "This might be caused by a shader dispatch command with all dispatch sizes set to zero. "
             "The command will be ignored.");
+#endif
     };
 
     if (command->is_indirect()) {
@@ -284,7 +286,7 @@ void MetalShader::launch(MetalCommandEncoder &encoder,
             compute_encoder->useResource(info.buffer, mtl_usage(Usage::READ_WRITE));
         }
 
-        auto size = argument_offset;
+        auto size = luisa::align(argument_offset, argument_alignment);
         compute_encoder->setBytes(argument_buffer.data(), size, 0u);
 
         for (auto dispatch_size : dispatch_sizes) {

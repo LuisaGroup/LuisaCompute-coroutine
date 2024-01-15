@@ -80,7 +80,6 @@ public:
     using Tag = Function::Tag;
     using Constant = Function::Constant;
     using Binding = Function::Binding;
-    using CpuCallback = Function::CpuCallback;
 
 private:
     ScopeStmt _body;
@@ -106,7 +105,6 @@ private:
     luisa::vector<Variable> _shared_variables;
     luisa::vector<Usage> _variable_usages;
     luisa::vector<std::pair<std::byte *, size_t /* alignment */>> _temporary_data;
-    luisa::vector<CpuCallback> _cpu_callbacks;
     luisa::unordered_map<luisa::string, uint> _coro_tokens;
     CallOpSet _direct_builtin_callables;
     CallOpSet _propagated_builtin_callables;
@@ -206,8 +204,6 @@ public:
     [[nodiscard]] auto bound_arguments() const noexcept { return luisa::span{_bound_arguments}; }
     /// Return a span of unbound arguments.
     [[nodiscard]] auto unbound_arguments() const noexcept { return luisa::span{_arguments}.subspan(_bound_arguments.size()); }
-    /// Return a span of cpu callbacks
-    [[nodiscard]] auto cpu_callbacks() const noexcept { return luisa::span{_cpu_callbacks}; }
     /// Return a span of custom callables.
     [[nodiscard]] auto custom_callables() const noexcept { return luisa::span{_used_custom_callables}; }
     /// Return a span of external callables.
@@ -346,6 +342,9 @@ public:
     [[nodiscard]] const CallExpr *call(const Type *type /* nullptr for void */, CallOp call_op, std::initializer_list<const Expression *> args) noexcept;
     /// Create call expression
     [[nodiscard]] const CallExpr *call(const Type *type /* nullptr for void */, Function custom, std::initializer_list<const Expression *> args) noexcept;
+    // Create make_vecN call
+    [[nodiscard]] const CallExpr *make_vector(const Type *type, luisa::span<const Expression *const> args) noexcept;
+
     /// Call function
     void call(CallOp call_op, std::initializer_list<const Expression *> args) noexcept;
     /// Call custom function
@@ -354,6 +353,7 @@ public:
     [[nodiscard]] const CallExpr *call(const Type *type /* nullptr for void */, CallOp call_op, luisa::span<const Expression *const> args) noexcept;
     /// Create call expression
     [[nodiscard]] const CallExpr *call(const Type *type /* nullptr for void */, Function custom, luisa::span<const Expression *const> args) noexcept;
+    [[nodiscard]] const CpuCustomOpExpr *call(const Type *type, void (*f)(void *, void *), void (*dtor)(void *), void *data, const Expression *arg) noexcept;
     /// Call function
     void call(CallOp call_op, luisa::span<const Expression *const> args) noexcept;
     /// Call custom function
@@ -418,7 +418,7 @@ public:
     [[nodiscard]] const CallExpr *coro_token() noexcept;
 
     /// Add print statement
-    void print_(luisa::string_view format, luisa::span<const Expression *const> args) noexcept;
+    void print_(luisa::string format, luisa::span<const Expression *const> args) noexcept;
 
     // For autodiff use only
     [[nodiscard]] const Statement *pop_stmt() noexcept;
@@ -451,6 +451,8 @@ public:
     void push_scope(ScopeStmt *) noexcept;
     /// Pop a scope
     void pop_scope(const ScopeStmt *) noexcept;
+    /// Check if inside the function level scope
+    [[nodiscard]] bool inside_function_scope() const noexcept;
     /// Mark variable uasge
     void mark_variable_usage(uint32_t uid, Usage usage) noexcept;
     /// Separate arguments and bindings, make command need no bindings info, only work with kernel.

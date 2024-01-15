@@ -9,7 +9,7 @@ using namespace luisa::compute;
 
 struct alignas(4) CoroFrame {
 };
-LUISA_COROFRAME_STRUCT(CoroFrame){};
+LUISA_COROFRAME_STRUCT(CoroFrame) {};
 
 struct alignas(8) User {
 public:
@@ -102,7 +102,8 @@ int main(int argc, char *argv[]) {
         x_buffer.write(id, 0u);
     };
     auto clear_shader = device.compile(clear);
-    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, 17, {}, true};
+    coro::WavefrontCoroDispatcherConfig config{.max_instance_count = 17, .debug = true};
+    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, config};
     stream << clear_shader(x_buffer).dispatch(n);
 
     Wdispatcher(x_buffer, n, n);
@@ -133,7 +134,13 @@ int main(int argc, char *argv[]) {
     for (auto i = 0u; i < n; ++i) {
         LUISA_INFO("x[{}] = {}", i, x_vec[i]);
     }
-    coro::PersistentCoroDispatcher PTdispatcher{&coro, device, stream, 128 * 128 * 4u, 256u, 2u, false};
+    coro::PersistentCoroDispatcherConfig pt_config{
+        .max_thread_count = 128 * 128 * 4u,
+        .block_size = 256,
+        .fetch_size = 2,
+        .debug = false
+    };
+    coro::PersistentCoroDispatcher PTdispatcher{&coro, device, stream, pt_config};
     stream << clear_shader(x_buffer).dispatch(n);
     PTdispatcher(x_buffer, n, n);
     /*for (auto iter = 0u; iter < 6; ++iter) {

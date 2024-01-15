@@ -273,7 +273,10 @@ impl Backend for RustBackend {
         //     println!("{}", debug);
         // }
         let tic = std::time::Instant::now();
-        let mut gened = codegen::cpp::CpuCodeGen::run(&kernel);
+        let native_include = unsafe { std::ffi::CStr::from_ptr(options.native_include) }
+            .to_str()
+            .unwrap();
+        let mut gened = codegen::cpp::CpuCodeGen::run(&kernel, &native_include);
         debug!(
             "Source generated in {:.3}ms",
             (std::time::Instant::now() - tic).as_secs_f64() * 1e3
@@ -297,10 +300,7 @@ impl Backend for RustBackend {
                     captures.push(convert_capture(*c));
                 }
                 for op in kernel.cpu_custom_ops.as_ref() {
-                    custom_ops.push(defs::CpuCustomOp {
-                        func: op.func,
-                        data: op.data,
-                    });
+                    custom_ops.push(op.clone());
                 }
             }
             shader = shader::ShaderImpl::new(

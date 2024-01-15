@@ -591,6 +591,7 @@ struct Func {
         Mat4,
         Callable,
         CpuCustomOp,
+        External,
         ShaderExecutionReorder,
         Unknown0,
         Unknown1,
@@ -612,12 +613,17 @@ struct Func {
         CArc<CpuCustomOp> _0;
     };
 
+    struct External_Body {
+        CBoxedSlice<uint8_t> _0;
+    };
+
     Tag tag;
     union {
         Unreachable_Body unreachable;
         Assert_Body assert;
         Callable_Body callable;
         CpuCustomOp_Body cpu_custom_op;
+        External_Body external;
     };
 };
 

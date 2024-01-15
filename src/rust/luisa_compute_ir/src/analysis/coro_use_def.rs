@@ -485,7 +485,8 @@ impl<'a> CoroUseDefAnalysis<'a> {
             | Func::Texture2dWrite
             | Func::Texture3dWrite
             | Func::BindlessBufferWrite
-            | Func::ShaderExecutionReorder => {
+            | Func::ShaderExecutionReorder
+            | Func::External(_) => {
                 for &arg in args {
                     self.mark_use(arg, kills, result, helpers);
                 }

@@ -450,6 +450,16 @@ impl<'a> CoroScopeMaterializer<'a> {
                 );
                 process_return!(call)
             }
+            Func::External(c) => {
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|&a| self.value_or_load(a, ctx, state))
+                    .collect();
+                let call = state
+                    .builder
+                    .call(Func::External(c.clone()), args.as_slice(), ret.type_().clone());
+                process_return!(call)
+            }
             // replayable but need special handling
             Func::Unreachable(_) => {
                 let call = state.builder.call(func.clone(), &[], ret.type_().clone());
@@ -1058,10 +1068,8 @@ impl Transform for MaterializeCoro {
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);
-        //coro_graph.dump();
         let coro_use_def = CoroUseDefAnalysis::analyze(&coro_graph);
         let coro_transition_graph = CoroTransitionGraph::build(&coro_graph, &coro_use_def);
-        //coro_transition_graph.dump();
         let coro_frame = CoroFrame::build(&coro_graph, &coro_transition_graph);
         coro_frame.dump();
         let mut entry = CoroScopeMaterializer::new(&coro_frame, &callable, None).materialize();

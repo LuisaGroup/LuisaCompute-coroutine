@@ -14,7 +14,7 @@ using namespace luisa::compute;
 struct alignas(4) Skyline {
 };
 const bool SHOW = true;
-LUISA_COROFRAME_STRUCT(Skyline){};
+LUISA_COROFRAME_STRUCT(Skyline) {};
 int main(int argc, char *argv[]) {
 
     Context context{argv[0]};
@@ -861,7 +861,11 @@ int main(int argc, char *argv[]) {
     stream << clear(device_image).dispatch(width, height);
 
     Clock clock;
-    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, width * height / 3, {}, true};
+    coro::WavefrontCoroDispatcherConfig config{
+        .max_instance_count = width * height / 3,
+        .debug = true,
+    };
+    coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, config};
     //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, width * height};
     //coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, 256 * 256 * 2u, 96u, 2u, false};
     /*while (!window.should_close()) {

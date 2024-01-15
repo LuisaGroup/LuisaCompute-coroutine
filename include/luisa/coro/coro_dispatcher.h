@@ -135,7 +135,7 @@ public:
 struct WavefrontCoroDispatcherConfig {
     uint max_instance_count = 2_M;
     bool soa = true;
-    bool sort = false;
+    bool atomic = false;
     bool compact = true;
     bool debug = false;
     luisa::vector<luisa::string> hint_fields;
@@ -176,8 +176,8 @@ private:
     bool _debug;
     void _await_step(Stream &stream) noexcept override;
     radix_sort::temp_storage _sort_temp_storage;
-    radix_sort _sort_token;
-    radix_sort _sort_hint;
+    radix_sort::instance<> _sort_token;
+    radix_sort::instance<Buffer<uint>> _sort_hint;
     luisa::vector<bool> _have_hint;
     compute::Buffer<uint> _temp_key[2];
     compute::Buffer<uint> _temp_index;
@@ -188,10 +188,10 @@ public:
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine,
                             Device &device, Stream &stream,
-                            const WavefrontCoroDispatcherConfig &config) noexcept
+                            const WavefrontCoroDispatcherConfig &config, uint hint_range=UINT32_MAX) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           is_soa{config.soa},
-          sort_base_gather{config.sort && config.hint_fields.empty()},
+          sort_base_gather{!config.atomic},
           use_compact{config.compact},
           _max_frame_count{config.max_instance_count},
           _stream{stream}, _debug{config.debug},
@@ -201,10 +201,11 @@ public:
             hint_token = {};
             LUISA_INFO("Using wavefront dispatcher without cuda, the sorting will be disabled!");
         }*/
+        bool use_sort = sort_base_gather||!config.hint_fields.empty();
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
         _resume_index = device.create_buffer<uint>(_max_frame_count);
-        if (config.sort) {
+        if (use_sort) {
             _temp_index = device.create_buffer<uint>(_max_frame_count);
             _temp_key[0] = device.create_buffer<uint>(_max_frame_count);
             _temp_key[1] = device.create_buffer<uint>(_max_frame_count);
@@ -222,8 +223,10 @@ public:
         _have_hint.resize(max_sub_coro, false);
         for (auto &token : config.hint_fields) {
             auto id = coroutine->coro_tokens().find(token);
-            if (id != coroutine->coro_tokens().end())
+            if (id != coroutine->coro_tokens().end()) {
+                LUISA_ASSERT(id->second<max_sub_coro, "coroutine token {} of id {} out of range {}", token,id->second,max_sub_coro);
                 _have_hint[id->second] = true;
+            }
             else
                 LUISA_WARNING("coroutine token {} not found, hint disabled", token);
         }
@@ -243,33 +246,43 @@ public:
             auto frame = _frame->read(index);
             return read_promise<uint>(frame, "coro_token") & token_mask;
         };
-        Callable id = [&](UInt index) {
+        Callable identical = [&](UInt index) {
             return index;
         };
 
-        Callable keep_index = [&](UInt index) {
-            return _resume_index->read(index);
+        Callable keep_index = [&](UInt index,BufferUInt val) {
+            return val.read(index);
         };
-        Callable get_coro_hint = [&](UInt index) {
+        Callable get_coro_hint = [&](UInt index,BufferUInt val) {
             if (!config.hint_fields.empty()) {
-                auto id = keep_index(index);
+                auto id = keep_index(index,val);
                 auto frame = _frame->read(id);
-
-                return read_promise<uint>(frame, "coro_hint");
+                auto x=read_promise<uint>(frame, "coro_hint");
+                return x;
             } else {
                 return def<uint>(0u);
             }
         };
-        if (config.sort) {
-            _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(128u, max_sub_coro));
+        if (use_sort) {
+            _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(std::min(hint_range,128u), max_sub_coro));
         }
         if (sort_base_gather) {
-            _sort_token = radix_sort(device, _max_frame_count, _sort_temp_storage,
-                                     &get_coro_token, &id, &get_coro_token, 1, max_sub_coro);
+            _sort_token = radix_sort::instance<>(device, _max_frame_count, _sort_temp_storage,
+                                     &get_coro_token, &identical, &get_coro_token, 1, max_sub_coro);
         }
         if (!config.hint_fields.empty()) {
-            _sort_hint = radix_sort(device, _max_frame_count, _sort_temp_storage,
-                                    &get_coro_hint, &keep_index);
+            if(hint_range<=128){
+                _sort_hint = radix_sort::instance<Buffer<uint>>(device, _max_frame_count, _sort_temp_storage,
+                                                    &get_coro_hint, &keep_index, &get_coro_hint, 1, hint_range);
+            }
+            else{
+                auto highbit=0;
+                while((hint_range>>highbit)!=1){
+                    highbit++;
+                }
+                _sort_hint = radix_sort::instance<Buffer<uint>>(device, max_frame_count, _sort_temp_storage,
+                                                                &get_coro_hint, &keep_index, &get_coro_hint, 0, 128, 0, highbit);
+            }
         }
 
         Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, UInt offset, Var<Container> frame_buffer, UInt st_task_id, UInt n, Var<Args>... args) {
@@ -487,14 +500,18 @@ private:
     Shader1D<Buffer<uint>, uint, Args...> _pt_shader;
     Shader1D<Buffer<uint>> _clear_shader;
     Buffer<uint> _global;
+    Buffer<FrameType> _global_frame;
+    Shader1D<Buffer<FrameType>, uint> _initialize_shader;
     uint _max_sub_coro;
     uint _max_thread_count;
     uint _block_size;
+    uint _global_size;
     bool _dispatched;
     bool _done;
     void _await_step(Stream &stream) noexcept;
     void _await_all(Stream &stream) noexcept;
     bool _debug;
+    bool use_global = true;
     Stream &_stream;
 public:
     bool all_dispatched() const noexcept;
@@ -503,32 +520,40 @@ public:
                              Device &device, Stream &stream,
                              const PersistentCoroDispatcherConfig &config) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
-          _max_thread_count{config.max_thread_count},
+          _max_thread_count{(config.max_thread_count+config.block_size-1)/config.block_size},
           _block_size{config.block_size},
           _debug{config.debug}, _stream{stream} {
         _global = device.create_buffer<uint>(1);
+        auto q_fac = 1u;
         uint max_sub_coro = coroutine->suspend_count() + 1;
+        auto g_fac=(uint)std::max((int)(max_sub_coro-q_fac),0);
+        auto global_queue_size= config.block_size * g_fac;
+        if(use_global) {
+            _global_frame = device.create_buffer<FrameType>(_max_thread_count*g_fac);
+            _global_size = _max_thread_count*g_fac;
+        }
         _max_sub_coro = max_sub_coro;
         _dispatched = false;
         _done = false;
         Kernel1D main_kernel = [&](BufferUInt global, UInt dispatch_size, Var<Args>... args) {
             set_block_size(config.block_size, 1, 1);
-            auto q_fac = 1u;
             auto shared_queue_size = config.block_size * q_fac;
             Shared<FrameType> frames{shared_queue_size};
             Shared<uint> path_id{shared_queue_size};
             Shared<uint> work_counter{max_sub_coro};
             Shared<uint> work_offset{2u};
+            Shared<uint> all_token{use_global?(shared_queue_size+global_queue_size):shared_queue_size};
             Shared<uint> workload{2};
             Shared<uint> work_stat{2};//0 max_count,1 max_id
             //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
             //Shared<uint> tag_offset{pipeline().surfaces().size()};
             $for (index, 0u, q_fac) {
+                all_token[index * config.block_size + thread_x()] = 0u;
                 initialize_coroframe(frames[index * config.block_size + thread_x()], def<uint3>(0, 0, 0));
             };
             $if (thread_x() < max_sub_coro) {
                 $if (thread_x() == 0) {
-                    work_counter[thread_x()] = shared_queue_size;
+                    work_counter[thread_x()] = use_global?(shared_queue_size+global_queue_size):shared_queue_size;
                 }
                 $else {
                     work_counter[thread_x()] = 0u;
@@ -601,21 +626,75 @@ public:
                 work_offset[0] = 0;
                 work_offset[1] = 0;
                 sync_block();
-                $for (index, 0u, q_fac) {//collect indices
-                    auto frame = frames[index * config.block_size + thread_x()];
-                    $if ((read_promise<uint>(frame, "coro_token") & token_mask) == work_stat[1]) {
-                        auto id = work_offset.atomic(0).fetch_add(1u);
-                        path_id[id] = index * config.block_size + thread_x();
+                if(!use_global) {
+                    $for (index, 0u, q_fac) {//collect indices
+                        auto frame_token = all_token[index * config.block_size + thread_x()];
+                        $if (frame_token == work_stat[1]) {
+                            auto id = work_offset.atomic(0).fetch_add(1u);
+                            path_id[id] = index * config.block_size + thread_x();
+                        };
                     };
-                };
+                }else{
+                    $for(index, 0u, q_fac) {//collect switch out indices
+                        auto frame_token = all_token[index * config.block_size + thread_x()];
+                        $if (frame_token != work_stat[1]) {
+                            auto id = work_offset.atomic(0).fetch_add(1u);
+                            path_id[id] = index * config.block_size + thread_x();
+                        };
+                    };
+                    sync_block();
+                    $if(shared_queue_size - work_offset[0] < config.block_size) {//no enough work
+                        $for(index, 0u, g_fac) {                           //swap frames
+                            auto global_id = block_x() * global_queue_size + index * config.block_size + thread_x();
+                            auto g_queue_id=index * config.block_size + thread_x();
+                            auto coro_token=all_token[shared_queue_size+g_queue_id];
+                            $if(coro_token == work_stat[1]) {
+                                auto id = work_offset.atomic(1).fetch_add(1u);
+                                $if(id < work_offset[0]) {
+                                    auto dst = path_id[id];
+                                    auto frame_token = all_token[dst];
+                                    $if(coro_token != 0u) {
+                                        $if(frame_token != 0u) {
+                                            auto g_state = _global_frame->read(global_id);
+                                            _global_frame->write(global_id,frames[dst]);
+                                            frames[dst]=g_state;
+                                            all_token[dst]=coro_token;
+                                            all_token[shared_queue_size+g_queue_id]=frame_token;
+
+                                        }
+                                        $else {
+                                            auto g_state = _global_frame->read(global_id);
+                                            frames[dst]=g_state;
+                                            all_token[dst]=coro_token;
+                                            all_token[shared_queue_size+g_queue_id]=frame_token;
+                                        };
+                                    }
+                                    $else {
+                                        $if(frame_token != 0u) {
+                                            _global_frame->write(global_id,frames[dst]);
+                                            all_token[dst]=coro_token;
+                                            all_token[shared_queue_size+g_queue_id]=frame_token;
+                                        };
+                                    };
+                                };
+                            };
+                        };
+                    };
+                }
                 auto gen_st = workload[0];
                 sync_block();
                 auto pid = def(0u);
-                pid = path_id[thread_x()];
+                if (use_global) {
+                    pid = thread_x();
+                } else {
+                    pid = path_id[thread_x()];
+                }
                 auto launch_condition = def(true);
-                launch_condition = (thread_x() < work_offset[0]);
+                if (!use_global) {
+                    launch_condition = (thread_x() < work_offset[0]);
+                }
                 $if (launch_condition) {
-                    $switch (read_promise<uint>(frames[pid], "coro_token") & token_mask) {
+                    $switch (all_token[pid]) {
                         $case (0u) {
                             $if (gen_st + thread_x() < workload[1]) {
                                 work_counter.atomic(0u).fetch_sub(1u);
@@ -623,6 +702,7 @@ public:
                                 initialize_coroframe(frames[pid], def<uint3>(gen_st + thread_x(), 0, 0));
                                 (*coroutine)(frames[pid], args...);//only work when kernel 0s are continue
                                 auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;
+                                all_token[pid]=nxt;
                                 work_counter.atomic(nxt).fetch_add(1u);
                                 workload.atomic(0).fetch_add(1u);
                             };
@@ -631,7 +711,9 @@ public:
                             $case (i) {
                                 work_counter.atomic(i).fetch_sub(1u);
                                 (*coroutine)[i](frames[pid], args...);
-                                work_counter.atomic(read_promise<uint>(frames[pid], "coro_token") & token_mask).fetch_add(1u);
+                                auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;
+                                all_token[pid]=nxt;
+                                work_counter.atomic(nxt).fetch_add(1u);
                             };
                         }
                     };
@@ -648,7 +730,16 @@ public:
         Kernel1D clear = [&](BufferUInt global) {
             global->write(dispatch_x(), 0u);
         };
+        Kernel1D initialize_frame = [&](Var<Buffer<FrameType>> frame_buffer, UInt n) {
+            auto x = dispatch_x();
+            $if (x < n) {
+                auto frame = def<FrameType>();
+                initialize_coroframe(frame, def<uint3>(0, 0, 0));
+                frame_buffer.write(x,frame);
+            };
+        };
         _clear_shader = device.compile(clear);
+        _initialize_shader = device.compile(initialize_frame);
         stream << _clear_shader(_global).dispatch(1u);
     }
     void operator()(prototype_to_coro_dispatcher_t<Args>... args, uint dispatch_size) noexcept override {
@@ -656,6 +747,8 @@ public:
         _dispatched = false;
         _done = false;
         _stream << _clear_shader(_global).dispatch(1u);
+        if(use_global)
+            _stream << _initialize_shader(_global_frame, _global_size).dispatch(_global_size);
     }
 };
 
@@ -768,8 +861,8 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
                 if (_host_count[i] > 0) {
                     if (_have_hint[i]) {
                         BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
-                        BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
-                        uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
+                        BufferView<uint> _key[2] = {_temp_key[1].view(_host_offset[i], _host_count[i]), _temp_key[0].view(_host_offset[i], _host_count[i])};
+                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i],_resume_index.view(_host_offset[i], _host_count[i]));
                         stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
                                                                                                              _resume_count, _frame, _max_frame_count)
                                       .dispatch(_host_count[i]);
@@ -813,7 +906,7 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
                     if (_have_hint[i]) {
                         BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
                         BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
-                        uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
+                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i],_resume_index.view(_host_offset[i], _host_count[i]));
                         stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
                                                                                                              _resume_count, _frame, _max_frame_count)
                                       .dispatch(_host_count[i]);

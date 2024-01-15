@@ -1058,10 +1058,10 @@ impl Transform for MaterializeCoro {
         let callable = DemoteLocals.transform_callable(callable);
         let callable = DeferLoad.transform_callable(callable);
         let coro_graph = CoroGraph::from(&callable.module);
-        coro_graph.dump();
+        //coro_graph.dump();
         let coro_use_def = CoroUseDefAnalysis::analyze(&coro_graph);
         let coro_transition_graph = CoroTransitionGraph::build(&coro_graph, &coro_use_def);
-        coro_transition_graph.dump();
+        //coro_transition_graph.dump();
         let coro_frame = CoroFrame::build(&coro_graph, &coro_transition_graph);
         coro_frame.dump();
         let mut entry = CoroScopeMaterializer::new(&coro_frame, &callable, None).materialize();

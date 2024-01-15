@@ -164,8 +164,8 @@ private:
     bool _debug;
     void _await_step(Stream &stream) noexcept override;
     radix_sort::temp_storage _sort_temp_storage;
-    radix_sort _sort_token;
-    radix_sort _sort_hint;
+    radix_sort::instance<> _sort_token;
+    radix_sort::instance<Buffer<uint>> _sort_hint;
     luisa::vector<bool> _have_hint;
     compute::Buffer<uint> _temp_key[2];
     compute::Buffer<uint> _temp_index;
@@ -175,7 +175,7 @@ public:
     bool all_done() const noexcept;
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine, Device &device, Stream &stream,
-                            uint max_frame_count = 2000000, luisa::vector<luisa::string> hint_token = {}, bool debug = false) noexcept
+                            uint max_frame_count = 2000000, luisa::vector<luisa::string> hint_token = {}, bool debug = false, uint hint_range=UINT32_MAX) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           _max_frame_count{max_frame_count}, _stream{stream}, _debug{debug}, _frame{device.create_soa<FrameType>(max_frame_count)} {
         /*if (device.backend_name() != "cuda") {//only cuda can sort
@@ -205,8 +205,10 @@ public:
         _have_hint.resize(max_sub_coro, false);
         for (auto &token : hint_token) {
             auto id = coroutine->coro_tokens().find(token);
-            if (id != coroutine->coro_tokens().end())
+            if (id != coroutine->coro_tokens().end()) {
+                LUISA_ASSERT(id->second<max_sub_coro, "coroutine token {} of id {} out of range {}", token,id->second,max_sub_coro);
                 _have_hint[id->second] = true;
+            }
             else
                 LUISA_WARNING("coroutine token {} not found, hint disabled", token);
         }
@@ -226,33 +228,44 @@ public:
             auto frame = _frame->read(index);
             return read_promise<uint>(frame, "coro_token") & token_mask;
         };
-        Callable id = [&](UInt index) {
+        Callable identical = [&](UInt index) {
             return index;
         };
 
-        Callable keep_index = [&](UInt index) {
-            return _resume_index->read(index);
+        Callable keep_index = [&](UInt index,BufferUInt val) {
+            return val.read(index);
         };
-        Callable get_coro_hint = [&](UInt index) {
+        Callable get_coro_hint = [&](UInt index,BufferUInt val) {
             if (hint_token.size() != 0) {
-                auto id = keep_index(index);
+                auto id = keep_index(index,val);
                 auto frame = _frame->read(id);
-
-                return read_promise<uint>(frame, "coro_hint");
+                auto x=read_promise<uint>(frame, "coro_hint");
+                x=0;
+                return x;
             } else {
                 return def<uint>(0u);
             }
         };
         if (use_sort) {
-            _sort_temp_storage = radix_sort::temp_storage(device, max_frame_count, std::max(128u, max_sub_coro));
+            _sort_temp_storage = radix_sort::temp_storage(device, max_frame_count, std::max(std::min(hint_range,128u), max_sub_coro));
         }
         if (sort_base_gather) {
-            _sort_token = radix_sort(device, max_frame_count, _sort_temp_storage,
-                                     &get_coro_token, &id, &get_coro_token, 1, max_sub_coro);
+            _sort_token = radix_sort::instance<>(device, max_frame_count, _sort_temp_storage,
+                                     &get_coro_token, &identical, &get_coro_token, 1, max_sub_coro);
         }
         if (!hint_token.empty()) {
-            _sort_hint = radix_sort(device, max_frame_count, _sort_temp_storage,
-                                    &get_coro_hint, &keep_index);
+            if(hint_range<=128){
+                _sort_hint = radix_sort::instance<Buffer<uint>>(device, max_frame_count, _sort_temp_storage,
+                                                    &get_coro_hint, &keep_index, &get_coro_hint, 1, hint_range);
+            }
+            else{
+                auto highbit=0;
+                while((hint_range>>highbit)!=1){
+                    highbit++;
+                }
+                _sort_hint = radix_sort::instance<Buffer<uint>>(device, max_frame_count, _sort_temp_storage,
+                                                                &get_coro_hint, &keep_index, &get_coro_hint, 0, 128, 0, highbit);
+            }
         }
 
         Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, UInt offset, Var<Container> frame_buffer, UInt st_task_id, UInt n, Var<Args>... args) {
@@ -816,8 +829,8 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
                 if (_host_count[i] > 0) {
                     if (_have_hint[i]) {
                         BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
-                        BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
-                        uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
+                        BufferView<uint> _key[2] = {_temp_key[1].view(_host_offset[i], _host_count[i]), _temp_key[0].view(_host_offset[i], _host_count[i])};
+                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i],_resume_index.view(_host_offset[i], _host_count[i]));
                         stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
                                                                                                              _resume_count, _frame, _max_frame_count)
                                       .dispatch(_host_count[i]);
@@ -861,7 +874,7 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
                     if (_have_hint[i]) {
                         BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
                         BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
-                        uint out = _sort_hint.sort(stream, _key, _index, _host_count[i]);
+                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i],_resume_index.view(_host_offset[i], _host_count[i]));
                         stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
                                                                                                              _resume_count, _frame, _max_frame_count)
                                       .dispatch(_host_count[i]);

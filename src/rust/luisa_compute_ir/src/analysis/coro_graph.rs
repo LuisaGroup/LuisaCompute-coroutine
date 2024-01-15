@@ -1571,7 +1571,6 @@ impl CoroPreliminaryGraph {
 impl CoroGraph {
     pub fn from(module: &Module) -> Self {
         let preliminary_graph = CoroPreliminaryGraph::from(module);
-        preliminary_graph.dump();
         Self::build(preliminary_graph)
     }
 

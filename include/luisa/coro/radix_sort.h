@@ -325,11 +325,9 @@ public:
             stream << clear_shader(_temp.launch_count).dispatch(1u);
             stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
             if (i == 0) {
-                stream << synchronize();
                 stream << onesweep_first_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                                 _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n, args...)
                               .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
-                stream << synchronize();
             } else {
                 stream << onesweep_shader(keys[out ^ 1], keys[out], vals[out ^ 1], vals[out], _temp.launch_count,
                                           _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n, args...)
@@ -343,12 +341,10 @@ public:
     uint sort_switch(Stream &stream, BufferView<uint> temp_key[2], BufferView<uint> temp_val[2], uint n, detail::prototype_to_shader_invocation_t<Args>... args) {
         LUISA_ASSERT(n <= MAXN, "array size too large! n={}", n);
         build_histogram(stream, n, args...);
-        stream<<synchronize();
         uint out = 1u;
         for (int i = 0; i < HIST_GROUP; ++i) {
             stream << clear_shader(_temp.launch_count).dispatch(1u);
             stream << clear_shader(_temp.bin_buffer).dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * DIGIT);
-            stream<<synchronize();
             if (i == 0) {
                 stream << onesweep_first_shader(temp_key[out ^ 1], temp_key[out], temp_val[out ^ 1], temp_val[out], _temp.launch_count,
                                                 _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n, args...)
@@ -358,7 +354,6 @@ public:
                                           _temp.hist_buffer.subview(i * DIGIT, DIGIT), _temp.bin_buffer, bit_split[i], n, args...)
                               .dispatch(ceil_div(n, ONESWEEP_BLOCK_SIZE * ONESWEEP_ITEM_COUNT) * ONESWEEP_BLOCK_SIZE);
             }
-            stream<<synchronize();
 
             out ^= 1;
         }

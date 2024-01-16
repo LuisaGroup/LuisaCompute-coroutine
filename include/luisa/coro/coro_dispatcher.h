@@ -135,9 +135,10 @@ public:
 struct WavefrontCoroDispatcherConfig {
     uint max_instance_count = 2_M;
     bool soa = true;
-    bool atomic = false;
+    bool sort = true;//use sort for coro token gathering
     bool compact = true;
     bool debug = false;
+    uint hint_range=0xffff'ffff;
     luisa::vector<luisa::string> hint_fields;
 };
 
@@ -188,10 +189,10 @@ public:
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine,
                             Device &device, Stream &stream,
-                            const WavefrontCoroDispatcherConfig &config, uint hint_range=UINT32_MAX) noexcept
+                            const WavefrontCoroDispatcherConfig &config) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
           is_soa{config.soa},
-          sort_base_gather{!config.atomic},
+          sort_base_gather{config.sort},
           use_compact{config.compact},
           _max_frame_count{config.max_instance_count},
           _stream{stream}, _debug{config.debug},
@@ -264,23 +265,23 @@ public:
             }
         };
         if (use_sort) {
-            _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(std::min(hint_range,128u), max_sub_coro));
+            _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(std::min(config.hint_range,128u), max_sub_coro));
         }
         if (sort_base_gather) {
             _sort_token = radix_sort::instance<>(device, _max_frame_count, _sort_temp_storage,
                                      &get_coro_token, &identical, &get_coro_token, 1, max_sub_coro);
         }
         if (!config.hint_fields.empty()) {
-            if(hint_range<=128){
+            if(config.hint_range<=128){
                 _sort_hint = radix_sort::instance<Buffer<uint>>(device, _max_frame_count, _sort_temp_storage,
-                                                    &get_coro_hint, &keep_index, &get_coro_hint, 1, hint_range);
+                                                    &get_coro_hint, &keep_index, &get_coro_hint, 1, config.hint_range);
             }
             else{
                 auto highbit=0;
-                while((hint_range>>highbit)!=1){
+                while((config.hint_range>>highbit)!=1){
                     highbit++;
                 }
-                _sort_hint = radix_sort::instance<Buffer<uint>>(device, max_frame_count, _sort_temp_storage,
+                _sort_hint = radix_sort::instance<Buffer<uint>>(device, _max_frame_count, _sort_temp_storage,
                                                                 &get_coro_hint, &keep_index, &get_coro_hint, 0, 128, 0, highbit);
             }
         }
@@ -343,10 +344,14 @@ public:
                 if (_debug) {
                     auto token = frame_buffer.read(frame_id);
                     auto check = read_promise<uint>(token, "coro_token") & token_mask;
-                    $if (check != i) {
+                    /*$if (check != i) {
                         device_log("wrong launch for frame {} at kernel {} as kernel {} when dispatch {}", frame_id, check, i, dispatch_x());
-                    };
+                    };*/
                 }
+                /*if(_have_hint[i]) {
+                    auto token = frame_buffer.read(frame_id);
+                    device_log("dispatch:{}, index:{}, hint:{}",dispatch_x(),frame_id, read_promise<uint>(token,"coro_hint")&token_mask);
+                }*/
                 (*coroutine)[i](frame, args...);
                 if (is_soa) {
                     frame_buffer.write(frame_id, frame, coroutine->graph().node(i)->output_state_members);
@@ -483,9 +488,10 @@ public:
 };
 
 struct PersistentCoroDispatcherConfig {
-    uint max_thread_count = 128_k;
+    uint max_thread_count = 64_k;
     uint block_size = 128;
-    uint fetch_size = 128;
+    uint fetch_size = 16;
+    bool global = false;
     bool debug = false;
 };
 
@@ -511,7 +517,6 @@ private:
     void _await_step(Stream &stream) noexcept;
     void _await_all(Stream &stream) noexcept;
     bool _debug;
-    bool use_global = true;
     Stream &_stream;
 public:
     bool all_dispatched() const noexcept;
@@ -520,14 +525,16 @@ public:
                              Device &device, Stream &stream,
                              const PersistentCoroDispatcherConfig &config) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
-          _max_thread_count{(config.max_thread_count+config.block_size-1)/config.block_size},
+          _max_thread_count{(config.max_thread_count+config.block_size-1)/config.block_size*config.block_size},
           _block_size{config.block_size},
           _debug{config.debug}, _stream{stream} {
+        auto use_global=config.global;
         _global = device.create_buffer<uint>(1);
         auto q_fac = 1u;
         uint max_sub_coro = coroutine->suspend_count() + 1;
         auto g_fac=(uint)std::max((int)(max_sub_coro-q_fac),0);
         auto global_queue_size= config.block_size * g_fac;
+        _global_size=0;
         if(use_global) {
             _global_frame = device.create_buffer<FrameType>(_max_thread_count*g_fac);
             _global_size = _max_thread_count*g_fac;
@@ -551,6 +558,9 @@ public:
                 all_token[index * config.block_size + thread_x()] = 0u;
                 initialize_coroframe(frames[index * config.block_size + thread_x()], def<uint3>(0, 0, 0));
             };
+            $for (index, 0u, g_fac) {
+                all_token[shared_queue_size+index * config.block_size + thread_x()] = 0u;
+            };
             $if (thread_x() < max_sub_coro) {
                 $if (thread_x() == 0) {
                     work_counter[thread_x()] = use_global?(shared_queue_size+global_queue_size):shared_queue_size;
@@ -566,9 +576,8 @@ public:
             rem_global[0] = 1u;
             rem_local[0] = 0u;
             sync_block();
-            auto count = def(0);
-            uint count_limit = -1;
-
+            auto count = def(0u);
+            auto count_limit = def<uint>(-1);
             $while ((rem_global[0] != 0u | rem_local[0] != 0u) & (count != count_limit)) {
                 sync_block();//very important, synchronize for condition
 
@@ -658,22 +667,22 @@ public:
                                             auto g_state = _global_frame->read(global_id);
                                             _global_frame->write(global_id,frames[dst]);
                                             frames[dst]=g_state;
-                                            all_token[dst]=coro_token;
                                             all_token[shared_queue_size+g_queue_id]=frame_token;
+                                            all_token[dst]=coro_token;
 
                                         }
                                         $else {
                                             auto g_state = _global_frame->read(global_id);
                                             frames[dst]=g_state;
-                                            all_token[dst]=coro_token;
                                             all_token[shared_queue_size+g_queue_id]=frame_token;
+                                            all_token[dst]=coro_token;
                                         };
                                     }
                                     $else {
                                         $if(frame_token != 0u) {
                                             _global_frame->write(global_id,frames[dst]);
-                                            all_token[dst]=coro_token;
                                             all_token[shared_queue_size+g_queue_id]=frame_token;
+                                            all_token[dst]=coro_token;
                                         };
                                     };
                                 };
@@ -692,6 +701,9 @@ public:
                 auto launch_condition = def(true);
                 if (!use_global) {
                     launch_condition = (thread_x() < work_offset[0]);
+                }
+                else{
+                    launch_condition = (all_token[pid]==work_stat[1]);
                 }
                 $if (launch_condition) {
                     $switch (all_token[pid]) {
@@ -718,8 +730,9 @@ public:
                         }
                     };
                 };
+                sync_block();
             };
-            $if (count == count_limit) {
+            $if (count >= count_limit) {
                 device_log("block_id{},thread_id {}, loop not break! local:{}, global:{}", block_x(), thread_x(), rem_local[0], rem_global[0]);
                 $if (thread_x() < max_sub_coro) {
                     device_log("work rem: id {}, size {}", thread_x(), work_counter[thread_x()]);
@@ -747,8 +760,10 @@ public:
         _dispatched = false;
         _done = false;
         _stream << _clear_shader(_global).dispatch(1u);
-        if(use_global)
+        if(_global_size) {
+
             _stream << _initialize_shader(_global_frame, _global_size).dispatch(_global_size);
+        }
     }
 };
 

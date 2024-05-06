@@ -35,7 +35,7 @@ LUISA_STRUCT(Onb, tangent, binormal, normal) {
 
 struct alignas(4) CoroFrame {};
 
-LUISA_COROFRAME_STRUCT(CoroFrame){};
+LUISA_COROFRAME_STRUCT(CoroFrame) {};
 
 int main(int argc, char *argv[]) {
 
@@ -342,11 +342,16 @@ int main(int argc, char *argv[]) {
              << make_sampler_shader(seed_image).dispatch(resolution);
 
     Window window{"path tracing", resolution};
-    Swapchain swap_chain{device.create_swapchain(
-        window.native_handle(),
+    Swapchain swap_chain = device.create_swapchain(
         stream,
-        resolution,
-        false, false, 3)};
+        SwapchainOption{
+            .display = window.native_display(),
+            .window = window.native_handle(),
+            .size = make_uint2(resolution),
+            .wants_hdr = false,
+            .wants_vsync = false,
+            .back_buffer_count = 3,
+        });
     Image<float> ldr_image = device.create_image<float>(swap_chain.backend_storage(), resolution);
     double last_time = 0.0;
     uint frame_count = 0u;

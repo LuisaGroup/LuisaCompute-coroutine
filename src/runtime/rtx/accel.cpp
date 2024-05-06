@@ -1,17 +1,20 @@
+#include <luisa/core/stl/algorithm.h>
 #include <luisa/ast/function_builder.h>
 #include <luisa/runtime/shader.h>
 #include <luisa/runtime/rtx/accel.h>
-#include <luisa/vstl/pdqsort.h>
 #include <luisa/core/logging.h>
 
 namespace luisa::compute {
 
 namespace detail {
-
-ShaderInvokeBase &ShaderInvokeBase::operator<<(const Accel &accel) noexcept {
+void ShaderInvokeBase::encode(ShaderDispatchCmdEncoder &encoder, const Accel &accel) noexcept {
     accel._check_is_valid();
-    _encoder.encode_accel(accel.handle());
-    return *this;
+#ifndef NDEBUG
+    if (accel.dirty()) [[unlikely]] {
+        LUISA_WARNING("Dispatching shader with a dirty accel.");
+    }
+#endif
+    encoder.encode_accel(accel.handle());
 }
 
 }// namespace detail
@@ -47,12 +50,14 @@ luisa::unique_ptr<Command> Accel::_build(Accel::BuildRequest request,
     if (_instance_count == 0) { LUISA_ERROR_WITH_LOCATION(
         "Building acceleration structure without instances."); }
     // collect modifications
-    luisa::vector<Accel::Modification> modifications(_modifications.size());
-    std::transform(_modifications.cbegin(), _modifications.cend(), modifications.begin(),
-                   [](auto &&pair) noexcept { return pair.second; });
+    luisa::vector<Accel::Modification> modifications;
+    modifications.push_back_uninitialized(_modifications.size());
+    luisa::transform(_modifications.cbegin(), _modifications.cend(), modifications.begin(),
+                     [](auto &&pair) noexcept -> auto && { return pair.second; });
     _modifications.clear();
-    pdqsort(modifications.begin(), modifications.end(),
-            [](auto &&lhs, auto &&rhs) noexcept { return lhs.index < rhs.index; });
+    // Is sort necessary?
+    // luisa::sort(modifications.begin(), modifications.end(),
+    //         [](auto &&lhs, auto &&rhs) noexcept { return lhs.index < rhs.index; });
     return luisa::make_unique<AccelBuildCommand>(handle(), static_cast<uint>(_instance_count),
                                                  request, std::move(modifications),
                                                  update_instance_buffer_only);

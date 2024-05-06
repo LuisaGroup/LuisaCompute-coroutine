@@ -24,9 +24,33 @@ on_load(function(target)
 		path.join(lc_dir,"src/ext/EASTL/include"), path.join(lc_dir,"src/ext/EASTL/packages/EABase/include/Common"),
 		--[[lc-core]]
 		path.join(lc_dir,"include"), path.join(lc_dir,"src/ext/xxHash"), path.join(lc_dir,"src/ext/magic_enum/include"),
+		--[[imgui]]
+		path.join(lc_dir, "src/ext/imgui"), path.join(lc_dir, "src/ext/imgui/backends"),
+		--[[glfw]]
+		path.join(lc_dir, "src/ext/glfw/include/"),
 		{
 			public = is_public
+		}
+	)
+	local marl_include = path.join(lc_dir,"src/ext/marl/include")
+	if os.exists(marl_include) then
+		target:add("includedirs", marl_include, {
+			public = is_public
 		})
+	end
+	if is_plat("windows") then
+		target:add("syslinks", "Ole32", "Advapi32", {
+			public = is_public
+		})
+	elseif is_plat("linux") then
+		target:add("syslinks", "uuid", {
+			public = is_public
+		})
+	else
+		target:add("frameworks", "CoreFoundation", {
+			public = is_public
+		})
+	end
 end)
 rule_end()
 
@@ -40,10 +64,8 @@ on_load(function(target)
 	target:add("defines", 
 	--[[spdlog]]
 		"SPDLOG_NO_EXCEPTIONS", "SPDLOG_NO_THREAD_ID", "SPDLOG_DISABLE_DEFAULT_LOGGER",
-		"FMT_SHARED", "SPDLOG_SHARED_LIB", "FMT_CONSTEVAL=constexpr", "FMT_USE_CONSTEXPR=1",
+		"FMT_SHARED", "FMT_CONSTEVAL=constexpr", "FMT_USE_CONSTEXPR=1",
 		"FMT_EXCEPTIONS=0", 
-	--[[mimallo]]
-		"MI_SHARED_LIB",
 	--[[eastl]] 
 		"EA_PRAGMA_ONCE_SUPPORTED",
 		"EASTL_ASSERT_ENABLED=0", "EA_HAVE_CPP11_CONTAINERS", "EA_HAVE_CPP11_ATOMIC", "EA_HAVE_CPP11_CONDITION_VARIABLE",
@@ -53,9 +75,17 @@ on_load(function(target)
 		"EA_HAVE_CPP11_TYPEINDEX", "EASTL_STD_ITERATOR_CATEGORY_ENABLED", "EASTL_STD_TYPE_TRAITS_AVAILABLE",
 		"EASTL_MOVE_SEMANTICS_ENABLED", "EASTL_VARIADIC_TEMPLATES_ENABLED", "EASTL_VARIABLE_TEMPLATES_ENABLED",
 		"EASTL_INLINE_VARIABLE_ENABLED", "EASTL_HAVE_CPP11_TYPE_TRAITS", "EASTL_INLINE_NAMESPACES_ENABLED",
-		"EASTL_ALLOCATOR_EXPLICIT_ENABLED", "EA_DLL", "EASTL_USER_DEFINED_ALLOCATOR",
+		"EASTL_ALLOCATOR_EXPLICIT_ENABLED", "EASTL_USER_DEFINED_ALLOCATOR", "EA_DLL",
+		"LUISA_VSTL_STATIC_LIB", "LUISA_DSL_STATIC_LIB",
+	--[[imgui]]
+		"ImDrawIdx=unsigned int", "IMGUI_API=__declspec(dllimport)",
+	--[[marl]]
+		"MARL_DLL",
 	{
 		public = is_public
 	})
+	if is_plat("windows") then
+		target:add("defines", "IMGUI_API=__declspec(dllimport)", {public = is_public})
+	end
 end)
 rule_end()

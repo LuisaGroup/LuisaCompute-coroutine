@@ -8,11 +8,31 @@
 #include <Shader/ComputeShader.h>
 #include <luisa/core/logging.h>
 #include <luisa/runtime/context.h>
-#include <luisa/backends/ext/dx_config_ext.h>
 
 namespace lc::dx {
+DirectXHeap DXAllocatorImpl::AllocateBufferHeap(
+    luisa::string_view name,
+    uint64_t targetSizeInBytes,
+    D3D12_HEAP_TYPE heapType,
+    D3D12_HEAP_FLAGS extraFlags) const noexcept {
+    DirectXHeap heap;
+    heap.handle = device->defaultAllocator->AllocateBufferHeap(device, name, targetSizeInBytes, heapType, &heap.heap, &heap.offset, extraFlags);
+    return heap;
+}
+DirectXHeap DXAllocatorImpl::AllocateTextureHeap(
+    vstd::string_view name,
+    size_t sizeBytes,
+    bool isRenderTexture,
+    D3D12_HEAP_FLAGS extraFlags) const noexcept {
+    DirectXHeap heap;
+    heap.handle = device->defaultAllocator->AllocateTextureHeap(device, name, sizeBytes, &heap.heap, &heap.offset, extraFlags);
+    return heap;
+}
+void DXAllocatorImpl::DeAllocateHeap(uint64_t handle) const noexcept {
+    device->defaultAllocator->Release(handle);
+}
 static std::mutex gDxcMutex;
-static vstd::optional<hlsl::ShaderCompiler> gDxcCompiler;
+static vstd::StackObject<hlsl::ShaderCompiler, false> gDxcCompiler;
 static int32 gDxcRefCount = 0;
 
 Device::LazyLoadShader::~LazyLoadShader() {}
@@ -39,13 +59,13 @@ void Device::WaitFence(ID3D12Fence *fence, uint64 fenceIndex) {
 }
 ComputeShader *Device::LazyLoadShader::Get(Device *self) {
     if (!shader) {
-        shader = vstd::create_unique(loadFunc(self, self->fileIo));
+        shader = vstd::create_unique(loadFunc(self));
     }
     return shader.get();
 }
 bool Device::LazyLoadShader::Check(Device *self) {
     if (shader) return true;
-    shader = vstd::create_unique(loadFunc(self, self->fileIo));
+    shader = vstd::create_unique(loadFunc(self));
     if (shader) {
         auto afterExit = vstd::scope_exit([&] { shader = nullptr; });
         return true;
@@ -108,7 +128,7 @@ Device::Device(Context &&ctx, DeviceConfig const *settings)
             return vstd::MD5{vstd::span<uint8_t const>{reinterpret_cast<uint8_t const *>(&info), sizeof(AdapterInfo)}};
         };
 
-        vstd::optional<DirectXDeviceConfigExt::ExternalDevice> extDevice;
+        luisa::optional<DirectXDeviceConfigExt::ExternalDevice> extDevice;
         if (deviceSettings) {
             extDevice = deviceSettings->CreateExternalDevice();
         }
@@ -135,20 +155,36 @@ Device::Device(Context &&ctx, DeviceConfig const *settings)
             }
 #endif
             ThrowIfFailed(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(dxgiFactory.GetAddressOf())));
+            luisa::vector<luisa::string> device_names;
+            backend_device_names(device_names);
+            for (auto &name : device_names) {
+                for (auto &i : name) {
+                    if (i >= 'A' && i <= 'Z') {
+                        i += 'a' - 'A';
+                    }
+                }
+            }
             if (index == std::numeric_limits<size_t>::max()) {
-                luisa::vector<luisa::string> device_names;
-                backend_device_names(device_names);
                 index = 0;
                 for (size_t i = 0; i < device_names.size(); ++i) {
                     luisa::string &device_name = device_names[i];
-                    if (device_name.find("GeForce") != luisa::string::npos ||
-                        device_name.find("Radeon RX") != luisa::string::npos ||
-                        device_name.find("Arc") != luisa::string::npos) {
+                    if (device_name.find("geforce") != luisa::string::npos ||
+                        device_name.find("radeon") != luisa::string::npos ||
+                        device_name.find("arc") != luisa::string::npos) {
                         LUISA_INFO("Select device: {}", device_name);
                         index = i;
                         break;
                     }
                 }
+            }
+            auto &device_name = device_names[index];
+
+            if (device_name.find("nvidia") != luisa::string::npos) {
+                gpuType = GpuType::NVIDIA;
+            } else if (device_name.find("amd") != luisa::string::npos) {
+                gpuType = GpuType::AMD;
+            } else if (device_name.find("intel") != luisa::string::npos) {
+                gpuType = GpuType::INTEL;
             }
             auto capableAdapterIndex = 0u;
             for (auto adapterIndex = 0u; dxgiFactory->EnumAdapters1(adapterIndex, adapter.GetAddressOf()) != DXGI_ERROR_NOT_FOUND; adapterIndex++) {
@@ -157,8 +193,7 @@ Device::Device(Context &&ctx, DeviceConfig const *settings)
                 if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0) {
                     if (capableAdapterIndex++ == index) {
                         ThrowIfFailed(D3D12CreateDevice(
-                            adapter.Get(), D3D_FEATURE_LEVEL_12_1,
-                            IID_PPV_ARGS(device.GetAddressOf())));
+                            adapter.Get(), D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(device.GetAddressOf())));
                         adapterID = GenAdapterGUID(desc);
                         break;
                     }
@@ -168,7 +203,21 @@ Device::Device(Context &&ctx, DeviceConfig const *settings)
             }
             if (adapter == nullptr) { LUISA_ERROR_WITH_LOCATION("Failed to create DirectX device at index {}.", index); }
         }
+        {
+            auto adapterIdStream = fileIo->read_shader_cache("dx_adapterid");
+            bool sameAdaptor = false;
+            if (adapterIdStream) {
+                auto blob = adapterIdStream->read(~0ull);
+                sameAdaptor = blob.size() == sizeof(vstd::MD5) && memcmp(blob.data(), &adapterID, sizeof(vstd::MD5)) == 0;
+            }
+            if (!sameAdaptor) {
+                LUISA_INFO("Adapter mismatch, shader cache cleared.");
+                fileIo->clear_shader_cache();
+            }
+            fileIo->write_shader_cache("dx_adapterid", {reinterpret_cast<std::byte const *>(&adapterID), sizeof(vstd::MD5)});
+        }
         defaultAllocator = vstd::make_unique<GpuAllocator>(this, profiler);
+        allocatorInterface.device = this;
         globalHeap = vstd::create_unique(
             new DescriptorHeap(
                 this,
@@ -191,7 +240,14 @@ Device::Device(Context &&ctx, DeviceConfig const *settings)
             deviceSettings->ReadbackDX12Device(
                 device,
                 adapter,
-                dxgiFactory);
+                dxgiFactory,
+                &allocatorInterface,
+                fileIo,
+                gDxcCompiler->compiler(),
+                gDxcCompiler->library(),
+                gDxcCompiler->utils(),
+                globalHeap->GetHeap(),
+                samplerHeap->GetHeap());
         }
     }
 }

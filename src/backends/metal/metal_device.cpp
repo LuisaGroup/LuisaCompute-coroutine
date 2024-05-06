@@ -310,11 +310,11 @@ void MetalDevice::destroy_buffer(uint64_t handle) noexcept {
 
 ResourceCreationInfo MetalDevice::create_texture(PixelFormat format, uint dimension,
                                                  uint width, uint height, uint depth, uint mipmap_levels,
-                                                 bool allow_simultaneous_access) noexcept {
+                                                 bool allow_simultaneous_access, bool allow_raster_target) noexcept {
     return with_autorelease_pool([=, this] {
         auto texture = new_with_allocator<MetalTexture>(
             _handle, format, dimension, width, height, depth,
-            mipmap_levels, allow_simultaneous_access);
+            mipmap_levels, allow_simultaneous_access, allow_raster_target);
         ResourceCreationInfo info{};
         info.handle = reinterpret_cast<uint64_t>(texture);
         info.native_handle = texture->handle();
@@ -378,13 +378,11 @@ void MetalDevice::dispatch(uint64_t stream_handle, CommandList &&list) noexcept 
     });
 }
 
-SwapchainCreationInfo MetalDevice::create_swapchain(uint64_t window_handle, uint64_t stream_handle,
-                                                    uint width, uint height, bool allow_hdr,
-                                                    bool vsync, uint back_buffer_size) noexcept {
+SwapchainCreationInfo MetalDevice::create_swapchain(const SwapchainOption &option, uint64_t stream_handle) noexcept {
     return with_autorelease_pool([=, this] {
         auto swapchain = new_with_allocator<MetalSwapchain>(
-            this, window_handle, width, height,
-            allow_hdr, vsync, back_buffer_size);
+            this, option.window, option.size.x, option.size.y,
+            option.wants_hdr, option.wants_vsync, option.back_buffer_count);
         SwapchainCreationInfo info{};
         info.handle = reinterpret_cast<uint64_t>(swapchain);
         info.native_handle = swapchain->layer();
@@ -790,8 +788,9 @@ LUISA_EXPORT_API luisa::compute::DeviceInterface *create(luisa::compute::Context
 
 LUISA_EXPORT_API void destroy(luisa::compute::DeviceInterface *device) noexcept {
     luisa::compute::metal::with_autorelease_pool([device] {
-        auto p_device = dynamic_cast<::luisa::compute::metal::MetalDevice *>(device);
-        LUISA_ASSERT(p_device != nullptr, "Invalid device.");
+        auto p_device = static_cast<::luisa::compute::metal::MetalDevice *>(device);
+        // auto p_device = dynamic_cast<::luisa::compute::metal::MetalDevice *>(device);
+        // LUISA_ASSERT(p_device != nullptr, "Invalid device.");
         ::luisa::delete_with_allocator(p_device);
     });
 }

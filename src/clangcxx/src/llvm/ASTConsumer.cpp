@@ -16,8 +16,8 @@
 #include <luisa/ast/op.h>
 #include <luisa/dsl/sugar.h>
 #include <luisa/dsl/syntax.h>
+#include <luisa/backends/ext/raster_ext.hpp>
 namespace luisa::clangcxx {
-
 using namespace clang;
 using namespace clang::ast_matchers;
 using namespace luisa::compute;
@@ -51,7 +51,7 @@ inline luisa::compute::BinaryOp TranslateBinaryOp(clang::BinaryOperator::Opcode 
         case CXXBinOp::BO_EQ: return LCBinOp::EQUAL;
         case CXXBinOp::BO_NE: return LCBinOp::NOT_EQUAL;
         default:
-            luisa::log_error("unsupportted binary op {}!", op);
+            clangcxx_log_error("unsupportted binary op {}!", luisa::to_string(op));
             return LCBinOp::ADD;
     }
 }
@@ -69,7 +69,7 @@ inline luisa::compute::BinaryOp TranslateBinaryAssignOp(clang::BinaryOperator::O
         case CXXBinOp::BO_ShlAssign: return LCBinOp::SHL;
         case CXXBinOp::BO_ShrAssign: return LCBinOp::SHR;
         default:
-            luisa::log_error("unsupportted binary-assign op {}!", op);
+            clangcxx_log_error("unsupportted binary-assign op {}!", luisa::to_string(op));
             return LCBinOp::ADD;
     }
 }
@@ -93,14 +93,14 @@ inline luisa::compute::UnaryOp TranslateUnaryOp(CXXUnaryOp op) {
         case CXXUnaryOp::UO_Not: return LCUnaryOp::BIT_NOT;
         case CXXUnaryOp::UO_LNot: return LCUnaryOp::NOT;
         default:
-            luisa::log_error("unsupportted unary op {}!", op);
+            clangcxx_log_error("unsupportted unary op {}!", luisa::to_string(op));
             return LCUnaryOp::PLUS;
     }
 }
 
 inline const luisa::compute::RefExpr *LC_ArgOrRef(clang::QualType qt, compute::detail::FunctionBuilder *fb, const luisa::compute::Type *lcType) {
     if (qt->isPointerType())
-        luisa::log_error("pointer type is not supported: [{}]", qt.getAsString());
+        clangcxx_log_error("pointer type is not supported: [{}]", qt.getAsString());
     else if (qt->isReferenceType())
         return fb->reference(lcType);
     else
@@ -125,9 +125,9 @@ const luisa::compute::RefExpr *Stack::GetLocal(const clang::ValueDecl *decl) con
 
 void Stack::SetLocal(const clang::ValueDecl *decl, const luisa::compute::RefExpr *expr) {
     if (!decl)
-        luisa::log_error("unknown error: SetLocal with nullptr!");
+        clangcxx_log_error("unknown error: SetLocal with nullptr!");
     if (locals.contains(decl))
-        luisa::log_error("unknown error: SetLocal with existed!");
+        clangcxx_log_error("unknown error: SetLocal with existed!");
     locals[decl] = expr;
 }
 
@@ -139,10 +139,10 @@ const luisa::compute::Expression *Stack::GetExpr(const clang::Stmt *stmt) const 
 
 void Stack::SetExpr(const clang::Stmt *stmt, const luisa::compute::Expression *expr) {
     if (!stmt)
-        luisa::log_error("unknown error: SetExpr with nullptr!");
+        clangcxx_log_error("unknown error: SetExpr with nullptr!");
     if (expr_map.contains(stmt)) {
         stmt->dump();
-        luisa::log_error("unknown error: SetExpr with existed!");
+        clangcxx_log_error("unknown error: SetExpr with existed!");
     }
     expr_map[stmt] = expr;
 }
@@ -155,10 +155,10 @@ const luisa::compute::Expression *Stack::GetConstant(const clang::ValueDecl *var
 
 void Stack::SetConstant(const clang::ValueDecl *var, const luisa::compute::Expression *expr) {
     if (!var)
-        luisa::log_error("unknown error: SetConstant with nullptr!");
+        clangcxx_log_error("unknown error: SetConstant with nullptr!");
     if (constants.contains(var)) {
         var->dump();
-        luisa::log_error("unknown error: SetConstant with existed!");
+        clangcxx_log_error("unknown error: SetConstant with existed!");
     }
     constants[var] = expr;
 }
@@ -221,7 +221,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
         TYPE_CASE_INT(uint, AS_UINT32)
         TYPE_CASE_INT(ulong, AS_UINT64)
         else
-            luisa::log_error("array not supportted as constexpr detected!!!");
+            clangcxx_log_error("array not supportted as constexpr detected!!!");
         // clang-format on
 #undef TYPE_CASE_FLOAT
 #undef TYPE_CASE_INT
@@ -300,7 +300,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
         else
         {
             APV.dump();
-            luisa::log_error("vec not supportted as constexpr detected! description: {}", lcType->description());
+            clangcxx_log_error("vec not supportted as constexpr detected! description: {}", lcType->description());
         }
         // clang-format on
 #undef TYPE_CASE_FLOAT
@@ -334,7 +334,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                 auto lcField = TraverseAPValue(APV.getStructField(i), FieldWhat, where);
                                 fb->assign(fb->member(lcFieldType, constant, i), lcField);
                             } else
-                                luisa::log_error("bad constexpr field!");
+                                clangcxx_log_error("bad constexpr field!");
                             i += 1;
                         }
                         return constant;
@@ -348,7 +348,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                 if (where)
                     db->DumpWithLocation(where);
                 APV.dump();
-                luisa::log_error("unsupportted ConstantExpr APValueKind {}", APK);
+                clangcxx_log_error("unsupportted ConstantExpr APValueKind {}", luisa::to_string(APK));
                 break;
         }
         return nullptr;
@@ -366,7 +366,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                 } else// TODO: support assignment by constexpr var
                 {
                     db->DumpWithLocation(where);
-                    luisa::log_error("unsupportted gloal const eval type: {}", Decompressed->getKind());
+                    clangcxx_log_error("unsupportted gloal const eval type: {}", luisa::to_string(Decompressed->getKind()));
                 }
             }
         }
@@ -383,21 +383,32 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
             FunctionBuilderBuilder bdbd(db, newStack);
             bdbd.build(cxxCallee, false);
         } else if (auto cxxBranch = llvm::dyn_cast<clang::IfStmt>(x)) {
+            // cxxBranch->getConditionVariable()->getEvaluatedStmt()->Value
             auto _ = db->CommentStmt(fb, cxxBranch);
 
             auto cxxCond = cxxBranch->getCond();
-            TraverseStmt(cxxCond);
+            auto ifConstVar = cxxCond->getIntegerConstantExpr(*db->GetASTContext());
+            if (ifConstVar) {
+                if (ifConstVar->getExtValue() != 0) {
+                    if (cxxBranch->getThen())
+                        TraverseStmt(cxxBranch->getThen());
+                } else {
+                    if (cxxBranch->getElse())
+                        TraverseStmt(cxxBranch->getElse());
+                }
+            } else {
+                TraverseStmt(cxxCond);
+                auto lcIf = fb->if_(stack->GetExpr(cxxCond));
+                fb->push_scope(lcIf->true_branch());
+                if (cxxBranch->getThen())
+                    TraverseStmt(cxxBranch->getThen());
+                fb->pop_scope(lcIf->true_branch());
 
-            auto lcIf = fb->if_(stack->GetExpr(cxxCond));
-            fb->push_scope(lcIf->true_branch());
-            if (cxxBranch->getThen())
-                TraverseStmt(cxxBranch->getThen());
-            fb->pop_scope(lcIf->true_branch());
-
-            fb->push_scope(lcIf->false_branch());
-            if (cxxBranch->getElse())
-                TraverseStmt(cxxBranch->getElse());
-            fb->pop_scope(lcIf->false_branch());
+                fb->push_scope(lcIf->false_branch());
+                if (cxxBranch->getElse())
+                    TraverseStmt(cxxBranch->getElse());
+                fb->pop_scope(lcIf->false_branch());
+            }
         } else if (auto cxxSwitch = llvm::dyn_cast<clang::SwitchStmt>(x)) {
             auto _ = db->CommentStmt(fb, cxxSwitch);
 
@@ -440,32 +451,44 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
             fb->break_();
         } else if (auto cxxWhile = llvm::dyn_cast<clang::WhileStmt>(x)) {
             auto _ = db->CommentStmt(fb, cxxWhile);
-
-            auto lcWhile = fb->loop_();
-            // while (cond)
-            fb->push_scope(lcWhile->body());
-            {
-                auto cxxCond = cxxWhile->getCond();
-                TraverseStmt(cxxCond);
-                auto lcCondIf = fb->if_(stack->GetExpr(cxxCond));
-                // break
-                fb->push_scope(lcCondIf->false_branch());
-                fb->break_();
-                fb->pop_scope(lcCondIf->false_branch());
-                // body
-                auto cxxBody = cxxWhile->getBody();
-                TraverseStmt(cxxBody);
+            auto cxxCond = cxxWhile->getCond();
+            auto ifConstVar = cxxCond->getIntegerConstantExpr(*db->GetASTContext());
+            if (ifConstVar) {
+                if (ifConstVar->getExtValue() != 0) {
+                    auto lcWhile = fb->loop_();
+                    fb->push_scope(lcWhile->body());
+                    {
+                        // body
+                        auto cxxBody = cxxWhile->getBody();
+                        TraverseStmt(cxxBody);
+                    }
+                    fb->pop_scope(lcWhile->body());
+                }
+            } else {
+                auto lcWhile = fb->loop_();
+                fb->push_scope(lcWhile->body());
+                {
+                    TraverseStmt(cxxCond);
+                    auto lcCondIf = fb->if_(stack->GetExpr(cxxCond));
+                    // break
+                    fb->push_scope(lcCondIf->false_branch());
+                    fb->break_();
+                    fb->pop_scope(lcCondIf->false_branch());
+                    // body
+                    auto cxxBody = cxxWhile->getBody();
+                    TraverseStmt(cxxBody);
+                }
+                fb->pop_scope(lcWhile->body());
             }
-            fb->pop_scope(lcWhile->body());
         } else if (auto cxxFor = llvm::dyn_cast<clang::ForStmt>(x)) {
             auto _ = db->CommentStmt(fb, cxxFor);
 
             currentCxxForStmt = cxxFor;
-            auto lcWhile = fb->loop_();
             // i = 0
             auto cxxInit = cxxFor->getInit();
             TraverseStmt(cxxInit);
             // while (cond)
+            auto lcWhile = fb->loop_();
             fb->push_scope(lcWhile->body());
             {
                 auto cxxCond = cxxFor->getCond();
@@ -516,9 +539,9 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                         if (isRef || isArray) {
                             db->DumpWithLocation(x);
                             if (isRef)
-                                luisa::log_error("VarDecl as reference type is not supported: [{}]", Ty.getAsString());
+                                clangcxx_log_error("VarDecl as reference type is not supported: [{}]", Ty.getAsString());
                             if (isArray)
-                                luisa::log_error("VarDecl as C-style array type is not supported: [{}]", Ty.getAsString());
+                                clangcxx_log_error("VarDecl as C-style array type is not supported: [{}]", Ty.getAsString());
                         }
                         if (auto lcType = db->FindOrAddType(Ty, x->getBeginLoc())) {
                             if (auto lcInit = stack->GetExpr(cxxInit)) {
@@ -537,12 +560,12 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                 current = lcVar;
                             }
                         } else
-                            luisa::log_error("VarDecl with unfound type: [{}]", Ty.getAsString());
+                            clangcxx_log_error("VarDecl with unfound type: [{}]", Ty.getAsString());
                     } else if (auto aliasDecl = dyn_cast<clang::TypeAliasDecl>(decl)) {          // ignore
                     } else if (auto staticAssertDecl = dyn_cast<clang::StaticAssertDecl>(decl)) {// ignore
                     } else {
                         db->DumpWithLocation(x);
-                        luisa::log_error("unsupported decl stmt: {}", cxxDecl->getStmtClassName());
+                        clangcxx_log_error("unsupported decl stmt: {}", cxxDecl->getStmtClassName());
                     }
                 }
             } else if (auto cxxRet = llvm::dyn_cast<clang::ReturnStmt>(x)) {
@@ -559,16 +582,23 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                 if (auto constant = TraverseAPValue(ce->getAPValueResult(), nullptr, x)) {
                     current = constant;
                 } else
-                    luisa::log_error("unsupportted ConstantExpr APValueKind {}", ce->getResultAPValueKind());
+                    clangcxx_log_error("unsupportted ConstantExpr APValueKind {}", luisa::to_string(ce->getResultAPValueKind()));
             } else if (auto substNonType = llvm::dyn_cast<SubstNonTypeTemplateParmExpr>(x)) {
                 auto lcExpr = stack->GetExpr(substNonType->getReplacement());
                 current = lcExpr;
             } else if (auto il = llvm::dyn_cast<IntegerLiteral>(x)) {
-                auto limitedVal = il->getValue().getLimitedValue();
-                if (limitedVal <= UINT32_MAX)
-                    current = fb->literal(Type::of<uint>(), (uint)il->getValue().getLimitedValue());
-                else
-                    current = fb->literal(Type::of<uint64>(), il->getValue().getLimitedValue());
+                auto limitedVal = il->getValue().getLimitedValue(UINT64_MAX);
+                if (il->getType()->isSignedIntegerType()) {
+                    if (limitedVal <= INT32_MAX)
+                        current = fb->literal(Type::of<int>(), static_cast<int>(limitedVal));
+                    else if (limitedVal < INT64_MAX)
+                        current = fb->literal(Type::of<int64>(), static_cast<int64>(limitedVal));
+                } else {
+                    if (limitedVal <= UINT32_MAX)
+                        current = fb->literal(Type::of<uint>(), static_cast<uint>(limitedVal));
+                    else
+                        current = fb->literal(Type::of<uint64>(), static_cast<uint64>(limitedVal));
+                }
             } else if (auto bl = llvm::dyn_cast<CXXBoolLiteralExpr>(x)) {
                 current = fb->literal(Type::of<bool>(), (bool)bl->getValue());
             } else if (auto fl = llvm::dyn_cast<FloatingLiteral>(x)) {
@@ -601,7 +631,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                         if (auto lcArg = stack->GetExpr(arg))
                             lcArgs.emplace_back(lcArg);
                         else
-                            luisa::log_error("unfound arg: {}", arg->getStmtClassName());
+                            clangcxx_log_error("unfound arg: {}", arg->getStmtClassName());
                     }
                 }
 
@@ -645,7 +675,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                         case 3: { auto lcType = Type::of<stype##3>(); fb->assign(constructed, fb->call(lcType, CallOp::MAKE_##type##3, { lcArgs.begin() + 1, lcArgs.end() })); } break; \
                         case 4: { auto lcType = Type::of<stype##4>(); fb->assign(constructed, fb->call(lcType, CallOp::MAKE_##type##4, { lcArgs.begin() + 1, lcArgs.end() })); } break; \
                         default: {                                                                                             \
-                            luisa::log_error("unsupported type: {}, kind {}, N {}", Ty.getAsString(), EType->getKind(), N);    \
+                            clangcxx_log_error("unsupported type: {}, kind {}, N {}", Ty.getAsString(), luisa::to_string(EType->getKind()), N);    \
                         } break;                                                                                               \
                     }
                                             case (BuiltinType::Kind::Bool): { CASE_VEC_TYPE(bool, BOOL) } break;
@@ -656,7 +686,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                             case (BuiltinType::Kind::UInt): { CASE_VEC_TYPE(uint, UINT) } break;
                                             case (BuiltinType::Kind::Double): { CASE_VEC_TYPE(double, DOUBLE) } break;
                                             default: {
-                                                luisa::log_error("unsupported type: {}, kind {}", Ty.getAsString(), EType->getKind());
+                                                clangcxx_log_error("unsupported type: {}, kind {}", Ty.getAsString(), luisa::to_string(EType->getKind()));
                                             } break;
                 #undef CASE_VEC_TYPE
                                         }
@@ -664,7 +694,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                     }
                                 }
                             } else
-                                luisa::log_error("???");
+                                clangcxx_log_error("???");
                         } else if (builtinName == "matrix") {
                             if (auto TSD = llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(Ty->getAs<clang::RecordType>()->getDecl())) {
                                 auto &Arguments = TSD->getTemplateArgs();
@@ -672,12 +702,10 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                 auto N = Arguments[0].getAsIntegral().getLimitedValue();
                                 auto lcType = Type::matrix(N);
                                 const CallOp MATRIX_LUT[3] = {CallOp::MAKE_FLOAT2X2, CallOp::MAKE_FLOAT3X3, CallOp::MAKE_FLOAT4X4};
-                                if (lcArgs.size() <= 1) /*ignore MAKE_MAT with empty args*/
-                                    constructed = constructed;
-                                else
+                                if (lcArgs.size() > 1)
                                     fb->assign(constructed, fb->call(lcType, MATRIX_LUT[N - 2], {lcArgs.begin() + 1, lcArgs.end()}));
                             } else
-                                luisa::log_error("???");
+                                clangcxx_log_error("???");
                         } else if (builtinName == "array") {
                             if (auto TSD = llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(Ty->getAs<clang::RecordType>()->getDecl())) {
                                 auto &Arguments = TSD->getTemplateArgs();
@@ -690,34 +718,32 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                 if (Flags & 1)
                                     constructed = fb->shared(lcArrayType);
 
-                                if (cxxCtor->isDefaultConstructor())
-                                    constructed = constructed;
-                                else if (cxxCtor->isConvertingConstructor(true))
-                                    fb->assign(constructed, fb->cast(lcArrayType, CastOp::STATIC, lcArgs[1]));
-                                else if (cxxCtor->isCopyConstructor())
-                                    fb->assign(constructed, lcArgs[1]);
-                                else if (cxxCtor->isMoveConstructor())
-                                    luisa::log_error("unexpected move array constructor!");
-                                else
-                                    luisa::log_error("unhandled array constructor: {}", cxxCtor->getNameAsString());
+                                if (!cxxCtor->isDefaultConstructor()) {
+                                    if (cxxCtor->isConvertingConstructor(true))
+                                        fb->assign(constructed, fb->cast(lcArrayType, CastOp::STATIC, lcArgs[1]));
+                                    else if (cxxCtor->isCopyConstructor())
+                                        fb->assign(constructed, lcArgs[1]);
+                                    else if (cxxCtor->isMoveConstructor())
+                                        clangcxx_log_error("unexpected move array constructor!");
+                                    else
+                                        clangcxx_log_error("unhandled array constructor: {}", cxxCtor->getNameAsString());
+                                }
                             }
                         } else {
-                            luisa::log_error("unhandled builtin constructor: {}", cxxCtor->getNameAsString());
+                            clangcxx_log_error("unhandled builtin constructor: {}", cxxCtor->getNameAsString());
                         }
                     } else {
                         db->DumpWithLocation(cxxCtor);
-                        luisa::log_error("unfound constructor: {}", cxxCtor->getNameAsString());
+                        clangcxx_log_error("unfound constructor: {}", cxxCtor->getNameAsString());
                     }
                 }
             } else if (auto unary_or_trait = llvm::dyn_cast<UnaryExprOrTypeTraitExpr>(x)) {
                 if (unary_or_trait->getKind() == clang::UETT_SizeOf)
-                    current = fb->literal(Type::of<uint>(), (uint)db->GetASTContext()->getTypeSize(unary_or_trait->getType()));
-                else if (unary_or_trait->getKind() == clang::UETT_PreferredAlignOf)
-                    current = fb->literal(Type::of<uint>(), (uint)db->GetASTContext()->getTypeAlign(unary_or_trait->getType()));
-                else if (unary_or_trait->getKind() == clang::UETT_AlignOf)
-                    current = fb->literal(Type::of<uint>(), (uint)db->GetASTContext()->getTypeAlign(unary_or_trait->getType()));
+                    current = fb->literal(Type::of<uint>(), (uint)(db->GetASTContext()->getTypeSize(unary_or_trait->getArgumentType()) / 8ull));
+                else if (unary_or_trait->getKind() == clang::UETT_PreferredAlignOf || unary_or_trait->getKind() == clang::UETT_AlignOf)
+                    current = fb->literal(Type::of<uint>(), (uint)(db->GetASTContext()->getTypeAlign(unary_or_trait->getArgumentType()) / 8ull));
                 else
-                    luisa::log_error("unsupportted UnaryExprOrTypeTraitExpr: {}", unary_or_trait->getStmtClassName());
+                    clangcxx_log_error("unsupportted UnaryExprOrTypeTraitExpr: {}", unary_or_trait->getStmtClassName());
             } else if (auto unary = llvm::dyn_cast<UnaryOperator>(x)) {
                 const auto cxx_op = unary->getOpcode();
                 const auto lhs = stack->GetExpr(unary->getSubExpr());
@@ -726,7 +752,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                     if (auto _this = llvm::dyn_cast<CXXThisExpr>(unary->getSubExpr()))
                         current = db->GetFunctionThis(fb);
                     else
-                        luisa::log_error("only support deref 'this'(*this)!");
+                        clangcxx_log_error("only support deref 'this'(*this)!");
                 } else if (!IsUnaryAssignOp(cxx_op)) {
                     current = fb->unary(lcType, TranslateUnaryOp(cxx_op), lhs);
                 } else {
@@ -770,7 +796,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                 } else {
                     if (!rhs) {
                         db->DumpWithLocation(x);
-                        luisa::log_error("ICE, unexpected parameter: rhs not found!");
+                        clangcxx_log_error("ICE, unexpected parameter: rhs not found!");
                     }
                     current = fb->binary(lcType, TranslateBinaryOp(cxx_op), lhs, rhs);
                 }
@@ -785,13 +811,13 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                             current = constant;
                         else {
                             db->DumpWithLocation(dref);
-                            luisa::log_error("unfound & unresolved ref: {}", str);
+                            clangcxx_log_error("unfound & unresolved ref: {}", str);
                         }
                     }
                 } else if (auto value = dref->getDecl(); value && llvm::isa<clang::FunctionDecl>(value))// Func Ref
                     ;
                 else
-                    luisa::log_error("unfound var ref: {}", str);
+                    clangcxx_log_error("unfound var ref: {}", str);
             } else if (auto _cxxParen = llvm::dyn_cast<ParenExpr>(x)) {
                 current = stack->GetExpr(_cxxParen->getSubExpr());
             } else if (auto implicit_cast = llvm::dyn_cast<ImplicitCastExpr>(x)) {
@@ -800,7 +826,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                     auto lcExpr = stack->GetExpr(implicit_cast->getSubExpr());
                     if (!lcExpr) {
                         db->DumpWithLocation(implicit_cast->getSubExpr());
-                        luisa::log_error("unknown error: rhs not found!");
+                        clangcxx_log_error("unknown error: rhs not found!");
                     }
                     if (lcExpr->type() != lcType)
                         current = fb->cast(lcType, CastOp::STATIC, lcExpr);
@@ -813,7 +839,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                     auto lcExpr = stack->GetExpr(_explicit_cast->getSubExpr());
                     if (!lcExpr) {
                         db->DumpWithLocation(_explicit_cast->getSubExpr());
-                        luisa::log_error("unknown error: rhs not found!");
+                        clangcxx_log_error("unknown error: rhs not found!");
                     }
                     if (lcExpr->type() != lcType)
                         current = fb->cast(lcType, CastOp::STATIC, lcExpr);
@@ -866,7 +892,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                         current = fb->member(lcMemberType, lhs, cxxField->getFieldIndex());
                     }
                 } else {
-                    luisa::log_error("unsupported member expr: {}", cxxMember->getMemberDecl()->getNameAsString());
+                    clangcxx_log_error("unsupported member expr: {}", cxxMember->getMemberDecl()->getNameAsString());
                 }
             } else if (auto call = llvm::dyn_cast<clang::CallExpr>(x)) {
                 if (isByPass(call->getCalleeDecl())) {
@@ -874,7 +900,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                     stack->callers.pop_back();
                     if (!caller) {
                         db->DumpWithLocation(call);
-                        luisa::log_error("incorrect [[bypass]] call detected!");
+                        clangcxx_log_error("incorrect [[bypass]] call detected!");
                     }
                     current = caller;
                 } else {
@@ -914,14 +940,14 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                             printer_str = luisa::string{reinterpret_cast<char const *>(str.bytes_begin()), str.size()};
                         } else {
                             db->DumpWithLocation(arg);
-                            luisa::log_error("unfound arg: {}", arg->getStmtClassName());
+                            clangcxx_log_error("unfound arg: {}", arg->getStmtClassName());
                         }
                     }
                     // call
                     auto cxxReturnType = call->getCallReturnType(*astContext);
                     if (!printer_str.empty()) {
                         if (callopName != "device_log") [[unlikely]] {
-                            luisa::log_error("String literal only allowed in device_log.");
+                            clangcxx_log_error("String literal only allowed in device_log.");
                         }
                         fb->print_(std::move(printer_str), lcArgs);
                     } else if (!binopName.empty()) {
@@ -931,7 +957,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                     } else if (!unaopName.empty()) {
                         UnaryOp lcUnaop = (unaopName == "PLUS")  ? UnaryOp::PLUS :
                                           (unaopName == "MINUS") ? UnaryOp::MINUS :
-                                                                   (luisa::log_error("unsupportted unary op {}!", unaopName.data()), UnaryOp::PLUS);
+                                                                   (clangcxx_log_error("unsupportted unary op {}!", unaopName.data()), UnaryOp::PLUS);
                         if (auto lcReturnType = db->FindOrAddType(cxxReturnType, x->getBeginLoc()))
                             current = fb->unary(lcReturnType, lcUnaop, lcArgs[0]);
                     } else if (isAccess) {
@@ -949,6 +975,8 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                             current = fb->dispatch_size();
                         else if (exprName == "kernel_id")
                             current = fb->kernel_id();
+                        else if (exprName == "object_id")
+                            current = fb->object_id();
                         else if (exprName == "warp_lane_count")
                             current = fb->warp_lane_count();
                         else if (exprName == "warp_lane_id")
@@ -957,7 +985,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                             auto lcReturnType = db->FindOrAddType(funcDecl->getReturnType(), x->getBeginLoc());
                             current = fb->cast(lcReturnType, luisa::compute::CastOp::BITWISE, lcArgs[0]);
                         } else
-                            luisa::log_error("ICE: unsupportted expr: {}", exprName);
+                            clangcxx_log_error("ICE: unsupportted expr: {}", exprName.str());
                     } else if (!callopName.empty()) {
                         auto op = db->FindCallOp(callopName);
                         if (call->getCallReturnType(*astContext)->isVoidType())
@@ -967,7 +995,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                             fb->assign(ret_value, fb->call(lcReturnType, op, lcArgs));
                             current = ret_value;
                         } else
-                            luisa::log_error(
+                            clangcxx_log_error(
                                 "unfound return type: {}",
                                 call->getCallReturnType(*astContext)->getCanonicalTypeInternal().getAsString());
                     } else {
@@ -997,7 +1025,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                 fb->assign(ret_value, fb->call(lcReturnType, luisa::compute::Function(func_callable.get()), lcArgs));
                                 current = ret_value;
                             } else
-                                luisa::log_error("unfound return type in method/function: {}", call->getCallReturnType(*astContext)->getCanonicalTypeInternal().getAsString());
+                                clangcxx_log_error("unfound return type in method/function: {}", call->getCallReturnType(*astContext)->getCanonicalTypeInternal().getAsString());
                         } else if (auto lambda_callable = db->lambda_builders[calleeDecl]) {
                             luisa::span<const luisa::compute::Expression *> lambda_args = {lcArgs.begin() + 1, lcArgs.end()};
                             if (call->getCallReturnType(*astContext)->isVoidType()) {
@@ -1009,17 +1037,17 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                                 fb->assign(ret_value, fb->call(lcReturnType, luisa::compute::Function(lambda_callable.get()), lambda_args));
                                 current = ret_value;
                             } else
-                                luisa::log_error("unfound return type in lambda: {}", call->getCallReturnType(*astContext)->getCanonicalTypeInternal().getAsString());
+                                clangcxx_log_error("unfound return type in lambda: {}", call->getCallReturnType(*astContext)->getCanonicalTypeInternal().getAsString());
                         } else {
                             db->DumpWithLocation(calleeDecl);
-                            luisa::log_error("unfound function!");
+                            clangcxx_log_error("unfound function!");
                         }
                     }
                 }
             } else if (auto _init_expr = llvm::dyn_cast<clang::CXXDefaultInitExpr>(x)) {
                 ExprTranslator v(stack, db, fb, _init_expr->getExpr());
                 if (!v.TraverseStmt(_init_expr->getExpr()))
-                    luisa::log_error("untranslated member call expr: {}", _init_expr->getExpr()->getStmtClassName());
+                    clangcxx_log_error("untranslated member call expr: {}", _init_expr->getExpr()->getStmtClassName());
                 current = v.translated;
             } else if (auto _exprWithCleanup = llvm::dyn_cast<clang::ExprWithCleanups>(x)) {// TODO
                 // luisa::log_warning("unimplemented ExprWithCleanups!");
@@ -1029,7 +1057,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
                 current = stack->GetExpr(_matTemp->getSubExpr());
             } else if (auto _init_list = llvm::dyn_cast<clang::InitListExpr>(x)) {// TODO
                 db->DumpWithLocation(x);
-                luisa::log_error("InitList is banned! Explicit use constructor instead!");
+                clangcxx_log_error("InitList is banned! Explicit use constructor instead!");
             } else if (auto _str_literal = llvm::dyn_cast<clang::StringLiteral>(x)) {
             } else if (auto _control_flow = llvm::dyn_cast<CompoundStmt>(x)) {       // CONTROL FLOW
             } else if (auto _control_flow = llvm::dyn_cast<clang::IfStmt>(x)) {      // CONTROL FLOW
@@ -1043,7 +1071,7 @@ struct ExprTranslator : public clang::RecursiveASTVisitor<ExprTranslator> {
             } else if (auto null = llvm::dyn_cast<NullStmt>(x)) {                    // EMPTY
             } else {
                 db->DumpWithLocation(x);
-                luisa::log_error("unsupportted expr!");
+                clangcxx_log_error("unsupportted expr!");
             }
         }
 
@@ -1073,6 +1101,8 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
         .dimension = 0};
     bool is_ignore = false;
     bool is_kernel = false;
+    bool is_vertex = false;
+    bool is_pixel = false;
     uint3 kernelSize;
     bool is_template = S->isTemplateDecl() && !S->isTemplateInstantiation();
     bool is_scope = false;
@@ -1095,10 +1125,17 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
                 result.dimension = 3;
             }
             getKernelSize(Anno, kernelSize.x, kernelSize.y, kernelSize.z);
+        } else if (isVertex(Anno)) {
+            is_vertex = true;
+        } else if (isPixel(Anno)) {
+            is_pixel = true;
         }
         if (isDump(Anno))
             db->DumpWithLocation(S);
     }
+
+    const auto TemplateKind = S->getTemplatedKind();
+    is_template |= (TemplateKind == clang::FunctionDecl::TemplatedKind::TK_FunctionTemplate);
 
     if (auto Method = llvm::dyn_cast<clang::CXXMethodDecl>(S)) {
         if (auto thisType = Method->getParent()) {
@@ -1114,8 +1151,8 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
                 is_ignore |= (Ctor->isImplicit() && Ctor->isCopyOrMoveConstructor());
             is_template |= (thisType->getTypeForDecl()->getTypeClass() == clang::Type::InjectedClassName);
         } else {
-            luisa::log_error("unfound this type [{}] in method [{}]",
-                             Method->getParent()->getNameAsString(), S->getNameAsString());
+            clangcxx_log_error("unfound this type [{}] in method [{}]",
+                               Method->getParent()->getNameAsString(), S->getNameAsString());
         }
         is_method = !is_lambda;
         methodThisType = Method->getParent()->getTypeForDecl()->getCanonicalTypeUnqualified();
@@ -1137,26 +1174,26 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
     if (!is_ignore) {
         if (S->getReturnType()->isReferenceType()) {
             db->DumpWithLocation(S);
-            luisa::log_error("return ref is not supportted now!");
+            clangcxx_log_error("return ref is not supportted now!");
         }
 
         if (auto Method = llvm::dyn_cast<clang::CXXMethodDecl>(S)) {
             if (Method->isMoveAssignmentOperator()) {
                 db->DumpWithLocation(Method);
-                luisa::log_error("error: BL-1.1 custom move assignment operator is not allowed!");
+                clangcxx_log_error("error: BL-1.1 custom move assignment operator is not allowed!");
             }
             if (Method->isCopyAssignmentOperator()) {
                 db->DumpWithLocation(Method);
-                luisa::log_error("error: BL-1.2 custom copy assignment operator is not allowed!");
+                clangcxx_log_error("error: BL-1.2 custom copy assignment operator is not allowed!");
             }
             if (auto Ctor = llvm::dyn_cast<clang::CXXConstructorDecl>(S)) {
                 if (Ctor->isMoveConstructor() && !Ctor->isImplicit()) {
                     db->DumpWithLocation(Method);
-                    luisa::log_error("error: BL-1.3 custom move constructor is not allowed!");
+                    clangcxx_log_error("error: BL-1.3 custom move constructor is not allowed!");
                 }
                 if (Ctor->isCopyConstructor() && !Ctor->isImplicit()) {
                     db->DumpWithLocation(Method);
-                    luisa::log_error("error: BL-1.4 custom copy constructor is not allowed!");
+                    clangcxx_log_error("error: BL-1.4 custom copy constructor is not allowed!");
                 }
             }
         }
@@ -1165,7 +1202,7 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
             if (!Dtor->isDefaulted()) {
                 db->DumpWithLocation(S);
                 auto dtorName = Dtor->getQualifiedNameAsString();
-                luisa::log_error("dtor {} is not allowed!", dtorName.c_str());
+                clangcxx_log_error("dtor {} is not allowed!", dtorName.c_str());
             }
         }
 
@@ -1174,13 +1211,31 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
         {
             if (is_kernel) {
                 if (!allowKernel) [[unlikely]] {
-                    LUISA_ERROR("Kernel definition not allowed in callable export.");
+                    clangcxx_log_error("Kernel definition not allowed in callable export.");
                 }
                 if (db->kernel_builder) [[unlikely]] {
-                    LUISA_ERROR("Kernel can not be redefined.");
+                    clangcxx_log_error("Kernel can not be redefined.");
                 }
                 db->kernel_builder = luisa::make_shared<luisa::compute::detail::FunctionBuilder>(luisa::compute::Function::Tag::KERNEL);
                 builder_sharedptr = db->kernel_builder;
+            } else if (is_vertex) {
+                if (!allowKernel) [[unlikely]] {
+                    clangcxx_log_error("Vertex definition not allowed in callable export.");
+                }
+                if (db->vertex_builder) [[unlikely]] {
+                    clangcxx_log_error("Kernel can not be redefined.");
+                }
+                db->vertex_builder = luisa::make_shared<luisa::compute::detail::FunctionBuilder>(luisa::compute::Function::Tag::RASTER_STAGE);
+                builder_sharedptr = db->vertex_builder;
+            } else if (is_pixel) {
+                if (!allowKernel) [[unlikely]] {
+                    clangcxx_log_error("Pixel definition not allowed in callable export.");
+                }
+                if (db->pixel_builder) [[unlikely]] {
+                    clangcxx_log_error("Kernel can not be redefined.");
+                }
+                db->pixel_builder = luisa::make_shared<luisa::compute::detail::FunctionBuilder>(luisa::compute::Function::Tag::RASTER_STAGE);
+                builder_sharedptr = db->pixel_builder;
             } else
                 builder_sharedptr = luisa::make_shared<luisa::compute::detail::FunctionBuilder>(luisa::compute::Function::Tag::CALLABLE);
             auto builder = builder_sharedptr.get();
@@ -1221,7 +1276,7 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
                         auto this_local = builder->reference(lcType);
                         db->SetFunctionThis(builder, this_local);
                     } else {
-                        luisa::log_error("???");
+                        clangcxx_log_error("???");
                     }
                 }
 
@@ -1260,7 +1315,7 @@ auto FunctionBuilderBuilder::build(const clang::FunctionDecl *S, bool allowKerne
                         }
                         stack.SetLocal(param, local);
                     } else {
-                        luisa::log_error("unfound arg type: {}", Ty.getAsString());
+                        clangcxx_log_error("unfound arg type: {}", Ty.getAsString());
                     }
                 }
 
@@ -1299,13 +1354,12 @@ bool FunctionBuilderBuilder::recursiveVisit(clang::Stmt *currStmt, compute::deta
 
     ExprTranslator v(&stack, db, cur, currStmt);
     if (!v.TraverseStmt(currStmt))
-        luisa::log_error("untranslated member call expr: {}", currStmt->getStmtClassName());
+        clangcxx_log_error("untranslated member call expr: {}", currStmt->getStmtClassName());
 
     return true;
 }
 
 void RecordDeclStmtHandler::run(const MatchFinder::MatchResult &Result) {
-    auto &kernel_builder = db->kernel_builder;
     if (const auto *S = Result.Nodes.getNodeAs<clang::RecordDecl>("RecordDecl")) {
         QualType Ty = S->getTypeForDecl()->getCanonicalTypeInternal();
         bool ignore = S->isUnion();
@@ -1321,7 +1375,6 @@ void RecordDeclStmtHandler::run(const MatchFinder::MatchResult &Result) {
 }
 
 void GlobalVarHandler::run(const MatchFinder::MatchResult &Result) {
-    auto &kernel_builder = db->kernel_builder;
     if (const auto *S = Result.Nodes.getNodeAs<clang::VarDecl>("VarDecl")) {
         bool ignore = false;
         for (auto Anno : S->specific_attrs<clang::AnnotateAttr>())
@@ -1331,7 +1384,7 @@ void GlobalVarHandler::run(const MatchFinder::MatchResult &Result) {
         const auto isNonConstGlobal = isGlobal && !isConst;
         if (!ignore && isNonConstGlobal) {
             db->DumpWithLocation(S);
-            luisa::log_error("global vars are banned!");
+            clangcxx_log_error("global vars are banned!");
         }
     }
 }
@@ -1357,7 +1410,7 @@ void FunctionDeclStmtHandler::run(const MatchFinder::MatchResult &Result) {
             if (is_export_func) {
                 auto func_name = S->getName();
                 if (!call_lib) [[unlikely]] {
-                    LUISA_WARNING("This is not a ast export compilation. Function {} export attribute ignored.", func_name);
+                    LUISA_WARNING("This is not a ast export compilation. Function {} export attribute ignored.", func_name.str());
                 } else {
                     call_lib->add_callable(
                         luisa::string_view{func_name.data(), func_name.size()},
@@ -1404,9 +1457,15 @@ ASTConsumerBase::~ASTConsumerBase() {
 }
 ASTConsumer::~ASTConsumer() {
     if (db.kernel_builder == nullptr) [[unlikely]] {
-        LUISA_ERROR("Kernel not defined.");
+        if (db.vertex_builder && db.pixel_builder) {
+            auto raster_ext = device->extension<RasterExt>();
+            raster_ext->create_raster_shader(luisa::compute::Function{db.vertex_builder.get()}, luisa::compute::Function{db.pixel_builder.get()}, option);
+        } else {
+            clangcxx_log_error("Kernel not defined.");
+        }
+    } else {
+        device->impl()->create_shader(option, luisa::compute::Function{db.kernel_builder.get()});
     }
-    device->impl()->create_shader(option, luisa::compute::Function{db.kernel_builder.get()});
 }
 
 void ASTConsumerBase::HandleTranslationUnit(clang::ASTContext &Context) {

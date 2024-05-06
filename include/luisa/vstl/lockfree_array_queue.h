@@ -113,7 +113,7 @@ public:
         } else {
             new (ptr) T(std::move(value));
         }
-        vstd::destruct(&value);
+        vstd::destruct(std::addressof(value));
         return true;
     }
     optional<T> pop() {
@@ -142,7 +142,7 @@ public:
     }
     ~LockFreeArrayQueue() {
         for (size_t s = tail; s != head; ++s) {
-            vstd::destruct(&arr[GetIndex(s, capacity)]);
+            vstd::destruct(std::addressof(arr[GetIndex(s, capacity)]));
         }
         Allocator().Free(arr);
     }
@@ -206,7 +206,7 @@ public:
         }
     }
     template<typename... Args>
-    T* push(Args &&...args) {
+    T *push(Args &&...args) {
         size_t index = head++;
         if (head - tail > capacity) {
             auto newCapa = (capacity + 1) * 2;
@@ -223,7 +223,7 @@ public:
         }
         return new (arr + GetIndex(index, capacity)) T{std::forward<Args>(args)...};
     }
-    T* front() {
+    T *front() {
         if (head == tail)
             return nullptr;
         auto &&value = arr[GetIndex(tail, capacity)];
@@ -239,7 +239,7 @@ public:
         } else {
             new (ptr) T(std::move(value));
         }
-        vstd::destruct(&value);
+        vstd::destruct(std::addressof(value));
         return true;
     }
     optional<T> pop() {
@@ -252,9 +252,16 @@ public:
         });
         return optional<T>(std::move(*value));
     }
+    void pop_discard() {
+        if (head == tail) {
+            return;
+        }
+        auto value = &arr[GetIndex(tail++, capacity)];
+        vstd::destruct(value);
+    }
     ~SingleThreadArrayQueue() {
         for (size_t s = tail; s != head; ++s) {
-            vstd::destruct(&arr[GetIndex(s, capacity)]);
+            vstd::destruct(std::addressof(arr[GetIndex(s, capacity)]));
         }
         Allocator().Free(arr);
     }

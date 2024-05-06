@@ -1,5 +1,7 @@
 // A Rust implementation of LuisaCompute backend.
 #![allow(non_snake_case)]
+
+use std::ptr::null;
 use std::sync::{atomic::AtomicBool, Arc};
 
 use self::{
@@ -95,6 +97,7 @@ impl Backend for RustBackend {
         depth: u32,
         mipmap_levels: u32,
         allow_simultaneous_access: bool,
+        allow_raster: bool,
     ) -> luisa_compute_api_types::CreatedResourceInfo {
         let storage = format.storage();
 
@@ -104,6 +107,7 @@ impl Backend for RustBackend {
             storage,
             mipmap_levels as u8,
             allow_simultaneous_access,
+            allow_raster,
         );
         let data = texture.data;
         let ptr = Box::into_raw(Box::new(texture));
@@ -177,13 +181,8 @@ impl Backend for RustBackend {
 
     fn create_swapchain(
         &self,
-        window_handle: u64,
+        o: &api::SwapchainOption,
         _stream_handle: api::Stream,
-        width: u32,
-        height: u32,
-        allow_hdr: bool,
-        vsync: bool,
-        back_buffer_size: u32,
     ) -> api::CreatedSwapchainInfo {
         let ctx = self.swapchain_context.read();
         let ctx = ctx
@@ -191,18 +190,19 @@ impl Backend for RustBackend {
             .unwrap_or_else(|| panic_abort!("swapchain context is not initialized"));
         unsafe {
             let sc_ctx = (ctx.create_cpu_swapchain)(
-                window_handle,
-                width,
-                height,
-                allow_hdr,
-                vsync,
-                back_buffer_size,
+                o.display,
+                o.window,
+                o.width,
+                o.height,
+                o.wants_hdr,
+                o.wants_vsync,
+                o.back_buffer_count,
             );
             let storage = (ctx.cpu_swapchain_storage)(sc_ctx);
             api::CreatedSwapchainInfo {
                 resource: api::CreatedResourceInfo {
                     handle: sc_ctx as u64,
-                    native_handle: sc_ctx as *mut std::ffi::c_void,
+                    native_handle: (ctx.cpu_swapchain_native_handle)(sc_ctx),
                 },
                 storage: std::mem::transmute(storage as u32),
             }

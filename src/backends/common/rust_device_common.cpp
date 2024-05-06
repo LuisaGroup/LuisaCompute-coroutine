@@ -524,10 +524,10 @@ public:
     }
 
     ResourceCreationInfo create_texture(PixelFormat format, uint dimension, uint width, uint height, uint depth,
-                                        uint mipmap_levels, bool simultaneous_access) noexcept override {
+                                        uint mipmap_levels, bool simultaneous_access, bool allow_raster_target) noexcept override {
         api::CreatedResourceInfo texture =
             device.create_texture(device.device, (api::PixelFormat)format, dimension,
-                                  width, height, depth, mipmap_levels, simultaneous_access);
+                                  width, height, depth, mipmap_levels, simultaneous_access, allow_raster_target);
         ResourceCreationInfo info{};
         info.handle = texture.handle;
         info.native_handle = texture.native_handle;
@@ -572,11 +572,16 @@ public:
     }
 
     SwapchainCreationInfo
-    create_swapchain(uint64_t window_handle, uint64_t stream_handle, uint width, uint height, bool allow_hdr,
-                     bool vsync, uint back_buffer_size) noexcept override {
-        auto swapchain =
-            device.create_swapchain(device.device, window_handle, api::Stream{stream_handle}, width, height,
-                                    allow_hdr, vsync, back_buffer_size);
+    create_swapchain(const SwapchainOption &option, uint64_t stream_handle) noexcept override {
+        auto sc_options = api::SwapchainOption{
+            .display = option.display,
+            .window = option.window,
+            .width = option.size.x,
+            .height = option.size.y,
+            .wants_hdr = option.wants_hdr,
+            .wants_vsync = option.wants_vsync,
+            .back_buffer_count = option.back_buffer_count};
+        auto swapchain = device.create_swapchain(device.device, &sc_options, api::Stream{stream_handle});
         SwapchainCreationInfo info{};
         info.handle = swapchain.resource.handle;
         info.native_handle = swapchain.resource.native_handle;

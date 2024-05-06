@@ -16,7 +16,7 @@ public:
     size_t size_bytes;
     DStorageFileImpl(ComPtr<IDStorageFile> &&file, size_t size_bytes) : file{std::move(file)}, size_bytes{size_bytes} {}
 };
-class DStorageCommandQueue : public CmdQueueBase{
+class DStorageCommandQueue : public CmdQueueBase {
     struct WaitQueueHandle {
         HANDLE handle;
     };
@@ -29,20 +29,19 @@ class DStorageCommandQueue : public CmdQueueBase{
         uint64_t fence;
         bool wakeupThread;
         template<typename Arg>
-            requires(std::is_constructible_v<Variant, Arg &&>)
+            requires(luisa::is_constructible_v<Variant, Arg &&>)
         CallbackEvent(Arg &&arg,
                       uint64_t fence,
                       bool wakeupThread)
             : evt{std::forward<Arg>(arg)}, fence{fence}, wakeupThread{wakeupThread} {}
     };
-    std::mutex mtx;
-    std::mutex exec_mtx;
-    std::thread thd;
-    std::condition_variable waitCv;
+    std::atomic_bool enabled = true;
     std::atomic_uint64_t executedFrame = 0;
     std::atomic_uint64_t lastFrame = 0;
+    std::mutex mtx;
+    std::mutex exec_mtx;
+    std::condition_variable waitCv;
     DSTORAGE_REQUEST_SOURCE_TYPE sourceType;
-    bool enabled = true;
     ComPtr<IDStorageQueue2> queue;
     vstd::SingleThreadArrayQueue<CallbackEvent> executedAllocators;
     void ExecuteThread();
@@ -59,5 +58,8 @@ public:
     KILL_MOVE_CONSTRUCT(DStorageCommandQueue)
     KILL_COPY_CONSTRUCT(DStorageCommandQueue)
     ~DStorageCommandQueue();
+private:
+    // make sure thread always construct after all members
+    std::thread thd;
 };
 }// namespace lc::dx

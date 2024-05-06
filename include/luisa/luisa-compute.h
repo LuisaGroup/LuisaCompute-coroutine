@@ -2,6 +2,7 @@
 
 #include <luisa/ast/ast2json.h>
 #include <luisa/ast/atomic_ref_node.h>
+#include <luisa/ast/attribute.h>
 #include <luisa/ast/callable_library.h>
 #include <luisa/ast/constant_data.h>
 #include <luisa/ast/expression.h>
@@ -16,6 +17,11 @@
 #include <luisa/ast/usage.h>
 #include <luisa/ast/variable.h>
 
+#ifdef LUISA_ENABLE_CLANGCXX
+#include <luisa/clangcxx/ast.h>
+#include <luisa/clangcxx/compiler.h>
+#endif
+
 #include <luisa/core/basic_traits.h>
 #include <luisa/core/basic_types.h>
 #include <luisa/core/binary_buffer.h>
@@ -26,6 +32,7 @@
 #include <luisa/core/constants.h>
 #include <luisa/core/dll_export.h>
 #include <luisa/core/dynamic_module.h>
+#include <luisa/core/fiber.h>
 #include <luisa/core/first_fit.h>
 #include <luisa/core/forget.h>
 #include <luisa/core/intrin.h>
@@ -39,7 +46,6 @@
 #include <luisa/core/spin_mutex.h>
 #include <luisa/core/stl.h>
 #include <luisa/core/string_scratch.h>
-#include <luisa/core/thread_pool.h>
 #include <luisa/core/thread_safety.h>
 
 #ifdef LUISA_ENABLE_DSL
@@ -47,6 +53,7 @@
 #include <luisa/dsl/atomic.h>
 #include <luisa/dsl/binding_group.h>
 #include <luisa/dsl/builtin.h>
+#include <luisa/dsl/callable_library.h>
 #include <luisa/dsl/constant.h>
 #include <luisa/dsl/dispatch_indirect.h>
 #include <luisa/dsl/expr.h>
@@ -55,7 +62,6 @@
 #include <luisa/dsl/local.h>
 #include <luisa/dsl/operators.h>
 #include <luisa/dsl/polymorphic.h>
-#include <luisa/dsl/printer.h>
 #include <luisa/dsl/raster/raster_func.h>
 #include <luisa/dsl/raster/raster_kernel.h>
 #include <luisa/dsl/ref.h>
@@ -117,6 +123,8 @@
 #include <luisa/runtime/raster/raster_state.h>
 #include <luisa/runtime/raster/vertex_attribute.h>
 #include <luisa/runtime/raster/viewport.h>
+#include <luisa/runtime/remote/client_interface.h>
+#include <luisa/runtime/remote/server_interface.h>
 #include <luisa/runtime/rhi/argument.h>
 #include <luisa/runtime/rhi/command.h>
 #include <luisa/runtime/rhi/command_encoder.h>
@@ -167,12 +175,12 @@
 #include <luisa/vstl/functional.h>
 #include <luisa/vstl/hash.h>
 #include <luisa/vstl/hash_map.h>
+#include <luisa/vstl/lmdb.hpp>
 #include <luisa/vstl/lockfree_array_queue.h>
 #include <luisa/vstl/log.h>
 #include <luisa/vstl/md5.h>
 #include <luisa/vstl/memory.h>
 #include <luisa/vstl/meta_lib.h>
-#include <luisa/vstl/pdqsort.h>
 #include <luisa/vstl/pool.h>
 #include <luisa/vstl/ranges.h>
 #include <luisa/vstl/spin_mutex.h>

@@ -105,7 +105,7 @@ private:
                         uniform_size += c.args[i].uniform.size;
                     }
                 }
-                ComputeDispatchCmdEncoder encoder{c.shader._0, c.args_count, uniform_size};
+                ComputeDispatchCmdEncoder encoder{c.shader._0, c.args_count, static_cast<size_t>(uniform_size)};
                 for (auto i = 0u; i < c.args_count; i++) {
                     auto arg = c.args[i];
                     switch (arg.tag) {
@@ -361,10 +361,10 @@ LUISA_EXPORT_API void luisa_compute_buffer_destroy(LCDevice device, LCBuffer buf
 LUISA_EXPORT_API LCCreatedResourceInfo luisa_compute_texture_create(LCDevice device,
                                                                     LCPixelFormat format, uint32_t dim,
                                                                     uint32_t w, uint32_t h, uint32_t d,
-                                                                    uint32_t mips, bool allow_simultaneous_access) LUISA_NOEXCEPT {
+                                                                    uint32_t mips, bool allow_simultaneous_access, bool allow_raster) LUISA_NOEXCEPT {
     auto dev = reinterpret_cast<DeviceInterface *>(device._0);
     auto pixel_format = PixelFormat{(uint8_t)to_underlying(format)};
-    auto info = dev->create_texture(pixel_format, dim, w, h, d, mips, allow_simultaneous_access);
+    auto info = dev->create_texture(pixel_format, dim, w, h, d, mips, allow_simultaneous_access, allow_raster);
     return LCCreatedResourceInfo{
         .handle = info.handle,
         .native_handle = info.native_handle,
@@ -632,13 +632,16 @@ size_t luisa_compute_device_query(LCDevice device, const char *query, char *resu
     return len;
 }
 
-LCCreatedSwapchainInfo luisa_compute_swapchain_create(
-    LCDevice device, uint64_t window_handle, LCStream stream_handle,
-    uint width, uint height, bool allow_hdr, bool vsync, uint back_buffer_size) LUISA_NOEXCEPT {
+LCCreatedSwapchainInfo luisa_compute_swapchain_create(LCDevice device, ConstSwapchainOptionPtr option, LCStream stream_handle) LUISA_NOEXCEPT {
     auto d = reinterpret_cast<DeviceInterface *>(device._0);
-    auto ret = d->create_swapchain(
-        window_handle, stream_handle._0,
-        width, height, allow_hdr, vsync, back_buffer_size);
+    auto o = SwapchainOption{
+        .display = option->display,
+        .window = option->window,
+        .size = luisa::make_uint2(option->width, option->height),
+        .wants_hdr = option->wants_hdr,
+        .wants_vsync = option->wants_vsync,
+        .back_buffer_count = option->back_buffer_count};
+    auto ret = d->create_swapchain(o, stream_handle._0);
     return LCCreatedSwapchainInfo{
         .resource = LCCreatedResourceInfo{
             .handle = ret.handle,
@@ -779,6 +782,7 @@ LUISA_EXPORT_API LCDeviceInterface luisa_compute_device_interface_create(LCConte
     LCDeviceInterface interface{};
     auto device = luisa_compute_device_create(ctx, name, config);
     interface.device = device;
+    interface.native_handle = luisa_compute_device_native_handle;
     interface.destroy_device = luisa_compute_device_interface_destroy;
     interface.create_buffer = luisa_compute_buffer_create;
     interface.destroy_buffer = luisa_compute_buffer_destroy;

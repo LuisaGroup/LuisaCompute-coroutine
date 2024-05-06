@@ -12,7 +12,7 @@
 #include "managed_device.h"
 #include "managed_accel.h"
 #include "managed_bindless.h"
-#include <luisa/core/thread_pool.h>
+#include <luisa/core/fiber.h>
 #include <luisa/runtime/raster/raster_state.h>
 #include <luisa/ast/atomic_ref_node.h>
 #include <luisa/core/logging.h>
@@ -37,8 +37,18 @@ public:
     MeshFormat format;
     luisa::vector<VertexAttribute> attributes;
 };
-static vstd::vector<std::shared_future<void>> futures;
-static vstd::optional<ThreadPool> thread_pool;
+template <typename T>
+struct halfN{
+    static constexpr bool value = false;
+};
+template <size_t n>
+struct halfN<luisa::Vector<half, n>>{
+    static constexpr bool value = true;
+    using Type = bool;
+    static constexpr size_t dimension = n;
+};
+static vstd::vector<luisa::fiber::event> futures;
+static vstd::optional<luisa::fiber::scheduler> thread_pool;
 PYBIND11_DECLARE_HOLDER_TYPE(T, luisa::shared_ptr<T>)
 ManagedDevice::ManagedDevice(Device &&device) noexcept : device(std::move(device)) {
     valid = true;
@@ -140,6 +150,16 @@ public:
         LUISA_WARNING("Failed to write shader bytecode to '{}'.", name);
         return {};
     }
+    void clear_shader_cache() const noexcept override {
+        if (_path.empty()) { return; }
+        auto cache_path = _path / "cache";
+        std::error_code ec;
+        std::filesystem::remove_all(cache_path, ec);
+        if (ec) {
+            LUISA_WARNING("Failed to remove cache directory '{}': {}.",
+                          cache_path.string(), ec.message());
+        }
+    }
     filesystem::path write_shader_cache(luisa::string_view name, luisa::span<const std::byte> data) const noexcept override {
         if (_path.empty()) { return {}; }
         auto cache_path = _path / "cache";
@@ -179,15 +199,15 @@ public:
 };
 
 void export_runtime(py::module &m) {
-    py::class_<ManagedMeshFormat>(m, "MeshFormat")
-        .def(py::init<>())
-        .def("add_attribute", [](ManagedMeshFormat &fmt, VertexAttributeType type, VertexElementFormat format) {
-            fmt.attributes.emplace_back(VertexAttribute{.type = type, .format = format});
-        })
-        .def("add_stream", [](ManagedMeshFormat &fmt) {
-            fmt.format.emplace_vertex_stream(fmt.attributes);
-            fmt.attributes.clear();
-        });
+    // py::class_<ManagedMeshFormat>(m, "MeshFormat")
+    //     .def(py::init<>())
+    //     .def("add_attribute", [](ManagedMeshFormat &fmt, VertexAttributeType type, VertexElementFormat format) {
+    //         fmt.attributes.emplace_back(VertexAttribute{.type = type, .format = format});
+    //     })
+    //     .def("add_stream", [](ManagedMeshFormat &fmt) {
+    //         fmt.format.emplace_vertex_stream(fmt.attributes);
+    //         fmt.attributes.clear();
+    //     });
     py::class_<ResourceCreationInfo>(m, "ResourceCreationInfo")
         .def(py::init<>())
         .def("handle", [](ResourceCreationInfo &self) { return self.handle; })
@@ -339,23 +359,24 @@ void export_runtime(py::module &m) {
         })
         .def("save_shader_async", [](DeviceInterface &self, luisa::shared_ptr<FunctionBuilder> const &builder, luisa::string_view str) {
             thread_pool.create();
-            futures.emplace_back(thread_pool->async([str = luisa::string{str}, builder, &self]() {
-                luisa::string_view str_view;
-                luisa::string dst_path_str;
-                if (!output_path.empty()) {
-                    auto dst_path = output_path / std::filesystem::path{str};
-                    dst_path_str = to_string(dst_path);
-                    str_view = dst_path_str;
-                } else {
-                    str_view = str;
-                }
-                ShaderOption option{
-                    .enable_fast_math = true,
-                    .enable_debug_info = false,
-                    .compile_only = true,
-                    .name = luisa::string{str_view}};
-                auto useless = self.create_shader(option, builder->function());
-            }));
+            futures.emplace_back(
+                luisa::fiber::async([str = luisa::string{str}, builder, &self]() {
+                    luisa::string_view str_view;
+                    luisa::string dst_path_str;
+                    if (!output_path.empty()) {
+                        auto dst_path = output_path / std::filesystem::path{str};
+                        dst_path_str = to_string(dst_path);
+                        str_view = dst_path_str;
+                    } else {
+                        str_view = str;
+                    }
+                    ShaderOption option{
+                        .enable_fast_math = true,
+                        .enable_debug_info = false,
+                        .compile_only = true,
+                        .name = luisa::string{str_view}};
+                    auto useless = self.create_shader(option, builder->function());
+                }));
         })
         /*
         0: legal shader
@@ -406,7 +427,7 @@ void export_runtime(py::module &m) {
             }
             return 0;
         })
-        .def("save_raster_shader", [](DeviceInterface &self, ManagedMeshFormat const &fmt, Function vertex, Function pixel, luisa::string_view str) {
+        .def("save_raster_shader", [](DeviceInterface &self, Function vertex, Function pixel, luisa::string_view str) {
             ShaderOption option;
             option.compile_only = true;
             if (!output_path.empty()) {
@@ -416,11 +437,11 @@ void export_runtime(py::module &m) {
                 option.name = str;
             }
             static_cast<void>(static_cast<RasterExt *>(self.extension(RasterExt::name))
-                                  ->create_raster_shader(fmt.format, vertex, pixel, option));
+                                  ->create_raster_shader(vertex, pixel, option));
         })
-        .def("save_raster_shader_async", [](DeviceInterface &self, ManagedMeshFormat const &fmt, luisa::shared_ptr<FunctionBuilder> const &vertex, luisa::shared_ptr<FunctionBuilder> const &pixel, luisa::string_view str) {
+        .def("save_raster_shader_async", [](DeviceInterface &self, luisa::shared_ptr<FunctionBuilder> const &vertex, luisa::shared_ptr<FunctionBuilder> const &pixel, luisa::string_view str) {
             thread_pool.create();
-            futures.emplace_back(thread_pool->async([fmt, str = luisa::string{str}, vertex, pixel, &self]() {
+            futures.emplace_back(luisa::fiber::async([str = luisa::string{str}, vertex, pixel, &self]() {
                 ShaderOption option;
                 option.compile_only = true;
                 if (!output_path.empty()) {
@@ -430,7 +451,7 @@ void export_runtime(py::module &m) {
                     option.name = str;
                 }
                 static_cast<void>(static_cast<RasterExt *>(self.extension(RasterExt::name))
-                                      ->create_raster_shader(fmt.format, vertex->function(), pixel->function(), option));
+                                      ->create_raster_shader(vertex->function(), pixel->function(), option));
             }));
         })
         .def("destroy_shader", [](DeviceInterface &self, uint64_t handle) {
@@ -480,7 +501,7 @@ void export_runtime(py::module &m) {
         })
         .def(
             "create_texture", [](DeviceInterface &d, PixelFormat format, uint32_t dimension, uint32_t width, uint32_t height, uint32_t depth, uint32_t mipmap_levels) {
-                auto info = d.create_texture(format, dimension, width, height, depth, mipmap_levels, false);
+                auto info = d.create_texture(format, dimension, width, height, depth, mipmap_levels, false, false);
                 RefCounter::current->AddObject(info.handle, {[](DeviceInterface *d, uint64 handle) {
                     if (auto gs = default_stream_data.lock()) {
                         gs->sync();
@@ -674,8 +695,10 @@ void export_runtime(py::module &m) {
         .def("bindless_array", &FunctionBuilder::bindless_array, pyref)
         .def("accel", &FunctionBuilder::accel, pyref)
 
-        .def(
-            "literal", [](FunctionBuilder &self, const Type *type, const LiteralExpr::Value::variant_type &value) {
+        .def("literal", [](
+                FunctionBuilder &self,
+                 const Type *type,
+                  const LiteralExpr::Value::variant_type &value) {
                 return luisa::visit(
                     [&self, type]<typename T>(T v) {
                         // we do not allow conversion between vector/matrix/bool types
@@ -683,11 +706,28 @@ void export_runtime(py::module &m) {
                             type == Type::of<bool>() || type == Type::of<T>()) {
                             return self.literal(type, v);
                         }
+                        auto print_v = [&](){
+                            if constexpr(std::is_same_v<std::decay_t<T>, half>){
+                                return (float)v;
+                            } else if constexpr(halfN<T>::value){
+                                constexpr auto dim = halfN<T>::dimension;
+                                if constexpr(dim == 2){
+                                    return float2((float)v.x, (float)v.y);
+                                }else if constexpr(dim == 3){
+                                    return float3((float)v.x, (float)v.y, (float)v.z);
+                                }else{
+                                    return float4((float)v.x, (float)v.y, (float)v.z, (float)v.z);
+                                }
+                            }
+                            else {
+                                return v;
+                            }
+                        };
                         if constexpr (is_scalar_v<T>) {
                             // we are less strict here to allow implicit conversion
                             // between integral or between floating-point types,
                             // since python does not distinguish them
-                            auto safe_convert = [v]<typename U>(U /* for tagged dispatch */) noexcept {
+                            auto safe_convert = [v = print_v()]<typename U>(U /* for tagged dispatch */) noexcept {
                                 auto u = static_cast<U>(v);
                                 LUISA_ASSERT(static_cast<T>(u) == v,
                                              "Cannot convert literal value {} to type {}.",
@@ -707,9 +747,10 @@ void export_runtime(py::module &m) {
                                 default: break;
                             }
                         }
+
                         LUISA_ERROR_WITH_LOCATION(
                             "Cannot convert literal value {} to type {}.",
-                            v, type->description());
+                            print_v(), type->description());
                     },
                     LiteralExpr::Value{value});
             },

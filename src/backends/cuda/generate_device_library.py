@@ -380,6 +380,8 @@ struct lc_float{i}x{i} {{
         generate_vector_call("max", "fmaxf", "f", ["a", "b"])
         generate_vector_call("max", "__hmax", "h", ["a", "b"])
         generate_vector_call("abs", "fabsf", "f", ["x"])
+        generate_vector_call("abs", "abs", "i", ["x"])
+        generate_vector_call("abs", "llabs", "l", ["x"])
         generate_vector_call("abs", "__habs", "h", ["x"])
 
         generate_vector_call("acos", "acosf", "hf", ["x"])
@@ -546,15 +548,21 @@ struct lc_float{i}x{i} {{
         generate_vector_call("fract", "lc_fract_impl", "hf", ["x"])
 
         # clz/popcount/reverse
-        generate_vector_call("clz", "__clz", "uz", ["x"])
-        generate_vector_call("popcount", "__popc", "uz", ["x"])
-        generate_vector_call("reverse", "__brev", "uz", ["x"])
+        generate_vector_call("clz", "__clz", "u", ["x"])
+        generate_vector_call("clz", "__clzll", "z", ["x"])
+        generate_vector_call("popcount", "__popc", "u", ["x"])
+        generate_vector_call("popcount", "__popcll", "z", ["x"])
+        generate_vector_call("reverse", "__brev", "u", ["x"])
+        generate_vector_call("reverse", "__brevll", "z", ["x"])
 
         # ctz
         print(
             f"[[nodiscard]] __device__ inline auto lc_ctz_impl(lc_uint x) noexcept {{ return (__ffs(x) - 1u) % 32u; }}",
             file=file)
-        generate_vector_call("ctz", "lc_ctz_impl", "u", ["x"])
+        print(
+            f"[[nodiscard]] __device__ inline auto lc_ctz_impl(lc_ulong x) noexcept {{ return (__ffsll(x) - 1u) % 64u; }}",
+            file=file)
+        generate_vector_call("ctz", "lc_ctz_impl", "uz", ["x"])
 
         for t in ["float", "half"]:
             # cross

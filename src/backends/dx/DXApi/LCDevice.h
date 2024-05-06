@@ -40,7 +40,7 @@ public:
     ResourceCreationInfo create_texture(
         PixelFormat format, uint dimension,
         uint width, uint height, uint depth,
-        uint mipmap_levels, bool simultaneous_access) noexcept override;
+        uint mipmap_levels, bool simultaneous_access, bool allow_raster_target) noexcept override;
     void destroy_texture(uint64_t handle) noexcept override;
 
     // bindless array
@@ -79,14 +79,7 @@ public:
 
     void destroy_accel(uint64_t handle) noexcept override;
     // swap chain
-    SwapchainCreationInfo create_swapchain(
-        uint64 window_handle,
-        uint64 stream_handle,
-        uint width,
-        uint height,
-        bool allow_hdr,
-        bool vsync,
-        uint back_buffer_size) noexcept override;
+    SwapchainCreationInfo create_swapchain(const SwapchainOption &option, uint64_t stream_handle) noexcept override;
     void destroy_swap_chain(uint64_t handle) noexcept override;
     void present_display_in_stream(uint64_t stream_handle, uint64_t swapchain_handle, uint64_t image_handle) noexcept override;
     [[nodiscard]] ResourceCreationInfo create_procedural_primitive(

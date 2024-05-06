@@ -1,7 +1,7 @@
 target("glfw")
 set_basename("lc-ext-glfw")
 _config_project({
-    project_kind = "shared"
+    project_kind = "static"
 })
 add_headerfiles("../ext/glfw/include/**.h")
 add_files("../ext/glfw/src/*.c")
@@ -18,7 +18,7 @@ elseif is_plat("macosx") then
     add_files("../ext/glfw/src/*.m")
     add_mflags("-fno-objc-arc")
     add_defines("_GLFW_COCOA")
-    add_frameworks("Foundation", "Cocoa", "IOKit", "OpenGL")
+    add_frameworks("Foundation", "Cocoa", "IOKit", "OpenGL", "QuartzCore")
 end
 target_end()
 
@@ -36,6 +36,7 @@ add_includedirs("../ext/imgui", "../ext/imgui/backends", {
 if is_plat("windows") then
     add_defines("IMGUI_API=__declspec(dllexport)")
 end
+add_defines("ImDrawIdx=unsigned int", {public = true})
 add_deps("glfw", "lc-dsl")
 target_end()
 
@@ -48,6 +49,6 @@ add_files("*.cpp")
 add_defines("LC_GUI_EXPORT_DLL", "GLFW_DLL")
 add_deps("glfw", "lc-runtime", "imgui")
 if is_plat("windows") then
-    add_defines("IMGUI_API=__declspec(dllimport)")
+    add_defines("IMGUI_API=__declspec(dllimport)", {public = true})
 end
 target_end()

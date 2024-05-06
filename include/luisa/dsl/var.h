@@ -3,6 +3,11 @@
 #include <luisa/dsl/ref.h>
 #include <luisa/dsl/arg.h>
 
+// X11 macro
+#ifdef Bool
+#undef Bool
+#endif
+
 namespace luisa::compute {
 
 namespace detail {

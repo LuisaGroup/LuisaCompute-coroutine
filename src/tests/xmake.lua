@@ -2,7 +2,7 @@ local enable_gui = get_config("enable_gui")
 target("stb-image")
 set_basename("lc-ext-stb-image")
 _config_project({
-    project_kind = "shared"
+    project_kind = "static"
 })
 add_headerfiles("../ext/stb/**.h")
 add_files("../ext/stb/stb.c")
@@ -44,6 +44,9 @@ local function lc_add_app(appname, folder, name)
     end
     if get_config("cuda_backend") then
         add_defines("LUISA_TEST_CUDA_BACKEND")
+        if get_config("cuda_ext_lcub") then
+            add_deps("luisa-compute-cuda-ext-lcub")
+        end
     end
     if get_config("metal_backend") then
         add_defines("LUISA_TEST_METAL_BACKEND")
@@ -83,6 +86,7 @@ local function test_proj(name, gui_dep, callable)
         return
     end
     target(name)
+    set_kind("binary")
     _config_project({
         project_kind = "binary"
     })
@@ -140,9 +144,7 @@ end)
 test_proj("test_shader_toy", true)
 test_proj("test_shader_visuals_present", true)
 test_proj("test_texture_io")
-test_proj("test_thread_pool")
 test_proj("test_type")
-test_proj("test_raster", true)
 test_proj("test_texture_compress")
 test_proj("test_swapchain", true)
 test_proj("test_swapchain_static", true)
@@ -157,16 +159,22 @@ test_proj("test_sparse_texture", true)
 test_proj("test_pinned_mem")
 test_proj("test_imgui", true, function()
     add_deps("imgui")
-    if is_plat("windows") then
-        add_defines("IMGUI_API=__declspec(dllimport)")
-    end
 end)
-test_proj("test_cuda_dx_interop")
-test_proj("test_dml")
+if get_config("dx_backend") then
+    test_proj("test_raster", true)
+    if get_config("cuda_backend") then
+        test_proj("test_cuda_dx_interop")        
+    end
+    test_proj("test_dml") 
+end
 test_proj("test_manual_ast")
 if not is_mode("debug") then
     if get_config("enable_clangcxx") then
         test_proj("test_clang_cxx", true, function()
+            add_deps("lc-clangcxx")
+            set_pcxxheader("pch.h")
+        end)
+        test_proj("test_path_tracing_clangcxx", true, function()
             add_deps("lc-clangcxx")
             set_pcxxheader("pch.h")
         end)

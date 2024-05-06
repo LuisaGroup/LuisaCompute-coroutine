@@ -8,10 +8,14 @@ namespace luisa::compute {
 
 namespace detail {
 
-ShaderInvokeBase &ShaderInvokeBase::operator<<(const BindlessArray &array) noexcept {
+void ShaderInvokeBase::encode(ShaderDispatchCmdEncoder &encoder, const BindlessArray &array) noexcept {
     array._check_is_valid();
-    _encoder.encode_bindless_array(array.handle());
-    return *this;
+#ifndef NDEBUG
+    if (array.dirty()) [[unlikely]] {
+        LUISA_WARNING("Dispatching shader with a dirty bindless array.");
+    }
+#endif
+    encoder.encode_bindless_array(array.handle());
 }
 
 }// namespace detail

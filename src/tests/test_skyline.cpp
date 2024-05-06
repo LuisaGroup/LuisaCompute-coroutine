@@ -807,11 +807,16 @@ int main(int argc, char *argv[]) {
     is_coroutine = false;
     Stream stream = device.create_stream(StreamTag::GRAPHICS);
     Window window{"Display", make_uint2(width, height)};
-    Swapchain swap_chain{device.create_swapchain(
-        window.native_handle(),
+    Swapchain swap_chain = device.create_swapchain(
         stream,
-        window.size(),
-        false, true, 2)};
+        SwapchainOption{
+            .display = window.native_display(),
+            .window = window.native_handle(),
+            .size = window.size(),
+            .wants_hdr = false,
+            .wants_vsync = false,
+            .back_buffer_count = 3,
+        });
     Image<float> device_image = device.create_image<float>(swap_chain.backend_storage(), width, height);
     Kernel2D main_kernel = [&](ImageFloat image, Float time) noexcept {
         set_block_size(128, 1, 1);

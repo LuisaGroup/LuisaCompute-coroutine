@@ -1,5 +1,6 @@
 #pragma once
 #include "resource.h"
+#include <luisa/core/logging.h>
 #include <luisa/ast/usage.h>
 #include "range.h"
 namespace lc::validation {
@@ -36,7 +37,7 @@ public:
     static T *get(uint64_t handle) {
         auto ptr = static_cast<T *>(_get(handle));
         if(ptr == nullptr) [[unlikely]]{
-            LUISA_ERROR("Type {} instance not found.", typeid(T).name());
+            LUISA_ERROR("Type with size {} and align {} instance not found.", sizeof(T), alignof(T));
         }
         return ptr;
     }

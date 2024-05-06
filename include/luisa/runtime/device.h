@@ -141,9 +141,7 @@ public:
     // see definition in runtime/event.cpp
     [[nodiscard]] TimelineEvent create_timeline_event() noexcept;
     // see definition in runtime/swap_chain.cpp
-    [[nodiscard]] Swapchain create_swapchain(
-        uint64_t window_handle, const Stream &stream, uint2 resolution,
-        bool allow_hdr = true, bool vsync = true, uint back_buffer_count = 1) noexcept;
+    [[nodiscard]] Swapchain create_swapchain(const Stream &stream, const SwapchainOption &option) noexcept;
     // see definition in runtime/dispatch_buffer.cpp
     [[nodiscard]] IndirectDispatchBuffer create_indirect_dispatch_buffer(size_t capacity) noexcept;
     // see definition in rtx/mesh.h
@@ -174,13 +172,13 @@ public:
     [[nodiscard]] BindlessArray create_bindless_array(size_t slots = 65536u) noexcept;
 
     template<typename T>
-    [[nodiscard]] auto create_image(PixelStorage pixel, uint width, uint height, uint mip_levels = 1u, bool simultaneous_access = false) noexcept {
-        return _create<Image<T>>(pixel, make_uint2(width, height), mip_levels, simultaneous_access);
+    [[nodiscard]] auto create_image(PixelStorage pixel, uint width, uint height, uint mip_levels = 1u, bool simultaneous_access = false, bool allow_raster_target = false) noexcept {
+        return _create<Image<T>>(pixel, make_uint2(width, height), mip_levels, simultaneous_access, allow_raster_target);
     }
 
     template<typename T>
-    [[nodiscard]] auto create_image(PixelStorage pixel, uint2 size, uint mip_levels = 1u, bool simultaneous_access = false) noexcept {
-        return _create<Image<T>>(pixel, size, mip_levels, simultaneous_access);
+    [[nodiscard]] auto create_image(PixelStorage pixel, uint2 size, uint mip_levels = 1u, bool simultaneous_access = false, bool allow_raster_target = false) noexcept {
+        return _create<Image<T>>(pixel, size, mip_levels, simultaneous_access, allow_raster_target);
     }
 
     template<typename T>
@@ -196,13 +194,13 @@ public:
     [[nodiscard]] DepthBuffer create_depth_buffer(DepthFormat depth_format, uint2 size) noexcept;
 
     template<typename T>
-    [[nodiscard]] auto create_volume(PixelStorage pixel, uint width, uint height, uint depth, uint mip_levels = 1u, bool simultaneous_access = false) noexcept {
-        return _create<Volume<T>>(pixel, make_uint3(width, height, depth), mip_levels, simultaneous_access);
+    [[nodiscard]] auto create_volume(PixelStorage pixel, uint width, uint height, uint depth, uint mip_levels = 1u, bool simultaneous_access = false, bool allow_raster_target = false) noexcept {
+        return _create<Volume<T>>(pixel, make_uint3(width, height, depth), mip_levels, simultaneous_access, allow_raster_target);
     }
 
     template<typename T>
-    [[nodiscard]] auto create_volume(PixelStorage pixel, uint3 size, uint mip_levels = 1u, bool simultaneous_access = false) noexcept {
-        return _create<Volume<T>>(pixel, size, mip_levels, simultaneous_access);
+    [[nodiscard]] auto create_volume(PixelStorage pixel, uint3 size, uint mip_levels = 1u, bool simultaneous_access = false, bool allow_raster_target = false) noexcept {
+        return _create<Volume<T>>(pixel, size, mip_levels, simultaneous_access, allow_raster_target);
     }
 
     template<typename T>

@@ -3,8 +3,8 @@ _config_project({
 	project_kind = "shared",
 	batch_size = 8
 })
-add_deps("lc-runtime", "lc-vstl")
-add_files("**.cpp")
+add_deps("lc-runtime", "lc-vstl", "lc-hlsl-builtin")
+add_files("**.cpp", "../common/hlsl/*.cpp")
 add_headerfiles("**.h", "../common/default_binary_io.h",
 				"../common/hlsl/*.h")
 add_includedirs("./")
@@ -24,11 +24,6 @@ on_load(function(target)
 		end
 	end
 end)
-after_build(function(target)
-	if is_plat("windows") then
-		local bin_dir = target:targetdir()
-		os.cp(path.join(os.scriptdir(), "dx_support/*.dll"), bin_dir)
-	end
-end)
 set_pcxxheader("pch.h")
+add_rules('lc_install_sdk', {libnames = {'dx_sdk'}})
 target_end()

@@ -5,7 +5,7 @@
 #include <luisa/core/basic_types.h>
 #include <luisa/core/stl/functional.h>
 #include <luisa/gui/input.h>
-
+struct GLFWwindow;
 namespace luisa::compute {
 
 class LC_GUI_API Window {
@@ -26,7 +26,7 @@ private:
     uint2 _size;
 
 public:
-    Window(string name, uint width, uint height, bool resizable = false) noexcept;
+    Window(string name, uint width, uint height, bool resizable = false, bool full_screen = false) noexcept;
     Window(string name, uint2 size, bool resizable = false) noexcept
         : Window{std::move(name), size.x, size.y, resizable} {}
     ~Window() noexcept;
@@ -35,7 +35,9 @@ public:
     Window &operator=(Window &&) noexcept = default;
     Window &operator=(const Window &) noexcept = delete;
 
+    [[nodiscard]] GLFWwindow *window() const noexcept;
     [[nodiscard]] uint64_t native_handle() const noexcept;
+    [[nodiscard]] uint64_t native_display() const noexcept;
     [[nodiscard]] bool should_close() const noexcept;
     void set_should_close(bool should_close = true) noexcept;
     [[nodiscard]] auto size() const noexcept { return _size; }
@@ -53,4 +55,3 @@ public:
 };
 
 }// namespace luisa::compute
-

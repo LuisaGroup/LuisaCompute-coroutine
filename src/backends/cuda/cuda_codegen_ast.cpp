@@ -1,5 +1,6 @@
 #include <string_view>
 
+#include <luisa/core/stl/algorithm.h>
 #include <luisa/core/logging.h>
 #include <luisa/ast/type_registry.h>
 #include <luisa/ast/constant_data.h>
@@ -10,6 +11,7 @@
 
 #include "cuda_texture.h"
 #include "cuda_codegen_ast.h"
+#include "../common/cast.h"
 
 namespace luisa::compute::cuda {
 
@@ -623,7 +625,9 @@ void CUDACodegenAST::visit(const UnaryExpr *expr) {
         case UnaryOp::BIT_NOT: _scratch << "~"; break;
         default: break;
     }
+    _scratch << "(";
     expr->operand()->accept(*this);
+    _scratch << ")";
 }
 
 void CUDACodegenAST::visit(const BinaryExpr *expr) {
@@ -713,7 +717,6 @@ public:
         }
     }
     void operator()(half v) const noexcept {
-        LUISA_NOT_IMPLEMENTED();
         if (luisa::isnan(v)) [[unlikely]] { LUISA_ERROR_WITH_LOCATION("Encountered with NaN."); }
         _s << luisa::format("lc_half({})", static_cast<float>(v));
     }
@@ -1198,7 +1201,7 @@ void CUDACodegenAST::visit(const IfStmt *stmt) {
     stmt->true_branch()->accept(*this);
     if (auto fb = stmt->false_branch(); fb != nullptr && !fb->statements().empty()) {
         _scratch << " else ";
-        if (auto elif = dynamic_cast<const IfStmt *>(fb->statements().front());
+        if (auto elif = ast_cast_to<IfStmt>(fb->statements().front());
             fb->statements().size() == 1u && elif != nullptr) {
             elif->accept(*this);
         } else {
@@ -1563,7 +1566,7 @@ void CUDACodegenAST::_emit_type_decl(Function kernel) noexcept {
     sorted.reserve(types.size());
     std::copy(types.cbegin(), types.cend(),
               std::back_inserter(sorted));
-    std::sort(sorted.begin(), sorted.end(), [](auto a, auto b) noexcept {
+    luisa::sort(sorted.begin(), sorted.end(), [](auto a, auto b) noexcept {
         return a->hash() < b->hash();
     });
 
@@ -1617,7 +1620,7 @@ void CUDACodegenAST::_emit_type_decl(Function kernel) noexcept {
     sorted.clear();
     sorted.reserve(_print_stmt_types.size());
     for (auto [_, s] : _print_stmt_types) { sorted.emplace_back(s); }
-    std::sort(sorted.begin(), sorted.end(), [](auto a, auto b) noexcept {
+    luisa::sort(sorted.begin(), sorted.end(), [](auto a, auto b) noexcept {
         return a->hash() < b->hash();
     });
     sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
@@ -1861,6 +1864,8 @@ public:
 
 protected:
     void _decode_bool(bool x) noexcept override { _codegen->_scratch << (x ? "true" : "false"); }
+    void _decode_char(char x) noexcept override { _codegen->_scratch << luisa::format("lc_byte({})", static_cast<int>(x)); }
+    void _decode_uchar(ubyte x) noexcept override { _codegen->_scratch << luisa::format("lc_ubyte({})", static_cast<uint>(x)); }
     void _decode_short(short x) noexcept override { _codegen->_scratch << luisa::format("lc_short({})", x); }
     void _decode_ushort(ushort x) noexcept override { _codegen->_scratch << luisa::format("lc_ushort({})", x); }
     void _decode_int(int x) noexcept override { _codegen->_scratch << luisa::format("lc_int({})", x); }

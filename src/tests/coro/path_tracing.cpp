@@ -175,7 +175,6 @@ int main(int argc, char *argv[]) {
     auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 64u;
 
     Coroutine raytracing_coro = [&](Var<CoroFrame> &, ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
-        set_block_size(16u, 16u, 1u);
         UInt2 coord = dispatch_id().xy();
         Float frame_size = min(resolution.x, resolution.y).cast<float>();
         UInt state = seed_image.read(coord).x;

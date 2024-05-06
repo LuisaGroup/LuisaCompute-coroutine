@@ -1,4 +1,6 @@
 #pragma once
+#include "luisa/runtime/stream.h"
+
 #include <luisa/runtime/rhi/device_interface.h>
 #include <luisa/runtime/buffer.h>
 #include <luisa/runtime/image.h>
@@ -15,13 +17,13 @@ struct Signal {
     DxCudaInterop *ext;
     uint64_t handle;
     uint64_t fence;
-    void operator()(DeviceInterface *device, uint64_t stream_handle) const && noexcept;
+    void operator()(Stream &stream) const && noexcept;
 };
 struct Wait {
     DxCudaInterop *ext;
     uint64_t handle;
     uint64_t fence;
-    void operator()(DeviceInterface *device, uint64_t stream_handle) const && noexcept;
+    void operator()(Stream &stream) const && noexcept;
 };
 }// namespace dx_cuda_interop
 class DxCudaTimelineEvent final {
@@ -143,14 +145,18 @@ private:
             create_interop_event()};
     }
 };
-inline void dx_cuda_interop::Signal::operator()(DeviceInterface *device, uint64_t stream_handle) const && noexcept {
+inline void dx_cuda_interop::Signal::operator()(Stream &stream) const && noexcept {
+    auto device = stream.device();
+    auto stream_handle = stream.handle();
     if (device != ext->device()) {
         ext->cuda_signal(device, stream_handle, handle, fence);
     } else {
         device->signal_event(handle, stream_handle, fence);
     }
 }
-inline void dx_cuda_interop::Wait::operator()(DeviceInterface *device, uint64_t stream_handle) const && noexcept {
+inline void dx_cuda_interop::Wait::operator()(Stream &stream) const && noexcept {
+    auto device = stream.device();
+    auto stream_handle = stream.handle();
     if (device != ext->device()) {
         ext->cuda_wait(device, stream_handle, handle, fence);
     } else {

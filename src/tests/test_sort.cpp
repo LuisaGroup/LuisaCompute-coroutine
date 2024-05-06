@@ -261,7 +261,7 @@ int main(int argc, char *argv[]) {
     };
     auto _sort_temp_storage = radix_sort::temp_storage(device, n, 128u);
 
-    auto sort_instance = radix_sort{device, n, _sort_temp_storage, &get_x, &id, &get_x, 1, BIN};
+    auto sort_instance = radix_sort::instance<>{device, n, _sort_temp_storage, &get_x, &id, &get_x, 1, BIN};
     Clock clock;
     stream << synchronize();
     clock.tic();

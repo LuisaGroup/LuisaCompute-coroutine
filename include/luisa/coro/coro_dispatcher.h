@@ -6,6 +6,9 @@
 #include <luisa/runtime/rhi/command_encoder.h>
 #include <luisa/core/stl.h>
 #include <luisa/runtime/shader.h>
+
+#include <luisa/dsl/func.h>
+#include <luisa/dsl/sugar.h>
 #include <luisa/dsl/builtin.h>
 #include <luisa/coro/radix_sort.h>
 namespace luisa::compute {

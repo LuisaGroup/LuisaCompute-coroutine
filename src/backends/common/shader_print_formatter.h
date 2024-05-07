@@ -3,6 +3,7 @@
 #include <luisa/core/stl/variant.h>
 #include <luisa/core/logging.h>
 #include <luisa/ast/type.h>
+#include <luisa/ast/type_registry.h>
 #include <luisa/runtime/rhi/device_interface.h>
 
 namespace luisa::compute {

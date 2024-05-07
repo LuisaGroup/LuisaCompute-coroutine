@@ -36,46 +36,59 @@ uint CoroFrameDesc::designated_member(luisa::string_view name) const noexcept {
     return iter->second;
 }
 
-bool CoroFrameDesc::operator==(const CoroFrameDesc &rhs) const noexcept {
-    return this->type() == rhs.type() && this->designated_members() == rhs.designated_members();
-}
-
-CoroFrame CoroFrameDesc::instantiate(Expr<uint3> coro_id) const noexcept {
+CoroFrame CoroFrameDesc::instantiate() const noexcept {
     auto fb = detail::FunctionBuilder::current();
     // create an variable for the coro frame
     auto expr = fb->local(_type);
     // initialize the coro frame members
     auto zero_init = fb->call(_type, CallOp::ZERO, {});
     fb->assign(expr, zero_init);
-    // set the coro_id and target_token fields
-    auto i = fb->member(_type->members()[0], expr, 0u);
-    fb->assign(i, coro_id.expression());
-    auto zero = fb->call(Type::of<uint>(), CallOp::ZERO, {});
-    auto target_token = fb->member(_type->members()[1], expr, 1u);
-    fb->assign(target_token, zero);
     return CoroFrame{shared_from_this(), expr};
 }
 
+CoroFrame CoroFrameDesc::instantiate(Expr<uint3> coro_id) const noexcept {
+    auto frame = instantiate();
+    frame.coro_id = coro_id;
+    return frame;
+}
+
 CoroFrame::CoroFrame(luisa::shared_ptr<const CoroFrameDesc> desc, const RefExpr *expr) noexcept
-    : _desc{std::move(desc)}, _expression{expr} {
+    : _desc{std::move(desc)},
+      _expression{expr},
+      coro_id{this->m<uint3>(0u)},
+      target_token{this->m<uint>(1u)} {
     LUISA_ASSERT(expr != nullptr, "CoroFrame expression must not be null.");
     LUISA_ASSERT(expr->type() == _desc->type(), "CoroFrame expression type mismatch.");
 }
 
-CoroFrame::CoroFrame(CoroFrame &&another) noexcept {
-    LUISA_NOT_IMPLEMENTED();
+CoroFrame::CoroFrame(CoroFrame &&another) noexcept
+    : CoroFrame{std::move(another._desc), another._expression} {
+    another._expression = nullptr;
 }
 
-CoroFrame::CoroFrame(const CoroFrame &another) noexcept {
-    LUISA_NOT_IMPLEMENTED();
-}
+CoroFrame::CoroFrame(const CoroFrame &another) noexcept
+    : CoroFrame{another._desc, [e = another.expression()]() noexcept {
+                    auto fb = detail::FunctionBuilder::current();
+                    auto copy = fb->local(e->type());
+                    fb->assign(copy, e);
+                    return copy;
+                }()} {}
 
 CoroFrame &CoroFrame::operator=(const CoroFrame &rhs) noexcept {
-    LUISA_NOT_IMPLEMENTED();
+    if (this == std::addressof(rhs)) { return *this; }
+    LUISA_ASSERT(this->description() == rhs.description(), "CoroFrame description mismatch.");
+    auto fb = detail::FunctionBuilder::current();
+    fb->assign(_expression, rhs.expression());
+    return *this;
 }
 
 CoroFrame &CoroFrame::operator=(CoroFrame &&rhs) noexcept {
-    LUISA_NOT_IMPLEMENTED();
+    return *this = static_cast<const CoroFrame &>(rhs);
+}
+
+void CoroFrame::_check_member_index(uint index) const noexcept {
+    LUISA_ASSERT(index < _desc->type()->members().size(),
+                 "CoroFrame member index out of range.");
 }
 
 }// namespace luisa::compute::inline dsl::coro_v2

@@ -372,7 +372,7 @@ constexpr auto is_valid_reflection_v = is_valid_reflection<S, M, O>::value;
 
 #define LUISA_COROFRAME_STRUCT_REFLECT(S, name)                        \
     template<>                                                         \
-    struct canonical_layout<S> {                                       \
+    struct luisa::compute::canonical_layout<S> {                       \
         using type = std::tuple<S>;                                    \
     };                                                                 \
     template<>                                                         \

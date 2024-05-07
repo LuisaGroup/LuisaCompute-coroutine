@@ -690,6 +690,7 @@ struct luisa_compute_extension {};
             : Var{Var<ByteBuffer>{detail::ArgumentCreation{}}} {}                                                    \
     };                                                                                                               \
     }// namespace luisa::compute
+
 #define LUISA_COROFRAME_STRUCT(S)          \
     LUISA_COROFRAME_STRUCT_REFLECT(S, #S); \
     LUISA_COROFRAME_STRUCT_EXT(S)          \

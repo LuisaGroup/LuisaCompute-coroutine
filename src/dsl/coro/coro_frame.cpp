@@ -55,8 +55,8 @@ CoroFrame CoroFrameDesc::instantiate(Expr<uint3> coro_id) const noexcept {
 CoroFrame::CoroFrame(luisa::shared_ptr<const CoroFrameDesc> desc, const RefExpr *expr) noexcept
     : _desc{std::move(desc)},
       _expression{expr},
-      coro_id{this->m<uint3>(0u)},
-      target_token{this->m<uint>(1u)} {
+      coro_id{this->get<uint3>(0u)},
+      target_token{this->get<uint>(1u)} {
     LUISA_ASSERT(expr != nullptr, "CoroFrame expression must not be null.");
     LUISA_ASSERT(expr->type() == _desc->type(), "CoroFrame expression type mismatch.");
 }

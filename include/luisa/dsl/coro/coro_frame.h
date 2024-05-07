@@ -62,23 +62,23 @@ public:
 
 public:
     template<typename T>
-    [[nodiscard]] Var<T> &m(uint index) noexcept {
+    [[nodiscard]] Var<T> &get(uint index) noexcept {
         _check_member_index(index);
         auto fb = detail::FunctionBuilder::current();
         auto member = fb->member(_desc->type()->members()[index], _expression, index);
         return *fb->create_temporary<Var<T>>(member);
     }
     template<typename T>
-    [[nodiscard]] const Var<T> &m(uint index) const noexcept {
-        return const_cast<CoroFrame *>(this)->m<T>(index);
+    [[nodiscard]] const Var<T> &get(uint index) const noexcept {
+        return const_cast<CoroFrame *>(this)->get<T>(index);
     }
     template<typename T>
-    [[nodiscard]] Var<T> &m(luisa::string_view name) noexcept {
-        return m<T>(_desc->designated_member(name));
+    [[nodiscard]] Var<T> &get(luisa::string_view name) noexcept {
+        return get<T>(_desc->designated_member(name));
     }
     template<typename T>
-    [[nodiscard]] const Var<T> &m(luisa::string_view name) const noexcept {
-        return const_cast<CoroFrame *>(this)->m<T>(name);
+    [[nodiscard]] const Var<T> &get(luisa::string_view name) const noexcept {
+        return const_cast<CoroFrame *>(this)->get<T>(name);
     }
 };
 

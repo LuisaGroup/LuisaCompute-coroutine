@@ -10,6 +10,12 @@
 
 namespace luisa::compute::inline dsl::coro_v2 {
 
+namespace detail {
+LC_DSL_API void coroutine_chained_await_impl(
+    CoroFrame &frame, uint node_count,
+    luisa::move_only_function<void(CoroGraph::Token, CoroFrame &)> node) noexcept;
+}// namespace detail
+
 template<typename T>
 class Coroutine {
     static_assert(luisa::always_false_v<T>);
@@ -35,11 +41,11 @@ public:
         explicit Subroutine(Function function) noexcept : f{function} {}
 
     public:
-        void operator()(CoroFrame &frame, detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
-            detail::CallableInvoke invoke;
+        void operator()(CoroFrame &frame, compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+            compute::detail::CallableInvoke invoke;
             invoke << frame.expression();
             static_cast<void>((invoke << ... << args));
-            detail::FunctionBuilder::current()->call(f, invoke.args());
+            compute::detail::FunctionBuilder::current()->call(f, invoke.args());
         }
     };
 
@@ -56,20 +62,20 @@ public:
         requires std::negation_v<is_callable<std::remove_cvref_t<Def>>> &&
                  std::negation_v<is_kernel<std::remove_cvref_t<Def>>>
     Coroutine(Def &&f) noexcept {
-        auto coro = detail::FunctionBuilder::define_coroutine([&f] {
-            static_assert(std::is_invocable_r_v<void, Def, detail::prototype_to_creation_t<Args>...>);
+        auto coro = compute::detail::FunctionBuilder::define_coroutine([&f] {
+            static_assert(std::is_invocable_r_v<void, Def, compute::detail::prototype_to_creation_t<Args>...>);
             auto create = []<size_t... i>(auto &&def, std::index_sequence<i...>) noexcept {
                 using arg_tuple = std::tuple<Args...>;
                 using var_tuple = std::tuple<Var<std::remove_cvref_t<Args>>...>;
-                using tag_tuple = std::tuple<detail::prototype_to_creation_tag_t<Args>...>;
-                auto args = detail::create_argument_definitions<var_tuple, tag_tuple>(std::tuple<>{});
+                using tag_tuple = std::tuple<compute::detail::prototype_to_creation_tag_t<Args>...>;
+                auto args = compute::detail::create_argument_definitions<var_tuple, tag_tuple>(std::tuple<>{});
                 static_assert(std::tuple_size_v<decltype(args)> == sizeof...(Args));
                 return luisa::invoke(std::forward<decltype(def)>(def),
-                                     static_cast<detail::prototype_to_creation_t<
+                                     static_cast<compute::detail::prototype_to_creation_t<
                                          std::tuple_element_t<i, arg_tuple>> &&>(std::get<i>(args))...);
             };
             create(std::forward<Def>(f), std::index_sequence_for<Args...>{});
-            detail::FunctionBuilder::current()->return_(nullptr);// to check if any previous $return called with non-void types
+            compute::detail::FunctionBuilder::current()->return_(nullptr);// to check if any previous $return called with non-void types
         });
         _graph = CoroGraph::create(coro->function());
     }
@@ -104,26 +110,17 @@ private:
     };
 
 public:
-    [[nodiscard]] auto operator()(detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+    [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
         return Awaiter{[=](luisa::optional<Expr<uint3>> coro_id) noexcept {
             auto frame = coro_id ? instantiate(*coro_id) : instantiate();
-            entry()(frame, args...);
-            dsl::loop([&] {
-                dsl::if_(frame.target_token == CoroGraph::terminal_token,
-                         [&] { dsl::break_(); });
-                dsl::suspend();
-                auto s = dsl::switch_(frame.target_token);
-                for (auto i = 1u; i < subroutine_count(); i++) {
-                    std::move(s).case_(i, [&] {
-                        subroutine(i)(frame, args...);
-                    });
-                }
+            detail::coroutine_chained_await_impl(frame, subroutine_count(), [&](Token token, CoroFrame &f) noexcept {
+                subroutine(token)(f, args...);
             });
         }};
     }
 };
 
 template<typename T>
-Coroutine(T &&) -> Coroutine<detail::dsl_function_t<std::remove_cvref_t<T>>>;
+Coroutine(T &&) -> Coroutine<compute::detail::dsl_function_t<std::remove_cvref_t<T>>>;
 
 }// namespace luisa::compute::inline dsl::coro_v2

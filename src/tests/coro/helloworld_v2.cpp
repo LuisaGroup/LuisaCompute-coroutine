@@ -21,14 +21,14 @@ int main(int argc, char *argv[]) {
     luisa::vector<std::byte> host_image(image.view().size_bytes());
 
     Kernel1D test = [] {
-        coro_v2::Generator<uint()> g = [] {
+        coro_v2::Generator<uint(uint)> g = [](UInt n) {
             auto x = def(0u);
-            $while (x < 10u) {
+            $while (x < n) {
                 $yield(x);
                 x += 1u;
             };
         };
-        for (auto x : g().set_id(dispatch_id())) {
+        for (auto x : g(100u)) {
             device_log("x = {}", x);
         }
     };

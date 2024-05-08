@@ -151,6 +151,9 @@ public:
                  std::negation_v<is_kernel<std::remove_cvref_t<Def>>>
     Generator(Def &&f) noexcept : _coro{std::forward<Def>(f)} {}
 
+public:
+    [[nodiscard]] auto coroutine() const noexcept { return _coro; }
+
 private:
     template<typename U>
     class Iterator {

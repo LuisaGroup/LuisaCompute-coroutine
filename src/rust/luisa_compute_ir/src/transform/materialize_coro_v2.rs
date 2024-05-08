@@ -1001,7 +1001,7 @@ impl<'a> CoroScopeMaterializer<'a> {
             .args
             .iter()
             .cloned()
-            .zip(self.args.iter().cloned())
+            .zip(self.args.iter().skip(1).cloned())
             .collect();
         let mut entry_builder = IrBuilder::new(self.coro.pools.clone());
         let mut ctx = CoroScopeMaterializerCtx {

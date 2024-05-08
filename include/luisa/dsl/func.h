@@ -306,6 +306,14 @@ private:
 
 public:
     CallableInvoke() noexcept = default;
+    /// Add an argument
+    CallableInvoke &operator<<(const Expression *expr) noexcept {
+        if (_arg_count == max_argument_count) [[unlikely]] {
+            _error_too_many_arguments();
+        }
+        _args[_arg_count++] = expr;
+        return *this;
+    }
     /// Add an argument.
     template<typename T>
     CallableInvoke &operator<<(Expr<T> arg) noexcept {
@@ -314,10 +322,7 @@ public:
         } else if constexpr (is_soa_expr_v<T>) {
             callable_encode_soa(*this, arg);
         } else {
-            if (_arg_count == max_argument_count) [[unlikely]] {
-                _error_too_many_arguments();
-            }
-            _args[_arg_count++] = arg.expression();
+            *this << arg.expression();
         }
         return *this;
     }

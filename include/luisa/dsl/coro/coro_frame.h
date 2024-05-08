@@ -8,6 +8,7 @@
 #include <luisa/core/stl/string.h>
 #include <luisa/core/stl/unordered_map.h>
 #include <luisa/ast/type.h>
+#include <luisa/dsl/expr.h>
 
 namespace luisa::compute::inline dsl::coro_v2 {
 

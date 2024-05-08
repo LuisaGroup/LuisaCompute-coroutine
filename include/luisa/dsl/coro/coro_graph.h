@@ -20,7 +20,7 @@ public:
     using CC = luisa::shared_ptr<const compute::detail::FunctionBuilder>;// current continuation function
 
 public:
-    class Node {
+    class LC_DSL_API Node {
 
     private:
         luisa::vector<uint> _input_fields;

@@ -33,7 +33,7 @@ namespace luisa::compute {
             [](ir::CArc<ir::CallableModule> *p) noexcept {
                 p->release();
                 luisa::delete_with_allocator(p);
-            }};
+    }};
 }
 
 [[nodiscard]] luisa::shared_ptr<ir::CArc<ir::CallableModule>> AST2IR::build_coroutine(Function function) noexcept {

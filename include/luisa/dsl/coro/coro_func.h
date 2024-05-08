@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <luisa/core/dll_export.h>
 #include <luisa/dsl/coro/coro_frame.h>
 #include <luisa/dsl/coro/coro_graph.h>
+#include <luisa/dsl/func.h>
 
 namespace luisa::compute::inline dsl::coro_v2 {
 
@@ -23,6 +23,25 @@ public:
                   "Coroutine function must return void.");
 
     using Token = CoroGraph::Token;
+    static constexpr auto entry_token = CoroGraph::entry_token;
+
+    class Subroutine {
+
+    private:
+        Function f;
+
+    private:
+        friend class Coroutine;
+        explicit Subroutine(Function function) noexcept : f{function} {}
+
+    public:
+        void operator()(CoroFrame &frame, detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+            detail::CallableInvoke invoke;
+            invoke << frame.expression();
+            static_cast<void>((invoke << ... << args));
+            detail::FunctionBuilder::current()->call(f, invoke.args());
+        }
+    };
 
 private:
     luisa::shared_ptr<const CoroGraph> _graph;
@@ -58,6 +77,16 @@ public:
 public:
     [[nodiscard]] auto graph() const noexcept { return _graph.get(); }
     [[nodiscard]] auto &shared_graph() const noexcept { return _graph; }
+
+public:
+    [[nodiscard]] auto instantiate() const noexcept { return _graph->frame()->instantiate(); }
+    [[nodiscard]] auto instantiate(Expr<uint3> coro_id) const noexcept { return _graph->frame()->instantiate(coro_id); }
+    [[nodiscard]] auto subroutine_count() const noexcept { return _graph->nodes().size(); }
+    [[nodiscard]] auto operator[](Token token) const noexcept { return Subroutine{_graph->node(token).cc()}; }
+    [[nodiscard]] auto operator[](luisa::string_view name) const noexcept { return Subroutine{_graph->node(name).cc()}; }
+    [[nodiscard]] auto entry() const noexcept { return (*this)[entry_token]; }
+    [[nodiscard]] auto subroutine(Token token) const noexcept { return (*this)[token]; }
+    [[nodiscard]] auto subroutine(luisa::string_view name) const noexcept { return (*this)[name]; }
 };
 
 template<typename T>

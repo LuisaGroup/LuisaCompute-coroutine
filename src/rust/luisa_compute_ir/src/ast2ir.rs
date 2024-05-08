@@ -2322,6 +2322,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             captures: CBoxedSlice::new(Vec::new()),
             subroutine_ids: CBoxedSlice::new(Vec::new()),
             subroutines: CBoxedSlice::new(Vec::new()),
+            coro_target_tokens: CBoxedSlice::new(Vec::new()),
             coro_frame_input_fields: CBoxedSlice::new(Vec::new()),
             coro_frame_output_fields: CBoxedSlice::new(Vec::new()),
             coro_frame_designated_fields: CBoxedSlice::new(Vec::new()),

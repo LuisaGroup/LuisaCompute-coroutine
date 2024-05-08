@@ -372,7 +372,9 @@ private:
 
 public:
     explicit Callable(luisa::shared_ptr<const detail::FunctionBuilder> builder) noexcept
-        : _builder{std::move(builder)} {}
+        : _builder{std::move(builder)} {
+        // TODO: check arguments
+    }
     /**
      * @brief Construct a Callable object.
      * 
@@ -572,7 +574,7 @@ public:
     [[nodiscard]] auto const &function_builder() const & noexcept { return _builder; }
     [[nodiscard]] auto &&function_builder() && noexcept { return std::move(_builder); }
     [[nodiscard]] auto const suspend_count() noexcept { return _coro_tokens.size(); }
-    [[nodiscard]] auto const & coro_tokens() const & noexcept { return _coro_tokens; }
+    [[nodiscard]] auto const &coro_tokens() const & noexcept { return _coro_tokens; }
     [[nodiscard]] auto const &graph() noexcept { return _coro_graph; }
     //Call from start of coroutine
     auto operator()(detail::prototype_to_callable_invocation_t<FrameType> type,

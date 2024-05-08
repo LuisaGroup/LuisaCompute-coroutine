@@ -314,6 +314,7 @@ struct CallableModule {
     CBoxedSlice<Capture> captures;
     CBoxedSlice<CallableModuleRef> subroutines;
     CBoxedSlice<uint32_t> subroutine_ids;
+    CBoxedSlice<uint32_t> coro_target_tokens;
     CBoxedSlice<uint32_t> coro_frame_input_fields;
     CBoxedSlice<uint32_t> coro_frame_output_fields;
     CBoxedSlice<CoroFrameDesignatedField> coro_frame_designated_fields;

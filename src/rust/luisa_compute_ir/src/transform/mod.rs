@@ -20,6 +20,7 @@ pub mod copy_propagation;
 pub mod defer_load;
 pub mod inliner;
 pub mod materialize_coro;
+pub mod materialize_coro_v2;
 pub mod remove_phi;
 
 use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
@@ -134,6 +135,10 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
         }
         "materialize_coro" => {
             let transform = materialize_coro::MaterializeCoro;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "materialize_coro_v2" => {
+            let transform = materialize_coro_v2::MaterializeCoro;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
         "mem2reg" => {

@@ -64,6 +64,8 @@
 #include <luisa/dsl/callable_library.h>
 #include <luisa/dsl/constant.h>
 #include <luisa/dsl/coro/coro_frame.h>
+#include <luisa/dsl/coro/coro_func.h>
+#include <luisa/dsl/coro/coro_graph.h>
 #include <luisa/dsl/dispatch_indirect.h>
 #include <luisa/dsl/expr.h>
 #include <luisa/dsl/expr_traits.h>

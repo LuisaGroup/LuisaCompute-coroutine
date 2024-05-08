@@ -181,4 +181,5 @@ luisa::shared_ptr<const FunctionBuilder> transform_coroutine(
     }
     return function.shared_builder();
 }
+
 }// namespace luisa::compute::detail

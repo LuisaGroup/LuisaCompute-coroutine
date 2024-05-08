@@ -11,7 +11,9 @@ if (LUISA_COMPUTE_ENABLE_DSL)
             raster/raster_kernel.cpp)
 
     set(LUISA_COMPUTE_DSL_CORO_SOURCES
-            coro/coro_frame.cpp)
+            coro/coro_frame.cpp
+            coro/coro_func.cpp
+            coro/coro_graph.cpp)
 
     set(LUISA_COMPUTE_DSL_SOURCES
             builtin.cpp

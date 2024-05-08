@@ -16,20 +16,21 @@ class CoroFrame;
 class LC_DSL_API CoroFrameDesc : public luisa::enable_shared_from_this<CoroFrameDesc> {
 
 public:
-    using DesignatedMemberDict = luisa::unordered_map<luisa::string, uint>;
+    using DesignatedFieldDict = luisa::unordered_map<luisa::string, uint>;
 
 private:
     const Type *_type{nullptr};
-    DesignatedMemberDict _designated_members;
+    DesignatedFieldDict _designated_fields;
 
 private:
-    CoroFrameDesc(const Type *type, DesignatedMemberDict m) noexcept;
+    CoroFrameDesc(const Type *type, DesignatedFieldDict m) noexcept;
 
 public:
-    [[nodiscard]] static luisa::shared_ptr<CoroFrameDesc> create(const Type *type, DesignatedMemberDict m) noexcept;
+    [[nodiscard]] static luisa::shared_ptr<CoroFrameDesc> create(const Type *type, DesignatedFieldDict m) noexcept;
     [[nodiscard]] auto type() const noexcept { return _type; }
-    [[nodiscard]] auto &designated_members() const noexcept { return _designated_members; }
-    [[nodiscard]] uint designated_member(luisa::string_view name) const noexcept;
+    [[nodiscard]] auto &designated_fields() const noexcept { return _designated_fields; }
+    [[nodiscard]] uint designated_field(luisa::string_view name) const noexcept;
+    [[nodiscard]] luisa::string dump() const noexcept;
 
 public:
     [[nodiscard]] CoroFrame instantiate() const noexcept;
@@ -74,7 +75,7 @@ public:
     }
     template<typename T>
     [[nodiscard]] Var<T> &get(luisa::string_view name) noexcept {
-        return get<T>(_desc->designated_member(name));
+        return get<T>(_desc->designated_field(name));
     }
     template<typename T>
     [[nodiscard]] const Var<T> &get(luisa::string_view name) const noexcept {

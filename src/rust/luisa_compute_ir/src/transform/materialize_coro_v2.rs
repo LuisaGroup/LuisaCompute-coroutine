@@ -73,35 +73,33 @@ impl<'a> CoroScopeMaterializer<'a> {
 
     fn create_args(&self) -> Vec<NodeRef> {
         let mut args = Vec::new();
-        for (i, arg) in self.coro.args.iter().enumerate() {
-            if i == 0 {
-                // the coro frame
-                let node = new_node(
-                    &self.coro.pools,
-                    Node::new(
-                        CArc::new(Instruction::Argument { by_value: false }),
-                        self.frame.interface_type.clone(),
-                    ),
-                );
-                args.push(node);
-            } else {
-                // normal args
-                let instr = &arg.get().instruction;
-                match instr.as_ref() {
-                    Instruction::Buffer
-                    | Instruction::Bindless
-                    | Instruction::Texture2D
-                    | Instruction::Texture3D
-                    | Instruction::Accel
-                    | Instruction::Argument { .. } => {
-                        let node = new_node(
-                            &self.coro.pools,
-                            Node::new(instr.clone(), arg.type_().clone()),
-                        );
-                        args.push(node);
-                    }
-                    _ => unreachable!("Invalid argument type"),
+        args.reserve(1 /* frame */+ self.coro.args.len());
+        // the coro frame
+        let node = new_node(
+            &self.coro.pools,
+            Node::new(
+                CArc::new(Instruction::Argument { by_value: false }),
+                self.frame.interface_type.clone(),
+            ),
+        );
+        args.push(node);
+        for arg in self.coro.args.iter() {
+            // normal args
+            let instr = &arg.get().instruction;
+            match instr.as_ref() {
+                Instruction::Buffer
+                | Instruction::Bindless
+                | Instruction::Texture2D
+                | Instruction::Texture3D
+                | Instruction::Accel
+                | Instruction::Argument { .. } => {
+                    let node = new_node(
+                        &self.coro.pools,
+                        Node::new(instr.clone(), arg.type_().clone()),
+                    );
+                    args.push(node);
                 }
+                _ => unreachable!("Invalid argument type"),
             }
         }
         args

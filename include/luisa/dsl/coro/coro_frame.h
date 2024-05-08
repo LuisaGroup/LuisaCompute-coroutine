@@ -82,6 +82,7 @@ public:
     [[nodiscard]] const Var<T> &get(luisa::string_view name) const noexcept {
         return const_cast<CoroFrame *>(this)->get<T>(name);
     }
+    [[nodiscard]] Var<bool> is_terminated() const noexcept;
 };
 
 }// namespace luisa::compute::inline dsl::coro_v2

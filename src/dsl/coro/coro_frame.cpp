@@ -3,6 +3,7 @@
 //
 
 #include <luisa/core/logging.h>
+#include <luisa/dsl/coro/coro_graph.h>
 #include <luisa/dsl/coro/coro_frame.h>
 
 namespace luisa::compute::inline dsl::coro_v2 {
@@ -103,6 +104,10 @@ CoroFrame &CoroFrame::operator=(CoroFrame &&rhs) noexcept {
 void CoroFrame::_check_member_index(uint index) const noexcept {
     LUISA_ASSERT(index < _desc->type()->members().size(),
                  "CoroFrame member index out of range.");
+}
+
+Var<bool> CoroFrame::is_terminated() const noexcept {
+    return target_token == CoroGraph::terminal_token;
 }
 
 }// namespace luisa::compute::inline dsl::coro_v2

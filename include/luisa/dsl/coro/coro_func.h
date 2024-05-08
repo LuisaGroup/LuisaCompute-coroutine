@@ -14,6 +14,9 @@ namespace detail {
 LC_DSL_API void coroutine_chained_await_impl(
     CoroFrame &frame, uint node_count,
     luisa::move_only_function<void(CoroGraph::Token, CoroFrame &)> node) noexcept;
+LC_DSL_API void coroutine_generator_step_impl(
+    CoroFrame &frame, uint node_count, bool is_entry,
+    luisa::move_only_function<void(CoroGraph::Token, CoroFrame &)> node) noexcept;
 }// namespace detail
 
 template<typename T>
@@ -111,16 +114,105 @@ private:
 
 public:
     [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
-        return Awaiter{[=](luisa::optional<Expr<uint3>> coro_id) noexcept {
+        auto f = [=](luisa::optional<Expr<uint3>> coro_id) noexcept {
             auto frame = coro_id ? instantiate(*coro_id) : instantiate();
             detail::coroutine_chained_await_impl(frame, subroutine_count(), [&](Token token, CoroFrame &f) noexcept {
                 subroutine(token)(f, args...);
             });
-        }};
+        };
+        return Awaiter<decltype(f)>{std::move(f)};
     }
 };
 
 template<typename T>
 Coroutine(T &&) -> Coroutine<compute::detail::dsl_function_t<std::remove_cvref_t<T>>>;
+
+template<typename T>
+class Generator {
+    static_assert(luisa::always_false_v<T>);
+};
+
+template<typename Ret, typename... Args>
+class Generator<Ret(Args...)> {
+
+    static_assert(!std::is_same_v<Ret, void>,
+                  "Generator function must not return void.");
+
+private:
+    Coroutine<void(Args...)> _coro;
+
+public:
+    template<typename Def>
+        requires std::negation_v<is_callable<std::remove_cvref_t<Def>>> &&
+                 std::negation_v<is_kernel<std::remove_cvref_t<Def>>>
+    Generator(Def &&f) noexcept : _coro{std::forward<Def>(f)} {}
+
+private:
+    template<typename U>
+    class Iterator {
+    private:
+        luisa::unique_ptr<CoroFrame> _frame;
+        U _f;
+        bool _invoked{false};
+        LoopStmt *_loop{nullptr};
+
+    private:
+        friend class Generator;
+        Iterator(luisa::unique_ptr<CoroFrame> frame, U f) noexcept
+            : _frame{std::move(frame)}, _f{std::move(f)} {}
+
+    public:
+        Iterator &operator++() noexcept {
+            _invoked = true;
+            _f(*_frame, false);
+            compute::detail::FunctionBuilder::current()->pop_scope(_loop->body());
+            return *this;
+        }
+        [[nodiscard]] auto operator==(luisa::default_sentinel_t) const noexcept { return _invoked; }
+        [[nodiscard]] Var<expr_value_t<Ret>> operator*() noexcept {
+            _f(*_frame, true);
+            auto fb = compute::detail::FunctionBuilder::current();
+            _loop = fb->loop_();
+            fb->push_scope(_loop->body());
+            dsl::if_(_frame->is_terminated(), [] { dsl::break_(); });
+            return _frame->get<Ret>("yield_value");
+        }
+    };
+
+private:
+    template<typename U>
+    [[nodiscard]] auto _make_iterator(U u, luisa::optional<Expr<uint3>> coro_id) const noexcept {
+        auto frame = luisa::make_unique<CoroFrame>(coro_id ? _coro.instantiate(*coro_id) : _coro.instantiate());
+        return Iterator<U>{std::move(frame), std::move(u)};
+    }
+
+private:
+    template<typename U>
+    class Stepper : public concepts::Noncopyable {
+    private:
+        const Generator &_g;
+        U _f;
+
+    private:
+        friend class Generator;
+        Stepper(const Generator &g, U f) noexcept : _g{g}, _f{std::move(f)} {}
+
+    public:
+        [[nodiscard]] auto begin() noexcept { return _g._make_iterator(std::move(_f), luisa::nullopt); }
+        [[nodiscard]] auto end() const noexcept { return luisa::default_sentinel; }
+    };
+
+public:
+    [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+        auto f = [=](CoroFrame &frame, bool is_entry) noexcept {
+            detail::coroutine_generator_step_impl(
+                frame, _coro.subroutine_count(), is_entry,
+                [&](CoroGraph::Token token, CoroFrame &f) noexcept {
+                    _coro.subroutine(token)(f, args...);
+                });
+        };
+        return Stepper<decltype(f)>{*this, std::move(f)};
+    }
+};
 
 }// namespace luisa::compute::inline dsl::coro_v2

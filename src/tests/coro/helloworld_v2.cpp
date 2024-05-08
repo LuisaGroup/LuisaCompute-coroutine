@@ -20,14 +20,19 @@ int main(int argc, char *argv[]) {
     Image<float> image{device.create_image<float>(PixelStorage::BYTE4, resolution)};
     luisa::vector<std::byte> host_image(image.view().size_bytes());
 
-    coro_v2::Coroutine coro = [&]() noexcept {
-        $suspend("1");
-        Var coord = coro_id().xy();
-        $suspend("2");
-        Var uv = (make_float2(coord) + 0.5f) / make_float2(resolution);
-        $suspend("3", std::make_pair(uv, "uv"));
-        image->write(coord, make_float4(uv, 0.5f, 1.0f));
+    Kernel1D test = [] {
+        coro_v2::Generator<uint()> g = [] {
+            auto x = def(0u);
+            $while (x < 10u) {
+                $yield(x);
+                x += 1u;
+            };
+        };
+        for (auto x : g()) {
+            device_log("x = {}", x);
+        }
     };
 
-    LUISA_INFO("CoroGraph:\n{}", coro.graph()->dump());
+    auto shader = device.compile(test);
+    stream << shader().dispatch(1u) << synchronize();
 }

@@ -28,7 +28,7 @@ int main(int argc, char *argv[]) {
                 x += 1u;
             };
         };
-        for (auto x : g()) {
+        for (auto x : g().set_id(dispatch_id())) {
             device_log("x = {}", x);
         }
     };

@@ -102,14 +102,18 @@ private:
     class Awaiter : public concepts::Noncopyable {
     private:
         U _f;
+        luisa::optional<Expr<uint3>> _coro_id;
 
     private:
         friend class Coroutine;
         explicit Awaiter(U f) noexcept : _f{std::move(f)} {}
 
     public:
-        void await() && noexcept { return _f(luisa::nullopt); }
-        void await(Expr<uint3> coro_id) && noexcept { return _f(luisa::make_optional(coro_id)); }
+        [[nodiscard]] auto set_id(Expr<uint3> coro_id) && noexcept {
+            _coro_id.emplace(coro_id);
+            return std::move(*this);
+        }
+        void await() && noexcept { return _f(std::move(_coro_id)); }
     };
 
 public:
@@ -190,6 +194,7 @@ private:
     template<typename U>
     class Stepper : public concepts::Noncopyable {
     private:
+        luisa::optional<Expr<uint3>> _coro_id;
         const Generator &_g;
         U _f;
 
@@ -198,7 +203,11 @@ private:
         Stepper(const Generator &g, U f) noexcept : _g{g}, _f{std::move(f)} {}
 
     public:
-        [[nodiscard]] auto begin() noexcept { return _g._make_iterator(std::move(_f), luisa::nullopt); }
+        [[nodiscard]] auto set_id(Expr<uint3> coro_id) && noexcept {
+            _coro_id.emplace(coro_id);
+            return std::move(*this);
+        }
+        [[nodiscard]] auto begin() noexcept { return _g._make_iterator(std::move(_f), std::move(_coro_id)); }
         [[nodiscard]] auto end() const noexcept { return luisa::default_sentinel; }
     };
 

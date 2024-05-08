@@ -274,7 +274,7 @@ int main(int argc, char *argv[]) {
 
     coro_v2::Coroutine raytrace_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution, UInt2 pixel_id) noexcept {
         auto coro_id = make_uint3(pixel_id, 0u);
-        coro(image, seed_image, accel, resolution).await(coro_id);
+        coro(image, seed_image, accel, resolution).set_id(coro_id).await();
     };
 
     coro_v2::Coroutine raytracing_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {

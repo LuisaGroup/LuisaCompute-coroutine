@@ -87,6 +87,40 @@ public:
     [[nodiscard]] auto entry() const noexcept { return (*this)[entry_token]; }
     [[nodiscard]] auto subroutine(Token token) const noexcept { return (*this)[token]; }
     [[nodiscard]] auto subroutine(luisa::string_view name) const noexcept { return (*this)[name]; }
+
+private:
+    template<typename U>
+    class Awaiter : public concepts::Noncopyable {
+    private:
+        U _f;
+
+    private:
+        friend class Coroutine;
+        explicit Awaiter(U f) noexcept : _f{std::move(f)} {}
+
+    public:
+        void await() && noexcept { return _f(luisa::nullopt); }
+        void await(Expr<uint3> coro_id) && noexcept { return _f(luisa::make_optional(coro_id)); }
+    };
+
+public:
+    [[nodiscard]] auto operator()(detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+        return Awaiter{[=](luisa::optional<Expr<uint3>> coro_id) noexcept {
+            auto frame = coro_id ? instantiate(*coro_id) : instantiate();
+            entry()(frame, args...);
+            dsl::loop([&] {
+                dsl::if_(frame.target_token == CoroGraph::terminal_token,
+                         [&] { dsl::break_(); });
+                dsl::suspend();
+                auto s = dsl::switch_(frame.target_token);
+                for (auto i = 1u; i < subroutine_count(); i++) {
+                    std::move(s).case_(i, [&] {
+                        subroutine(i)(frame, args...);
+                    });
+                }
+            });
+        }};
+    }
 };
 
 template<typename T>

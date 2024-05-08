@@ -118,7 +118,7 @@ private:
 
 public:
     [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
-        auto f = [=](luisa::optional<Expr<uint3>> coro_id) noexcept {
+        auto f = [=, this](luisa::optional<Expr<uint3>> coro_id) noexcept {
             auto frame = coro_id ? instantiate(*coro_id) : instantiate();
             detail::coroutine_chained_await_impl(frame, subroutine_count(), [&](Token token, CoroFrame &f) noexcept {
                 subroutine(token)(f, args...);
@@ -175,7 +175,7 @@ private:
             compute::detail::FunctionBuilder::current()->pop_scope(_loop->body());
             return *this;
         }
-        [[nodiscard]] auto operator==(luisa::default_sentinel_t) const noexcept { return _invoked; }
+        [[nodiscard]] bool operator==(luisa::default_sentinel_t) const noexcept { return _invoked; }
         [[nodiscard]] Var<expr_value_t<Ret>> operator*() noexcept {
             _f(*_frame, true);
             auto fb = compute::detail::FunctionBuilder::current();
@@ -216,7 +216,7 @@ private:
 
 public:
     [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
-        auto f = [=](CoroFrame &frame, bool is_entry) noexcept {
+        auto f = [=, this](CoroFrame &frame, bool is_entry) noexcept {
             detail::coroutine_generator_step_impl(
                 frame, _coro.subroutine_count(), is_entry,
                 [&](CoroGraph::Token token, CoroFrame &f) noexcept {

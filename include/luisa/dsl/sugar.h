@@ -128,6 +128,8 @@ namespace luisa::compute::dsl_detail {
         ::luisa::compute::dsl::suspend();                           \
     } while (false)
 
+#define $await ::luisa::compute::coroutine::detail::CoroAwaitInvoker{} %
+
 #define $loop                                                                       \
     ::luisa::compute::detail::LoopStmtBuilder::create_with_comment(                 \
         ::luisa::compute::dsl_detail::format_source_location(__FILE__, __LINE__)) % \

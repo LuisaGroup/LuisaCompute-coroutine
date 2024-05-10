@@ -271,7 +271,8 @@ int main(int argc, char *argv[]) {
         raytrace_coro(image, seed_image, accel, resolution, dispatch_id().xy()).await();
     };
 
-    coroutine::StateMachineCoroScheduler scheduler{device, raytracing_coro};
+    coroutine::StateMachineCoroSchedulerConfig config{.shared_memory = false, .shared_memory_soa = true};
+    coroutine::StateMachineCoroScheduler scheduler{device, raytracing_coro, config};
 
     Kernel2D accumulate_kernel = [&](ImageFloat accum_image, ImageFloat curr_image) noexcept {
         UInt2 p = dispatch_id().xy();

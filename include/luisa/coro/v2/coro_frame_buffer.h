@@ -81,7 +81,7 @@ public:
     [[nodiscard]] explicit operator bool() const noexcept { return _handle != invalid_resource_handle; }
 
     // properties
-    [[nodiscard]] auto coro_frame() const noexcept { return _desc.get(); }
+    [[nodiscard]] auto desc() const noexcept { return _desc.get(); }
     [[nodiscard]] auto handle() const noexcept { return _handle; }
     [[nodiscard]] auto native_handle() const noexcept { return _native_handle; }
     [[nodiscard]] auto stride() const noexcept { return _desc->type()->size(); }
@@ -193,7 +193,7 @@ public:
     Buffer &operator=(Buffer const &) noexcept = delete;
     using Resource::operator bool;
     // properties
-    [[nodiscard]] auto coro_frame() const noexcept { return _desc.get(); }
+    [[nodiscard]] auto desc() const noexcept { return _desc.get(); }
     [[nodiscard]] auto size() const noexcept {
         _check_is_valid();
         return _size;
@@ -246,9 +246,9 @@ public:
         : _desc{std::move(desc)}, _expression{expr} {}
 
     Expr(BufferView<coroutine::CoroFrame> buffer) noexcept
-        : _desc{buffer.coro_frame()->shared_from_this()},
+        : _desc{buffer.desc()->shared_from_this()},
           _expression{detail::FunctionBuilder::current()->buffer_binding(
-              Type::buffer(buffer.coro_frame()->type()), buffer.handle(),
+              Type::buffer(buffer.desc()->type()), buffer.handle(),
               buffer.offset_bytes(), buffer.size_bytes())} {}
 
     /// Contruct from Buffer. Will call buffer_binding() to bind buffer
@@ -257,13 +257,13 @@ public:
 
     /// Construct from Var<Buffer<T>>.
     Expr(const Var<Buffer<coroutine::CoroFrame>> &buffer) noexcept
-        : Expr{buffer.coro_frame()->shared_from_this(), buffer.expression()} {}
+        : Expr{buffer.desc()->shared_from_this(), buffer.expression()} {}
 
     /// Construct from Var<BufferView<T>>.
     Expr(const Var<BufferView<coroutine::CoroFrame>> &buffer) noexcept
-        : Expr{buffer.coro_frame()->shared_from_this(), buffer.expression()} {}
+        : Expr{buffer.desc()->shared_from_this(), buffer.expression()} {}
 
-    [[nodiscard]] const coroutine::CoroFrameDesc *coro_frame() const noexcept { return _desc.get(); }
+    [[nodiscard]] const coroutine::CoroFrameDesc *desc() const noexcept { return _desc.get(); }
     [[nodiscard]] const RefExpr *expression() const noexcept { return _expression; }
 
     /// Read buffer at index

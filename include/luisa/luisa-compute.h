@@ -58,6 +58,7 @@
 #include <luisa/coro/v2/coro_frame.h>
 #include <luisa/coro/v2/coro_frame_buffer.h>
 #include <luisa/coro/v2/coro_frame_desc.h>
+#include <luisa/coro/v2/coro_frame_smem.h>
 #include <luisa/coro/v2/coro_func.h>
 #include <luisa/coro/v2/coro_graph.h>
 #include <luisa/coro/v2/coro_scheduler.h>

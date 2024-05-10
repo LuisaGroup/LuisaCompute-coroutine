@@ -5,6 +5,7 @@
 #pragma once
 
 #include <luisa/coro/v2/coro_func.h>
+#include <luisa/coro/v2/coro_frame_smem.h>
 #include <luisa/coro/v2/coro_scheduler.h>
 
 namespace luisa::compute::coroutine {
@@ -17,6 +18,8 @@ LC_CORO_API void coro_scheduler_state_machine_impl(
 
 struct StateMachineCoroSchedulerConfig {
     uint3 block_size = luisa::make_uint3(128, 1, 1);
+    bool shared_memory = false;
+    bool shared_memory_soa = true;
 };
 
 template<typename... Args>
@@ -30,12 +33,27 @@ private:
                                              const StateMachineCoroSchedulerConfig &config) noexcept {
         Kernel3D kernel = [&coro, &config](Var<Args>... args) noexcept {
             set_block_size(config.block_size);
-            auto frame = coro.instantiate(dispatch_id());
-            detail::coro_scheduler_state_machine_impl(
-                frame, coro.subroutine_count(),
-                [&](CoroToken token) noexcept {
-                    coro.subroutine(token)(frame, args...);
-                });
+            if (config.shared_memory) {
+                auto n = config.block_size.x * config.block_size.y * config.block_size.z;
+                Shared<CoroFrame> sm{coro.shared_frame(), n, config.shared_memory_soa};
+                auto tid = thread_z() * block_size().x * block_size().y + thread_y() * block_size().x + thread_x();
+                auto frame = coro.instantiate(dispatch_id());
+                sm.write(tid, frame);
+                detail::coro_scheduler_state_machine_impl(
+                    frame, coro.subroutine_count(),
+                    [&](CoroToken token) noexcept {
+                        frame = sm.read(tid);
+                        coro.subroutine(token)(frame, args...);
+                        sm.write(tid, frame);
+                    });
+            } else {
+                auto frame = coro.instantiate(dispatch_id());
+                detail::coro_scheduler_state_machine_impl(
+                    frame, coro.subroutine_count(),
+                    [&](CoroToken token) noexcept {
+                        coro.subroutine(token)(frame, args...);
+                    });
+            }
         };
         return device.compile(kernel);
     }
@@ -47,8 +65,10 @@ private:
 
 public:
     StateMachineCoroScheduler(Device &device, const Coroutine<void(Args...)> &coro,
-                              const StateMachineCoroSchedulerConfig &config = {}) noexcept
+                              const StateMachineCoroSchedulerConfig &config) noexcept
         : _shader{_create_shader(device, coro, config)} {}
+    StateMachineCoroScheduler(Device &device, const Coroutine<void(Args...)> &coro) noexcept
+        : StateMachineCoroScheduler{device, coro, StateMachineCoroSchedulerConfig{}} {}
 };
 
 template<typename... Args>

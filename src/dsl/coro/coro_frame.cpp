@@ -3,69 +3,10 @@
 //
 
 #include <luisa/core/logging.h>
-#include <luisa/dsl/coro/coro_graph.h>
+#include <luisa/runtime/coro/coro_graph.h>
 #include <luisa/dsl/coro/coro_frame.h>
 
-namespace luisa::compute::inline dsl::coro_v2 {
-
-CoroFrameDesc::CoroFrameDesc(const Type *type, DesignatedFieldDict m) noexcept
-    : _type{type}, _designated_fields{std::move(m)} {
-    LUISA_ASSERT(_type != nullptr, "CoroFrame underlying type must not be null.");
-    LUISA_ASSERT(_type->is_structure(), "CoroFrame underlying type must be a structure.");
-    LUISA_ASSERT(_type->members().size() >= 2u, "CoroFrame underlying type must have at least 2 members (coro_id and target_token).");
-    LUISA_ASSERT(_type->members()[0] == Type::of<uint3>(), "CoroFrame member 0 (coro_id) must be uint3.");
-    LUISA_ASSERT(_type->members()[1] == Type::of<uint>(), "CoroFrame member 1 (target_token) must be uint.");
-    auto member_count = _type->members().size();
-    for (auto &&[name, index] : _designated_fields) {
-        LUISA_ASSERT(name != "coro_id", "CoroFrame designated member name 'coro_id' is reserved.");
-        LUISA_ASSERT(name != "target_token", "CoroFrame designated member name 'target_token' is reserved.");
-        LUISA_ASSERT(index != 0, "CoroFrame designated member index 0 is reserved for coro_id.");
-        LUISA_ASSERT(index != 1, "CoroFrame designated member index 1 is reserved for target_token.");
-        LUISA_ASSERT(index < member_count, "CoroFrame designated member index out of range.");
-    }
-}
-
-luisa::shared_ptr<CoroFrameDesc> CoroFrameDesc::create(const Type *type, DesignatedFieldDict m) noexcept {
-    return luisa::make_shared<CoroFrameDesc>(CoroFrameDesc{type, std::move(m)});
-}
-
-uint CoroFrameDesc::designated_field(luisa::string_view name) const noexcept {
-    if (name == "coro_id") { return 0u; }
-    if (name == "target_token") { return 1u; }
-    auto iter = _designated_fields.find(name);
-    LUISA_ASSERT(iter != _designated_fields.end(), "CoroFrame designated member not found.");
-    return iter->second;
-}
-
-luisa::string CoroFrameDesc::dump() const noexcept {
-    luisa::string s;
-    for (auto i = 0u; i < _type->members().size(); i++) {
-        s.append(luisa::format("  Field {}: {}\n", i, _type->members()[i]->description()));
-    }
-    if (!_designated_fields.empty()) {
-        s.append("Designated Fields:\n");
-        for (auto &&[name, index] : _designated_fields) {
-            s.append(luisa::format("  {} -> \"{}\"\n", index, name));
-        }
-    }
-    return s;
-}
-
-CoroFrame CoroFrameDesc::instantiate() const noexcept {
-    auto fb = detail::FunctionBuilder::current();
-    // create an variable for the coro frame
-    auto expr = fb->local(_type);
-    // initialize the coro frame members
-    auto zero_init = fb->call(_type, CallOp::ZERO, {});
-    fb->assign(expr, zero_init);
-    return CoroFrame{shared_from_this(), expr};
-}
-
-CoroFrame CoroFrameDesc::instantiate(Expr<uint3> coro_id) const noexcept {
-    auto frame = instantiate();
-    frame.coro_id = coro_id;
-    return frame;
-}
+namespace luisa::compute::coroutine {
 
 CoroFrame::CoroFrame(luisa::shared_ptr<const CoroFrameDesc> desc, const RefExpr *expr) noexcept
     : _desc{std::move(desc)},
@@ -101,13 +42,29 @@ CoroFrame &CoroFrame::operator=(CoroFrame &&rhs) noexcept {
     return *this = static_cast<const CoroFrame &>(rhs);
 }
 
+CoroFrame CoroFrame::create(luisa::shared_ptr<const CoroFrameDesc> desc) noexcept {
+    auto fb = detail::FunctionBuilder::current();
+    // create an variable for the coro frame
+    auto expr = fb->local(desc->type());
+    // initialize the coro frame members
+    auto zero_init = fb->call(desc->type(), CallOp::ZERO, {});
+    fb->assign(expr, zero_init);
+    return CoroFrame{std::move(desc), expr};
+}
+
+CoroFrame CoroFrame::create(luisa::shared_ptr<const CoroFrameDesc> desc, Expr<uint3> coro_id) noexcept {
+    auto frame = create(std::move(desc));
+    frame.coro_id = coro_id;
+    return frame;
+}
+
 void CoroFrame::_check_member_index(uint index) const noexcept {
     LUISA_ASSERT(index < _desc->type()->members().size(),
                  "CoroFrame member index out of range.");
 }
 
 Var<bool> CoroFrame::is_terminated() const noexcept {
-    return target_token == CoroGraph::terminal_token;
+    return target_token == coro_token_terminal;
 }
 
-}// namespace luisa::compute::inline dsl::coro_v2
+}// namespace luisa::compute::coro_v2

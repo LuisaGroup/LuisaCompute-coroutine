@@ -5,18 +5,18 @@
 #pragma once
 
 #include <luisa/dsl/coro/coro_frame.h>
-#include <luisa/dsl/coro/coro_graph.h>
+#include <luisa/runtime/coro/coro_graph.h>
 #include <luisa/dsl/func.h>
 
-namespace luisa::compute::inline dsl::coro_v2 {
+namespace luisa::compute::coroutine {
 
 namespace detail {
 LC_DSL_API void coroutine_chained_await_impl(
     CoroFrame &frame, uint node_count,
-    luisa::move_only_function<void(CoroGraph::Token, CoroFrame &)> node) noexcept;
+    luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept;
 LC_DSL_API void coroutine_generator_step_impl(
     CoroFrame &frame, uint node_count, bool is_entry,
-    luisa::move_only_function<void(CoroGraph::Token, CoroFrame &)> node) noexcept;
+    luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept;
 }// namespace detail
 
 template<typename T>
@@ -30,9 +30,6 @@ class Coroutine<Ret(Args...)> {
 public:
     static_assert(std::is_same_v<Ret, void>,
                   "Coroutine function must return void.");
-
-    using Token = CoroGraph::Token;
-    static constexpr auto entry_token = CoroGraph::entry_token;
 
     class Subroutine {
 
@@ -88,13 +85,13 @@ public:
     [[nodiscard]] auto &shared_graph() const noexcept { return _graph; }
 
 public:
-    [[nodiscard]] auto instantiate() const noexcept { return _graph->frame()->instantiate(); }
-    [[nodiscard]] auto instantiate(Expr<uint3> coro_id) const noexcept { return _graph->frame()->instantiate(coro_id); }
+    [[nodiscard]] auto instantiate() const noexcept { return CoroFrame::create(_graph->shared_frame()); }
+    [[nodiscard]] auto instantiate(Expr<uint3> coro_id) const noexcept { return CoroFrame::create(_graph->shared_frame(), coro_id); }
     [[nodiscard]] auto subroutine_count() const noexcept { return _graph->nodes().size(); }
-    [[nodiscard]] auto operator[](Token token) const noexcept { return Subroutine{_graph->node(token).cc()}; }
+    [[nodiscard]] auto operator[](CoroToken token) const noexcept { return Subroutine{_graph->node(token).cc()}; }
     [[nodiscard]] auto operator[](luisa::string_view name) const noexcept { return Subroutine{_graph->node(name).cc()}; }
-    [[nodiscard]] auto entry() const noexcept { return (*this)[entry_token]; }
-    [[nodiscard]] auto subroutine(Token token) const noexcept { return (*this)[token]; }
+    [[nodiscard]] auto entry() const noexcept { return (*this)[coro_token_entry]; }
+    [[nodiscard]] auto subroutine(CoroToken token) const noexcept { return (*this)[token]; }
     [[nodiscard]] auto subroutine(luisa::string_view name) const noexcept { return (*this)[name]; }
 
 private:
@@ -120,7 +117,7 @@ public:
     [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
         auto f = [=](luisa::optional<Expr<uint3>> coro_id) noexcept {
             auto frame = coro_id ? instantiate(*coro_id) : instantiate();
-            detail::coroutine_chained_await_impl(frame, subroutine_count(), [&](Token token, CoroFrame &f) noexcept {
+            detail::coroutine_chained_await_impl(frame, subroutine_count(), [&](CoroToken token, CoroFrame &f) noexcept {
                 subroutine(token)(f, args...);
             });
         };
@@ -219,7 +216,7 @@ public:
         auto f = [=](CoroFrame &frame, bool is_entry) noexcept {
             detail::coroutine_generator_step_impl(
                 frame, _coro.subroutine_count(), is_entry,
-                [&](CoroGraph::Token token, CoroFrame &f) noexcept {
+                [&](CoroToken token, CoroFrame &f) noexcept {
                     _coro.subroutine(token)(f, args...);
                 });
         };
@@ -227,4 +224,4 @@ public:
     }
 };
 
-}// namespace luisa::compute::inline dsl::coro_v2
+}// namespace luisa::compute::coro_v2

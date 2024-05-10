@@ -4,18 +4,19 @@
 
 #include <luisa/core/logging.h>
 #include <luisa/ast/function_builder.h>
-#include <luisa/dsl/coro/coro_frame.h>
-#include <luisa/dsl/coro/coro_graph.h>
+#include <luisa/ir/ir2ast.h>
+#include <luisa/runtime/coro/coro_frame_desc.h>
+#include <luisa/runtime/coro/coro_graph.h>
 
 #ifdef LUISA_ENABLE_IR
 #include <luisa/ir/ast2ir.h>
 #endif
 
-namespace luisa::compute::inline dsl::coro_v2 {
+namespace luisa::compute::coroutine {
 
 CoroGraph::Node::Node(luisa::vector<uint> input_fields,
                       luisa::vector<uint> output_fields,
-                      luisa::vector<Token> targets,
+                      luisa::vector<CoroToken> targets,
                       CC current_continuation) noexcept
     : _input_fields{std::move(input_fields)},
       _output_fields{std::move(output_fields)},
@@ -59,8 +60,8 @@ luisa::string CoroGraph::Node::dump() const noexcept {
 }
 
 CoroGraph::CoroGraph(luisa::shared_ptr<const CoroFrameDesc> frame_desc,
-                     luisa::unordered_map<Token, Node> nodes,
-                     luisa::unordered_map<luisa::string, Token> named_tokens) noexcept
+                     luisa::unordered_map<CoroToken, Node> nodes,
+                     luisa::unordered_map<luisa::string, CoroToken> named_tokens) noexcept
     : _frame{std::move(frame_desc)},
       _nodes{std::move(nodes)},
       _named_tokens{std::move(named_tokens)} {}
@@ -68,10 +69,10 @@ CoroGraph::CoroGraph(luisa::shared_ptr<const CoroFrameDesc> frame_desc,
 CoroGraph::~CoroGraph() noexcept = default;
 
 const CoroGraph::Node &CoroGraph::entry() const noexcept {
-    return node(entry_token);
+    return node(coro_token_entry);
 }
 
-const CoroGraph::Node &CoroGraph::node(Token token) const noexcept {
+const CoroGraph::Node &CoroGraph::node(CoroToken token) const noexcept {
     auto iter = _nodes.find(token);
     LUISA_ASSERT(iter != _nodes.end(),
                  "Coroutine node with token {} not found.",
@@ -99,7 +100,7 @@ luisa::string CoroGraph::dump() const noexcept {
     }
     s.append("Frame:\n").append(_frame->dump());
     for (auto &&[token, node] : _nodes) {
-        if (token == entry_token) {
+        if (token == coro_token_entry) {
             s.append("Entry:\n");
         } else {
             s.append(luisa::format("Node {}:\n", token));
@@ -216,7 +217,7 @@ luisa::shared_ptr<const CoroGraph> CoroGraph::create(Function coroutine) noexcep
     LUISA_ASSERT(subroutines.len == subroutine_ids.len,
                  "Subroutine count mismatch: {} vs {}.",
                  subroutines.len, subroutine_ids.len);
-    luisa::unordered_map<Token, Node> nodes;
+    luisa::unordered_map<CoroToken, Node> nodes;
     nodes.reserve(subroutines.len + 1u);
     auto convert_fields = [](ir::CBoxedSlice<uint> slice) noexcept {
         luisa::vector<uint> fields;
@@ -226,7 +227,7 @@ luisa::shared_ptr<const CoroGraph> CoroGraph::create(Function coroutine) noexcep
     };
     // add the entry node
     nodes.emplace(
-        entry_token,
+        coro_token_entry,
         Node{convert_fields(m->get()->coro_frame_input_fields),
              convert_fields(m->get()->coro_frame_output_fields),
              convert_fields(m->get()->coro_target_tokens),
@@ -251,4 +252,4 @@ luisa::shared_ptr<const CoroGraph> CoroGraph::create(Function coroutine) noexcep
 
 #endif
 
-}// namespace luisa::compute::inline dsl::coro_v2
+}// namespace luisa::compute::co

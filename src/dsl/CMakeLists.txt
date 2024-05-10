@@ -12,8 +12,7 @@ if (LUISA_COMPUTE_ENABLE_DSL)
 
     set(LUISA_COMPUTE_DSL_CORO_SOURCES
             coro/coro_frame.cpp
-            coro/coro_func.cpp
-            coro/coro_graph.cpp)
+            coro/coro_func.cpp)
 
     set(LUISA_COMPUTE_DSL_SOURCES
             builtin.cpp

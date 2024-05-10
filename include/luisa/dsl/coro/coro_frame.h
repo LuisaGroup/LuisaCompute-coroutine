@@ -5,38 +5,10 @@
 #pragma once
 
 #include <luisa/core/dll_export.h>
-#include <luisa/core/stl/string.h>
-#include <luisa/core/stl/unordered_map.h>
-#include <luisa/ast/type.h>
+#include <luisa/runtime/coro/coro_frame_desc.h>
 #include <luisa/dsl/expr.h>
 
-namespace luisa::compute::inline dsl::coro_v2 {
-
-class CoroFrame;
-
-class LC_DSL_API CoroFrameDesc : public luisa::enable_shared_from_this<CoroFrameDesc> {
-
-public:
-    using DesignatedFieldDict = luisa::unordered_map<luisa::string, uint>;
-
-private:
-    const Type *_type{nullptr};
-    DesignatedFieldDict _designated_fields;
-
-private:
-    CoroFrameDesc(const Type *type, DesignatedFieldDict m) noexcept;
-
-public:
-    [[nodiscard]] static luisa::shared_ptr<CoroFrameDesc> create(const Type *type, DesignatedFieldDict m) noexcept;
-    [[nodiscard]] auto type() const noexcept { return _type; }
-    [[nodiscard]] auto &designated_fields() const noexcept { return _designated_fields; }
-    [[nodiscard]] uint designated_field(luisa::string_view name) const noexcept;
-    [[nodiscard]] luisa::string dump() const noexcept;
-
-public:
-    [[nodiscard]] CoroFrame instantiate() const noexcept;
-    [[nodiscard]] CoroFrame instantiate(Expr<uint3> coro_id) const noexcept;
-};
+namespace luisa::compute::coroutine {
 
 class LC_DSL_API CoroFrame {
 
@@ -54,6 +26,10 @@ public:
     CoroFrame(const CoroFrame &another) noexcept;
     CoroFrame &operator=(const CoroFrame &rhs) noexcept;
     CoroFrame &operator=(CoroFrame &&rhs) noexcept;
+
+public:
+    [[nodiscard]] static CoroFrame create(luisa::shared_ptr<const CoroFrameDesc> desc) noexcept;
+    [[nodiscard]] static CoroFrame create(luisa::shared_ptr<const CoroFrameDesc> desc, Expr<uint3> coro_id) noexcept;
 
 private:
     void _check_member_index(uint index) const noexcept;
@@ -85,4 +61,4 @@ public:
     [[nodiscard]] Var<bool> is_terminated() const noexcept;
 };
 
-}// namespace luisa::compute::inline dsl::coro_v2
+}// namespace luisa::compute::coro_v2

@@ -5,33 +5,33 @@
 #pragma once
 
 #include <luisa/core/dll_export.h>
+#include <luisa/core/stl/string.h>
+#include <luisa/core/stl/unordered_map.h>
 #include <luisa/ast/function.h>
+#include <luisa/runtime/coro/coro_token.h>
 
-namespace luisa::compute::inline dsl::coro_v2 {
+namespace luisa::compute::coroutine {
 
 class CoroFrameDesc;
 
-class LC_DSL_API CoroGraph {
+class LC_RUNTIME_API CoroGraph {
 
 public:
-    using Token = uint;
-    static constexpr Token entry_token = 0u;
-    static constexpr Token terminal_token = 0x8000'0000u;
     using CC = luisa::shared_ptr<const compute::detail::FunctionBuilder>;// current continuation function
 
 public:
-    class LC_DSL_API Node {
+    class LC_RUNTIME_API Node {
 
     private:
         luisa::vector<uint> _input_fields;
         luisa::vector<uint> _output_fields;
-        luisa::vector<Token> _targets;
+        luisa::vector<CoroToken> _targets;
         CC _cc;
 
     public:
         Node(luisa::vector<uint> input_fields,
              luisa::vector<uint> output_fields,
-             luisa::vector<Token> targets,
+             luisa::vector<CoroToken> targets,
              CC current_continuation) noexcept;
         ~Node() noexcept;
 
@@ -45,13 +45,13 @@ public:
 
 private:
     luisa::shared_ptr<const CoroFrameDesc> _frame;
-    luisa::unordered_map<Token, Node> _nodes;
-    luisa::unordered_map<luisa::string, Token> _named_tokens;
+    luisa::unordered_map<CoroToken, Node> _nodes;
+    luisa::unordered_map<luisa::string, CoroToken> _named_tokens;
 
 public:
     CoroGraph(luisa::shared_ptr<const CoroFrameDesc> frame_desc,
-              luisa::unordered_map<Token, Node> nodes,
-              luisa::unordered_map<luisa::string, Token> named_tokens) noexcept;
+              luisa::unordered_map<CoroToken, Node> nodes,
+              luisa::unordered_map<luisa::string, CoroToken> named_tokens) noexcept;
     ~CoroGraph() noexcept;
 
 public:
@@ -60,12 +60,13 @@ public:
 
 public:
     [[nodiscard]] auto frame() const noexcept { return _frame.get(); }
+    [[nodiscard]] auto &shared_frame() const noexcept { return _frame; }
     [[nodiscard]] auto &nodes() const noexcept { return _nodes; }
     [[nodiscard]] auto &named_tokens() const noexcept { return _named_tokens; }
     [[nodiscard]] const Node &entry() const noexcept;
-    [[nodiscard]] const Node &node(Token index) const noexcept;
+    [[nodiscard]] const Node &node(CoroToken index) const noexcept;
     [[nodiscard]] const Node &node(luisa::string_view name) const noexcept;
     [[nodiscard]] luisa::string dump() const noexcept;
 };
 
-}// namespace luisa::compute::inline dsl::coro_v2
+}// namespace luisa::compute::co

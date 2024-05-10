@@ -171,7 +171,7 @@ int main(int argc, char *argv[]) {
 
     auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 64u;
 
-    coro_v2::Coroutine coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
+    coroutine::Coroutine coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
         UInt2 coord = dispatch_id().xy();
         Float frame_size = min(resolution.x, resolution.y).cast<float>();
         UInt state = seed_image.read(coord).x;
@@ -272,12 +272,12 @@ int main(int argc, char *argv[]) {
         image.write(dispatch_id().xy(), make_float4(clamp(radiance, 0.0f, 30.0f), 1.0f));
     };
 
-    coro_v2::Coroutine raytrace_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution, UInt2 pixel_id) noexcept {
+    coroutine::Coroutine raytrace_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution, UInt2 pixel_id) noexcept {
         auto coro_id = make_uint3(pixel_id, 0u);
         coro(image, seed_image, accel, resolution).set_id(coro_id).await();
     };
 
-    coro_v2::Coroutine raytracing_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
+    coroutine::Coroutine raytracing_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
         raytrace_coro(image, seed_image, accel, resolution, dispatch_id().xy()).await();
     };
 

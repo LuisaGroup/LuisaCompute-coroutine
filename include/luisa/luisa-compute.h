@@ -65,7 +65,6 @@
 #include <luisa/dsl/constant.h>
 #include <luisa/dsl/coro/coro_frame.h>
 #include <luisa/dsl/coro/coro_func.h>
-#include <luisa/dsl/coro/coro_graph.h>
 #include <luisa/dsl/dispatch_indirect.h>
 #include <luisa/dsl/expr.h>
 #include <luisa/dsl/expr_traits.h>
@@ -122,6 +121,9 @@
 #include <luisa/runtime/command_buffer.h>
 #include <luisa/runtime/command_list.h>
 #include <luisa/runtime/context.h>
+#include <luisa/runtime/coro/coro_frame_desc.h>
+#include <luisa/runtime/coro/coro_graph.h>
+#include <luisa/runtime/coro/coro_token.h>
 #include <luisa/runtime/depth_format.h>
 #include <luisa/runtime/device.h>
 #include <luisa/runtime/dispatch_buffer.h>

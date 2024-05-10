@@ -5,11 +5,11 @@
 #include <luisa/dsl/sugar.h>
 #include <luisa/dsl/coro/coro_func.h>
 
-namespace luisa::compute::inline dsl::coro_v2::detail {
+namespace luisa::compute::coroutine::detail {
 
 void coroutine_chained_await_impl(CoroFrame &frame, uint node_count,
-                                  luisa::move_only_function<void(CoroGraph::Token, CoroFrame &)> node) noexcept {
-    node(CoroGraph::entry_token, frame);
+                                  luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept {
+    node(coro_token_entry, frame);
     $while (!frame.is_terminated()) {
         $suspend();
         $switch (frame.target_token) {
@@ -24,9 +24,9 @@ void coroutine_chained_await_impl(CoroFrame &frame, uint node_count,
 }
 
 void coroutine_generator_step_impl(CoroFrame &frame, uint node_count, bool is_entry,
-                                   luisa::move_only_function<void(CoroGraph::Token, CoroFrame &)> node) noexcept {
+                                   luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept {
     if (is_entry) {
-        node(CoroGraph::entry_token, frame);
+        node(coro_token_entry, frame);
     } else {
         $switch (frame.target_token) {
             for (auto i = 1u; i < node_count; i++) {
@@ -37,4 +37,4 @@ void coroutine_generator_step_impl(CoroFrame &frame, uint node_count, bool is_en
     }
 }
 
-}// namespace luisa::compute::inline dsl::coro_v2::detail
+}// namespace luisa::compute::coro_v2::detail

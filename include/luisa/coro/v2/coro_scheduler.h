@@ -55,13 +55,16 @@ public:
         }};
     }
     [[nodiscard]] auto dispatch(uint nx, uint ny, uint nz) && noexcept {
-        return std::move(*this).dispatch(make_uint3(nx, ny, nz));
+        return std::move(*this).dispatch(luisa::make_uint3(nx, ny, nz));
     }
     [[nodiscard]] auto dispatch(uint nx, uint ny) && noexcept {
-        return std::move(*this).dispatch(make_uint3(nx, ny, 1u));
+        return std::move(*this).dispatch(luisa::make_uint3(nx, ny, 1u));
+    }
+    [[nodiscard]] auto dispatch(uint2 size) && noexcept {
+        return std::move(*this).dispatch(luisa::make_uint3(size, 1u));
     }
     [[nodiscard]] auto dispatch(uint nx) && noexcept {
-        return std::move(*this).dispatch(make_uint3(nx, 1u, 1u));
+        return std::move(*this).dispatch(luisa::make_uint3(nx, 1u, 1u));
     }
 };
 

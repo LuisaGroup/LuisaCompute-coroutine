@@ -40,7 +40,7 @@ private:
     std::tuple<compute::detail::prototype_to_shader_invocation_t<Args>...> _args;
 
 private:
-    friend class Scheduler;
+    friend Scheduler;
     CoroSchedulerInvoke(Scheduler *scheduler, compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept
         : _scheduler{scheduler}, _args{args...} {}
 

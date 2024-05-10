@@ -84,6 +84,8 @@ public:
 public:
     [[nodiscard]] auto graph() const noexcept { return _graph.get(); }
     [[nodiscard]] auto &shared_graph() const noexcept { return _graph; }
+    [[nodiscard]] auto frame() const noexcept { return _graph->frame(); }
+    [[nodiscard]] auto &shared_frame() const noexcept { return _graph->shared_frame(); }
 
 public:
     [[nodiscard]] auto instantiate() const noexcept { return CoroFrame::create(_graph->shared_frame()); }

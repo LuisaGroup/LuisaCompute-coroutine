@@ -56,12 +56,15 @@
 #include <luisa/coro/radix_sort.h>
 #include <luisa/coro/shader_scheduler.h>
 #include <luisa/coro/v2/coro_frame.h>
+#include <luisa/coro/v2/coro_frame_buffer.h>
 #include <luisa/coro/v2/coro_frame_desc.h>
 #include <luisa/coro/v2/coro_func.h>
 #include <luisa/coro/v2/coro_graph.h>
 #include <luisa/coro/v2/coro_scheduler.h>
 #include <luisa/coro/v2/coro_token.h>
+#include <luisa/coro/v2/schedulers/persistent_threads.h>
 #include <luisa/coro/v2/schedulers/state_machine.h>
+#include <luisa/coro/v2/schedulers/wavefront.h>
 
 #ifdef LUISA_ENABLE_DSL
 #include <luisa/dsl/arg.h>

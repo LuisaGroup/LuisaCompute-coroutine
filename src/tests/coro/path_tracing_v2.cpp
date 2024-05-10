@@ -271,8 +271,8 @@ int main(int argc, char *argv[]) {
         raytrace_coro(image, seed_image, accel, resolution, dispatch_id().xy()).await();
     };
 
-    coroutine::StateMachineCoroSchedulerConfig config{.block_size = make_uint3(64u, 1u, 1u),
-                                                      .shared_memory = true,
+    coroutine::StateMachineCoroSchedulerConfig config{.block_size = make_uint3(8u, 8u, 1u),
+                                                      .shared_memory = false,
                                                       .shared_memory_soa = true};
     coroutine::StateMachineCoroScheduler scheduler{device, raytracing_coro, config};
 

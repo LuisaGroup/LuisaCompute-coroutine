@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "coro_token.h"
+
 #include <luisa/dsl/shared.h>
 #include <luisa/coro/v2/coro_frame.h>
 
@@ -18,7 +20,7 @@ private:
     size_t _size;
 
 private:
-    void _create(bool soa) noexcept {
+    void _create(bool soa, luisa::span<const uint> soa_excluded) noexcept {
         auto fb = detail::FunctionBuilder::current();
         if (!soa) {
             auto s = fb->shared(Type::array(_desc->type(), _size));
@@ -27,17 +29,21 @@ private:
             auto fields = _desc->type()->members();
             _expressions.reserve(fields.size());
             for (auto i = 0u; i < fields.size(); i++) {
-                auto type = i == 0u ? Type::array(Type::of<uint>(), 3u) : fields[i];
-                auto s = fb->shared(Type::array(type, _size));
-                _expressions.emplace_back(s);
+                if (std::find(soa_excluded.begin(), soa_excluded.end(), i) != soa_excluded.end()) {
+                    _expressions.emplace_back(nullptr);
+                } else {
+                    auto type = i == 0u ? Type::array(Type::of<uint>(), 3u) : fields[i];
+                    auto s = fb->shared(Type::array(type, _size));
+                    _expressions.emplace_back(s);
+                }
             }
         }
     }
 
 public:
-    Shared(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc,
-           size_t n, bool soa = true) noexcept
-        : _desc{std::move(desc)}, _size{n} { _create(soa); }
+    Shared(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, size_t n,
+           bool soa = true, luisa::span<const uint> soa_excluded_fields = {}) noexcept
+        : _desc{std::move(desc)}, _size{n} { _create(soa, soa_excluded_fields); }
 
     Shared(Shared &&) noexcept = default;
     Shared(const Shared &) noexcept = delete;
@@ -48,9 +54,10 @@ public:
     [[nodiscard]] auto is_soa() const noexcept { return _expressions.size() > 1; }
     [[nodiscard]] auto size() const noexcept { return _size; }
 
-    /// Read index
+
+private:
     template<typename I>
-    [[nodiscard]] auto read(I &&index) const noexcept {
+    [[nodiscard]] auto _read(I &&index, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
         auto i = def(std::forward<I>(index));
         auto fb = detail::FunctionBuilder::current();
         auto frame = fb->local(_desc->type());
@@ -60,10 +67,12 @@ public:
         } else {
             auto fields = _desc->type()->members();
             for (auto m = 0u; m < fields.size(); m++) {
-                auto s = fb->access(fields[m], _expressions[m], i.expression());
+                if (_expressions[m] == nullptr) { continue; }
+                if (active_fields && std::find(active_fields->begin(), active_fields->end(), m) == active_fields->end()) { continue; }
                 auto f = fb->member(fields[m], frame, m);
                 if (m == 0u) {
                     auto t = Type::of<uint>();
+                    auto s = fb->access(Type::array(t, 3u), _expressions[m], i.expression());
                     std::array<const Expression *, 3u> elems;
                     elems[0] = fb->access(t, s, fb->literal(t, 0u));
                     elems[1] = fb->access(t, s, fb->literal(t, 1u));
@@ -71,6 +80,7 @@ public:
                     auto v = fb->call(Type::of<uint3>(), CallOp::MAKE_UINT3, elems);
                     fb->assign(f, v);
                 } else {
+                    auto s = fb->access(fields[m], _expressions[m], i.expression());
                     fb->assign(f, s);
                 }
             }
@@ -80,7 +90,7 @@ public:
 
     /// Write index
     template<typename I>
-    void write(I &&index, const coroutine::CoroFrame &frame) const noexcept {
+    void _write(I &&index, const coroutine::CoroFrame &frame, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
         auto i = def(std::forward<I>(index));
         auto fb = detail::FunctionBuilder::current();
         if (!is_soa()) {
@@ -89,20 +99,41 @@ public:
         } else {
             auto fields = _desc->type()->members();
             for (auto m = 0u; m < fields.size(); m++) {
-                auto s = fb->access(fields[m], _expressions[m], i.expression());
+                if (_expressions[m] == nullptr) { continue; }
+                if (active_fields && std::find(active_fields->begin(), active_fields->end(), m) == active_fields->end()) { continue; }
                 auto f = fb->member(fields[m], frame.expression(), m);
                 if (m == 0u) {
                     auto t = Type::of<uint>();
+                    auto s = fb->access(Type::array(t, 3u), _expressions[m], i.expression());
                     for (auto j = 0u; j < 3u; j++) {
                         auto fj = fb->swizzle(t, f, 1u, j);
                         auto sj = fb->access(t, s, fb->literal(t, j));
                         fb->assign(sj, fj);
                     }
                 } else {
+                    auto s = fb->access(fields[m], _expressions[m], i.expression());
                     fb->assign(s, f);
                 }
             }
         }
+    }
+
+public:
+    template<typename I>
+    [[nodiscard]] auto read(I &&index) const noexcept {
+        return _read(std::forward<I>(index), luisa::nullopt);
+    }
+    template<typename I>
+    [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
+        return _read(std::forward<I>(index), luisa::make_optional(active_fields));
+    }
+    template<typename I>
+    void write(I &&index, const coroutine::CoroFrame &frame) const noexcept {
+        _write(std::forward<I>(index), frame, luisa::nullopt);
+    }
+    template<typename I>
+    void write(I &&index, const coroutine::CoroFrame &frame, luisa::span<const uint> active_fields) const noexcept {
+        _write(std::forward<I>(index), frame, luisa::make_optional(active_fields));
     }
 };
 

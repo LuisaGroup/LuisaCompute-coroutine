@@ -5,6 +5,7 @@
 #pragma once
 
 #include <luisa/coro/v2/coro_func.h>
+#include <luisa/coro/v2/coro_graph.h>
 #include <luisa/coro/v2/coro_frame_smem.h>
 #include <luisa/coro/v2/coro_scheduler.h>
 
@@ -14,6 +15,9 @@ namespace detail {
 LC_CORO_API void coro_scheduler_state_machine_impl(
     CoroFrame &frame, uint state_count,
     luisa::move_only_function<void(CoroToken)> node) noexcept;
+LC_CORO_API void coro_scheduler_state_machine_smem_impl(
+    Shared<CoroFrame> &smem, const CoroGraph *graph,
+    luisa::move_only_function<void(CoroToken, CoroFrame &frame)> node) noexcept;
 }// namespace detail
 
 struct StateMachineCoroSchedulerConfig {
@@ -35,16 +39,11 @@ private:
             set_block_size(config.block_size);
             if (config.shared_memory) {
                 auto n = config.block_size.x * config.block_size.y * config.block_size.z;
-                Shared<CoroFrame> sm{coro.shared_frame(), n, config.shared_memory_soa};
-                auto tid = thread_z() * block_size().x * block_size().y + thread_y() * block_size().x + thread_x();
-                auto frame = coro.instantiate(dispatch_id());
-                sm.write(tid, frame);
-                detail::coro_scheduler_state_machine_impl(
-                    frame, coro.subroutine_count(),
-                    [&](CoroToken token) noexcept {
-                        frame = sm.read(tid);
+                Shared<CoroFrame> sm{coro.shared_frame(), n, config.shared_memory_soa, std::array{0u, 1u}};
+                detail::coro_scheduler_state_machine_smem_impl(
+                    sm, coro.graph(),
+                    [&](CoroToken token, CoroFrame &frame) noexcept {
                         coro.subroutine(token)(frame, args...);
-                        sm.write(tid, frame);
                     });
             } else {
                 auto frame = coro.instantiate(dispatch_id());

@@ -5,12 +5,12 @@
 #pragma once
 
 #include <luisa/core/dll_export.h>
-#include <luisa/runtime/coro/coro_frame_desc.h>
+#include <luisa/coro/v2/coro_frame_desc.h>
 #include <luisa/dsl/expr.h>
 
 namespace luisa::compute::coroutine {
 
-class LC_DSL_API CoroFrame {
+class LC_CORO_API CoroFrame {
 
 private:
     luisa::shared_ptr<const CoroFrameDesc> _desc;

@@ -18,10 +18,6 @@ set(LUISA_COMPUTE_RUNTIME_REMOTE_SOURCES
         remote/client_interface.cpp
         remote/server_interface.cpp)
 
-set(LUISA_COMPUTE_RUNTIME_CORO_SOURCES
-        coro/coro_frame_desc.cpp
-        coro/coro_graph.cpp)
-
 set(LUISA_COMPUTE_RUNTIME_SOURCES
         bindless_array.cpp
         buffer.cpp
@@ -42,7 +38,6 @@ set(LUISA_COMPUTE_RUNTIME_SOURCES
         volume.cpp
         ${LUISA_COMPUTE_RUNTIME_RHI_SOURCES}
         ${LUISA_COMPUTE_RUNTIME_RTX_SOURCES}
-        ${LUISA_COMPUTE_RUNTIME_CORO_SOURCES}
         ${LUISA_COMPUTE_RUNTIME_RASTER_SOURCES}
         ${LUISA_COMPUTE_RUNTIME_REMOTE_SOURCES})
 

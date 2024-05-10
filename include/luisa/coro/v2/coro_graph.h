@@ -8,19 +8,19 @@
 #include <luisa/core/stl/string.h>
 #include <luisa/core/stl/unordered_map.h>
 #include <luisa/ast/function.h>
-#include <luisa/runtime/coro/coro_token.h>
+#include <luisa/coro/v2/coro_token.h>
 
 namespace luisa::compute::coroutine {
 
 class CoroFrameDesc;
 
-class LC_RUNTIME_API CoroGraph {
+class LC_CORO_API CoroGraph {
 
 public:
     using CC = luisa::shared_ptr<const compute::detail::FunctionBuilder>;// current continuation function
 
 public:
-    class LC_RUNTIME_API Node {
+    class LC_CORO_API Node {
 
     private:
         luisa::vector<uint> _input_fields;

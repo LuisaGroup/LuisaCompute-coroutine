@@ -3,7 +3,7 @@
 //
 
 #include <luisa/core/logging.h>
-#include <luisa/runtime/coro/coro_frame_desc.h>
+#include <luisa/coro/v2/coro_frame_desc.h>
 
 namespace luisa::compute::coroutine {
 

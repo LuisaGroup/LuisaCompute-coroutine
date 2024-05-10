@@ -11,7 +11,7 @@
 
 namespace luisa::compute::coroutine {
 
-class LC_RUNTIME_API CoroFrameDesc : public luisa::enable_shared_from_this<CoroFrameDesc> {
+class LC_CORO_API CoroFrameDesc : public luisa::enable_shared_from_this<CoroFrameDesc> {
 
 public:
     using DesignatedFieldDict = luisa::unordered_map<luisa::string, uint>;

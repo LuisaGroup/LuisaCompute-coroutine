@@ -4,17 +4,18 @@
 
 #pragma once
 
-#include <luisa/dsl/coro/coro_frame.h>
-#include <luisa/runtime/coro/coro_graph.h>
+#include <luisa/core/dll_export.h>
+#include <luisa/coro/v2/coro_frame.h>
+#include <luisa/coro/v2/coro_graph.h>
 #include <luisa/dsl/func.h>
 
 namespace luisa::compute::coroutine {
 
 namespace detail {
-LC_DSL_API void coroutine_chained_await_impl(
+LC_CORO_API void coroutine_chained_await_impl(
     CoroFrame &frame, uint node_count,
     luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept;
-LC_DSL_API void coroutine_generator_step_impl(
+LC_CORO_API void coroutine_generator_step_impl(
     CoroFrame &frame, uint node_count, bool is_entry,
     luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept;
 }// namespace detail

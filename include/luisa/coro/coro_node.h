@@ -8,7 +8,7 @@ namespace luisa::compute::inline coro {
 
 class CoroGraph;
 
-class LC_CORO_API CoroNode {
+class CoroNode {
 
     friend class CoroGraph;
 
@@ -20,7 +20,8 @@ private:
     Func _function;
 
 protected:
-    CoroNode(const CoroGraph *graph, Func function) noexcept;
+    CoroNode(const CoroGraph *graph, Func function) noexcept
+        : _graph{graph}, _function{std::move(function)} {}
 
 public:
     luisa::vector<uint> input_state_members;

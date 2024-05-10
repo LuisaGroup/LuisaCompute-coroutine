@@ -1,14 +1,11 @@
-#include <luisa/runtime/context.h>
-#include <luisa/runtime/stream.h>
-#include <luisa/runtime/image.h>
-#include <luisa/runtime/shader.h>
-#include <luisa/dsl/syntax.h>
-#include <luisa/dsl/coro/coro_func.h>
-#include <stb/stb_image_write.h>
-#include <luisa/dsl/sugar.h>
+#include <luisa/luisa-compute.h>
 
 using namespace luisa;
 using namespace luisa::compute;
+
+namespace luisa::compute::coroutine {
+
+}// namespace luisa::compute::coroutine
 
 int main(int argc, char *argv[]) {
 
@@ -21,18 +18,25 @@ int main(int argc, char *argv[]) {
     luisa::vector<std::byte> host_image(image.view().size_bytes());
 
     Kernel1D test = [] {
-        coroutine::Generator<uint(uint)> g = [](UInt n) {
+        coroutine::Generator<uint(uint)> range = [](UInt n) {
             auto x = def(0u);
             $while (x < n) {
                 $yield(x);
                 x += 1u;
             };
         };
-        for (auto x : g(100u)) {
+        for (auto x : range(100u)) {
             device_log("x = {}", x);
         }
     };
 
-    auto shader = device.compile(test);
-    stream << shader().dispatch(1u) << synchronize();
+    coroutine::Coroutine coro = [] {
+        $for (i, 10u) {
+            device_log("i = {}", i);
+            $suspend();
+        };
+    };
+
+    coroutine::StateMachineCoroScheduler sched{device, coro};
+    stream << sched().dispatch(1u, 1u, 1u) << synchronize();
 }

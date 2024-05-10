@@ -10,10 +10,6 @@ if (LUISA_COMPUTE_ENABLE_DSL)
     set(LUISA_COMPUTE_DSL_RASTER_SOURCES
             raster/raster_kernel.cpp)
 
-    set(LUISA_COMPUTE_DSL_CORO_SOURCES
-            coro/coro_frame.cpp
-            coro/coro_func.cpp)
-
     set(LUISA_COMPUTE_DSL_SOURCES
             builtin.cpp
             dispatch_indirect.cpp
@@ -24,11 +20,10 @@ if (LUISA_COMPUTE_ENABLE_DSL)
             soa.cpp
             sugar.cpp
             ${LUISA_COMPUTE_DSL_RTX_SOURCES}
-            ${LUISA_COMPUTE_DSL_CORO_SOURCES}
             ${LUISA_COMPUTE_DSL_RASTER_SOURCES})
 
     add_library(luisa-compute-dsl SHARED ${LUISA_COMPUTE_DSL_SOURCES})
-    target_link_libraries(luisa-compute-dsl PUBLIC luisa-compute-ast luisa-compute-runtime luisa-compute-coro)
+    target_link_libraries(luisa-compute-dsl PUBLIC luisa-compute-ast luisa-compute-runtime)
     target_compile_definitions(luisa-compute-dsl
             PRIVATE LC_DSL_EXPORT_DLL=1
             PUBLIC LUISA_ENABLE_DSL=1)

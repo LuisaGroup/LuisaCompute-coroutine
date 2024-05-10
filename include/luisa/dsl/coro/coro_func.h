@@ -216,8 +216,8 @@ public:
         auto f = [=, this](CoroFrame &frame, bool is_entry) noexcept {
             detail::coroutine_generator_step_impl(
                 frame, _coro.subroutine_count(), is_entry,
-                [&](CoroToken token, CoroFrame &f) noexcept {
-                    _coro.subroutine(token)(f, args...);
+                [&](CoroToken token, CoroFrame &ff) noexcept {
+                    _coro.subroutine(token)(ff, args...);
                 });
         };
         return Stepper<decltype(f)>{*this, std::move(f)};

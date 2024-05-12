@@ -56,6 +56,7 @@ public:
 
 
 private:
+    /// Read index with active fields
     template<typename I>
     [[nodiscard]] auto _read(I &&index, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
         auto i = def(std::forward<I>(index));
@@ -88,7 +89,7 @@ private:
         return coroutine::CoroFrame{_desc, frame};
     }
 
-    /// Write index
+    /// Write index with active fields
     template<typename I>
     void _write(I &&index, const coroutine::CoroFrame &frame, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
         auto i = def(std::forward<I>(index));

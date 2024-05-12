@@ -37,6 +37,8 @@ class CoroFrame;
 template<typename T>
 class SOA;
 
+class SOA<coroutine::CoroFrame>;
+
 template<typename T>
 class Buffer;
 
@@ -256,6 +258,10 @@ public:
         requires(!is_custom_struct_v<T>)//backend-specific type not allowed
     [[nodiscard]] auto create_soa(size_t size) noexcept {
         return SOA<T>{*this, size};
+    }
+
+    [[nodiscard]] auto create_soa(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, size_t size) noexcept {
+        return SOA<coroutine::CoroFrame>{*this, desc, size};
     }
 
     template<typename T>

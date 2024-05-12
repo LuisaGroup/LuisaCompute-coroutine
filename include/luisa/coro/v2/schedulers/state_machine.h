@@ -33,7 +33,7 @@ private:
     Shader3D<Args...> _shader;
 
 private:
-    [[nodiscard]] static auto _create_shader(Device &device, const Coroutine<void(Args...)> &coro,
+    void _create_shader(Device &device, const Coroutine<void(Args...)> &coro,
                                              const StateMachineCoroSchedulerConfig &config) noexcept {
         Kernel3D kernel = [&coro, &config](Var<Args>... args) noexcept {
             set_block_size(config.block_size);
@@ -54,7 +54,7 @@ private:
                     });
             }
         };
-        return device.compile(kernel);
+        _shader = device.compile(kernel);
     }
 
     void _dispatch(Stream &stream, uint3 dispatch_size,
@@ -64,8 +64,9 @@ private:
 
 public:
     StateMachineCoroScheduler(Device &device, const Coroutine<void(Args...)> &coro,
-                              const StateMachineCoroSchedulerConfig &config) noexcept
-        : _shader{_create_shader(device, coro, config)} {}
+                              const StateMachineCoroSchedulerConfig &config) noexcept {
+        _create_shader(device, coro, config);
+    }
     StateMachineCoroScheduler(Device &device, const Coroutine<void(Args...)> &coro) noexcept
         : StateMachineCoroScheduler{device, coro, StateMachineCoroSchedulerConfig{}} {}
 };

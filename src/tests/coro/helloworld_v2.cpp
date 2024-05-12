@@ -30,13 +30,17 @@ int main(int argc, char *argv[]) {
         }
     };
 
-    coroutine::Coroutine coro = [] {
-        $for (i, 10u) {
-            device_log("i = {}", i);
+    coroutine::Coroutine coro = [](UInt n) {
+        $for (i, n) {
+            device_log("{} / {}", i, n);
             $suspend();
         };
     };
 
-    coroutine::StateMachineCoroScheduler sched{device, coro};
-    stream << sched().dispatch(1u, 1u, 1u) << synchronize();
+    coroutine::Coroutine awaiter = [&coro] {
+        $await coro(dispatch_x());
+    };
+
+    coroutine::StateMachineCoroScheduler sched{device, awaiter};
+    stream << sched().dispatch(10u) << synchronize();
 }

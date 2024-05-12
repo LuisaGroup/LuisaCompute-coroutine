@@ -128,6 +128,15 @@ public:
     }
 };
 
+namespace detail {
+struct CoroAwaitInvoker {
+    template<typename A>
+    void operator%(A &&awaiter) && noexcept {
+        std::forward<A>(awaiter).await();
+    }
+};
+}// namespace detail
+
 template<typename T>
 Coroutine(T &&) -> Coroutine<compute::detail::dsl_function_t<std::remove_cvref_t<T>>>;
 
@@ -227,4 +236,4 @@ public:
     }
 };
 
-}// namespace luisa::compute::coro_v2
+}// namespace luisa::compute::coroutine

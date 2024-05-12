@@ -96,20 +96,39 @@ public:
     [[nodiscard]] auto operator->() const noexcept { return this; }
 };
 
+/// Same as Expr<Buffer<T>>
+template<typename T>
+struct Expr<BufferView<T>> : public Expr<Buffer<T>> {
+    using Expr<Buffer<T>>::Expr;
+};
+
 template<>
 struct Expr<ByteBuffer> {
 private:
     const RefExpr *_expression{nullptr};
+
 public:
     /// Construct from RefExpr
     explicit Expr(const RefExpr *expr) noexcept
         : _expression{expr} {}
 
-    /// Construct from BufferView. Will call buffer_binding() to bind buffer
-    Expr(const ByteBuffer &buffer) noexcept
+    /// Construct from ByteBufferView. Will call buffer_binding() to bind buffer
+    Expr(const ByteBufferView &buffer) noexcept
         : _expression{detail::FunctionBuilder::current()->buffer_binding(
               Type::of<ByteBuffer>(), buffer.handle(),
-              0u, buffer.size_bytes())} {}
+              buffer.offset(), buffer.size_bytes())} {}
+
+    /// Contruct from ByteBuffer. Will call buffer_binding() to bind buffer
+    Expr(const ByteBuffer &buffer) noexcept
+        : Expr{ByteBufferView{buffer}} {}
+
+    /// Construct from Var<ByteBuffer>.
+    Expr(const Var<ByteBuffer> &buffer) noexcept
+        : Expr{buffer.expression()} {}
+
+    /// Construct from Var<ByteBuffer>.
+    Expr(const Var<ByteBufferView> &buffer) noexcept
+        : Expr{buffer.expression()} {}
 
     /// Return RefExpr
     [[nodiscard]] const RefExpr *expression() const noexcept { return _expression; }
@@ -137,12 +156,6 @@ public:
         return def<uint64_t>(detail::FunctionBuilder::current()->call(
             Type::of<uint64_t>(), CallOp::BUFFER_ADDRESS, {_expression}));
     }
-};
-
-/// Same as Expr<Buffer<T>>
-template<typename T>
-struct Expr<BufferView<T>> : public Expr<Buffer<T>> {
-    using Expr<Buffer<T>>::Expr;
 };
 
 /// Class of Expr<Image<T>>
@@ -531,10 +544,11 @@ public:
     }
 };
 
+template<typename BufferOrExpr>
 class ByteBufferExprProxy {
 
 private:
-    ByteBuffer _buffer;
+    BufferOrExpr _buffer;
 
 public:
     LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(ByteBufferExprProxy)
@@ -543,16 +557,16 @@ public:
     template<typename T, typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] auto read(I &&index) const noexcept {
-        return Expr<ByteBuffer>{_buffer}.read<T, I>(std::forward<I>(index));
+        return Expr<BufferOrExpr>{_buffer}.read<T, I>(std::forward<I>(index));
     }
     template<typename I, typename V>
         requires is_integral_expr_v<I>
     void write(I &&index, V &&value) const noexcept {
-        Expr<ByteBuffer>{_buffer}.write(std::forward<I>(index),
-                                        std::forward<V>(value));
+        Expr<BufferOrExpr>{_buffer}.write(std::forward<I>(index),
+                                          std::forward<V>(value));
     }
     [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
-        return Expr<ByteBuffer>{_buffer}.device_address();
+        return Expr<BufferOrExpr>{_buffer}.device_address();
     }
 };
 
@@ -644,6 +658,14 @@ struct Var<Buffer<T>> : public Expr<Buffer<T>> {
     Var(const Var &) noexcept = delete;
 };
 
+template<typename T>
+struct Var<BufferView<T>> : public Expr<Buffer<T>> {
+    explicit Var(detail::ArgumentCreation) noexcept
+        : Expr<Buffer<T>>{detail::FunctionBuilder::current()->buffer(Type::of<Buffer<T>>())} {}
+    Var(Var &&) noexcept = default;
+    Var(const Var &) noexcept = delete;
+};
+
 template<>
 struct Var<ByteBuffer> : public Expr<ByteBuffer> {
     explicit Var(detail::ArgumentCreation) noexcept
@@ -652,10 +674,10 @@ struct Var<ByteBuffer> : public Expr<ByteBuffer> {
     Var(const Var &) noexcept = delete;
 };
 
-template<typename T>
-struct Var<BufferView<T>> : public Expr<Buffer<T>> {
+template<>
+struct Var<ByteBufferView> : public Expr<ByteBuffer> {
     explicit Var(detail::ArgumentCreation) noexcept
-        : Expr<Buffer<T>>{detail::FunctionBuilder::current()->buffer(Type::of<Buffer<T>>())} {}
+        : Expr<ByteBuffer>{detail::FunctionBuilder::current()->buffer(Type::of<ByteBuffer>())} {}
     Var(Var &&) noexcept = default;
     Var(const Var &) noexcept = delete;
 };
@@ -703,6 +725,8 @@ struct Var<BindlessArray> : public Expr<BindlessArray> {
 
 template<typename T>
 using BufferVar = Var<Buffer<T>>;
+
+using ByteBufferVar = Var<ByteBuffer>;
 
 template<typename T>
 using ImageVar = Var<Image<T>>;

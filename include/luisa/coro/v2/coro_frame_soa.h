@@ -134,6 +134,7 @@ public:
     [[nodiscard]] auto size() const noexcept { return _size; }
     [[nodiscard]] auto handle() const noexcept { return _buffer.handle(); }
     [[nodiscard]] auto size_bytes() const noexcept { return _buffer.size_bytes(); }
+    [[nodiscard]] auto view() const noexcept { return SOAView<coroutine::CoroFrame>{_desc, &_buffer}; }
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
         return reinterpret_cast<const detail::CoroFrameSOAExprProxy<SOA<coroutine::CoroFrame>> *>(this);
@@ -162,9 +163,7 @@ public:
 
     /// Construct from SOA<coroutine::CoroFrame>. Will call buffer_binding() to bind buffer
     Expr(const SOA<coroutine::CoroFrame> &soa) noexcept
-        : _expression{detail::FunctionBuilder::current()->buffer_binding(
-              SOA<coroutine::CoroFrame>::element_type(), soa.handle(),
-              0u, soa.size_bytes())} {}
+        : Expr{SOAView<coroutine::CoroFrame>{soa}} {}
 
     /// Construct from Var<Buffer<T>>.
     Expr(const Var<SOA<coroutine::CoroFrame>> &soa) noexcept

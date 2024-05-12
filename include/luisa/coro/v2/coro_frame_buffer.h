@@ -15,30 +15,7 @@ namespace detail {
 [[noreturn]] LC_CORO_API void error_coro_frame_buffer_invalid_element_size(size_t stride, size_t expected) noexcept;
 
 template<template<typename T> typename B>
-class BufferExprProxy<B<coroutine::CoroFrame>> {
-
-private:
-    using CoroFrameBuffer = B<coroutine::CoroFrame>;
-    CoroFrameBuffer _buffer;
-
-public:
-    LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(BufferExprProxy)
-
-public:
-    template<typename I>
-        requires is_integral_expr_v<I>
-    [[nodiscard]] auto read(I &&index) const noexcept {
-        return Expr<CoroFrameBuffer>{_buffer}.read(std::forward<I>(index));
-    }
-    template<typename I, typename V>
-        requires is_integral_expr_v<I>
-    void write(I &&index, V &&value) const noexcept {
-        Expr<CoroFrameBuffer>{_buffer}.write(std::forward<I>(index), std::forward<V>(value));
-    }
-    [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
-        return Expr<CoroFrameBuffer>{_buffer}.device_address();
-    }
-};
+class BufferExprProxy<B<coroutine::CoroFrame>>;
 
 }// namespace detail
 
@@ -296,5 +273,35 @@ public:
 public:
     [[nodiscard]] auto operator->() const noexcept { return this; }
 };
+
+namespace detail {
+
+template<template<typename T> typename B>
+class BufferExprProxy<B<coroutine::CoroFrame>> {
+
+private:
+    using CoroFrameBuffer = B<coroutine::CoroFrame>;
+    CoroFrameBuffer _buffer;
+
+public:
+    LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(BufferExprProxy)
+
+public:
+    template<typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] auto read(I &&index) const noexcept {
+        return Expr<CoroFrameBuffer>{_buffer}.read(std::forward<I>(index));
+    }
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write(I &&index, V &&value) const noexcept {
+        Expr<CoroFrameBuffer>{_buffer}.write(std::forward<I>(index), std::forward<V>(value));
+    }
+    [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
+        return Expr<CoroFrameBuffer>{_buffer}.device_address();
+    }
+};
+
+}// namespace detail
 
 }// namespace luisa::compute

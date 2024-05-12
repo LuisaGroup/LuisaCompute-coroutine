@@ -4,7 +4,9 @@ set(LUISA_COMPUTE_CORO_SOURCES
         coro_frame_desc.cpp
         coro_func.cpp
         coro_graph.cpp
-        schedulers/state_machine.cpp)
+        schedulers/persistent_threads.cpp
+        schedulers/state_machine.cpp
+        schedulers/wavefront.cpp)
 
 add_library(luisa-compute-coro SHARED ${LUISA_COMPUTE_CORO_SOURCES})
 target_link_libraries(luisa-compute-coro PUBLIC

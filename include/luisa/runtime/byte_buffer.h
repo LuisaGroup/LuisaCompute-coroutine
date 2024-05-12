@@ -1,5 +1,6 @@
 #pragma once
 
+#include "luisa/coro/v2/coro_frame.h"
 #include <luisa/runtime/buffer.h>
 
 namespace luisa::compute {
@@ -7,6 +8,9 @@ namespace luisa::compute {
 namespace detail {
 class ByteBufferExprProxy;
 }// namespace detail
+
+template<>
+class SOA<coroutine::CoroFrame>;
 
 class LC_RUNTIME_API ByteBuffer final : public Resource {
 
@@ -16,6 +20,7 @@ private:
 private:
     friend class Device;
     friend class ResourceGenerator;
+    friend class SOA<coroutine::CoroFrame>;
     ByteBuffer(DeviceInterface *device, const BufferCreationInfo &info) noexcept;
     ByteBuffer(DeviceInterface *device, size_t size_bytes) noexcept;
 
@@ -30,13 +35,6 @@ public:
         return *this;
     }
     ByteBuffer &operator=(ByteBuffer const &) noexcept = delete;
-    [[nodiscard]] auto view() const noexcept {
-        _check_is_valid();
-        return BufferView<byte>{this->native_handle(), this->handle(), 1u, 0u, _size_bytes, _size_bytes};
-    }
-    [[nodiscard]] auto view(size_t offset, size_t count) const noexcept {
-        return view().subview(offset, count);
-    }
     using Resource::operator bool;
     [[nodiscard]] auto copy_to(void *data) const noexcept {
         _check_is_valid();

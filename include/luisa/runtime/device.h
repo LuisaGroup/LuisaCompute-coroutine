@@ -7,6 +7,8 @@
 #include <luisa/runtime/rhi/device_interface.h>
 #include <luisa/core/thread_pool.h>
 
+#include <utility>
+
 namespace luisa {
 class BinaryIO;
 }// namespace luisa
@@ -36,8 +38,6 @@ class CoroFrame;
 
 template<typename T>
 class SOA;
-
-class SOA<coroutine::CoroFrame>;
 
 template<typename T>
 class Buffer;
@@ -260,8 +260,11 @@ public:
         return SOA<T>{*this, size};
     }
 
-    [[nodiscard]] auto create_soa(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, size_t size) noexcept {
-        return SOA<coroutine::CoroFrame>{*this, desc, size};
+    template<typename Desc>
+        requires std::same_as<std::remove_cvref_t<Desc>, luisa::shared_ptr<const coroutine::CoroFrameDesc>> ||
+                 std::same_as<std::remove_cvref_t<Desc>, const coroutine::CoroFrameDesc *>
+    [[nodiscard]] auto create_coro_frame_soa(Desc &&desc, size_t size, bool soa) noexcept {
+        return SOA<coroutine::CoroFrame>{impl(), std::forward<Desc>(desc), size, soa};
     }
 
     template<typename T>

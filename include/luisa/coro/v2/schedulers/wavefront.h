@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include <luisa/coro/v2/coro_scheduler.h>
 #include <luisa/coro/v2/coro_func.h>
 #include <luisa/coro/v2/coro_graph.h>
-#include <luisa/coro/v2/coro_scheduler.h>
+#include <luisa/coro/v2/coro_frame_soa.h>
 
 namespace luisa::compute::coroutine {
 
@@ -25,35 +26,42 @@ template<typename... Args>
 class WavefrontCoroScheduler : public CoroScheduler<Args...> {
 
 private:
-    // Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
-    // luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
-    // Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
-    // Shader1D<Buffer<uint>, Buffer<uint>, Container, uint> _gather_shader;
-    // Shader1D<Buffer<uint>, Container, uint> _initialize_shader;
-    // Shader1D<Buffer<uint>, Container, uint, uint> _compact_shader;
-    // Shader1D<Buffer<uint>, uint> _clear_shader;
-    // compute::Buffer<uint> _resume_index;
-    // compute::Buffer<uint> _resume_count;
-    // ///offset calculate from count, will be end after gathering
-    // compute::Buffer<uint> _resume_offset;
-    // compute::Buffer<uint> _global_buffer;
-    // compute::Buffer<uint> _debug_buffer;
-    // luisa::vector<uint> _host_count;
-    // luisa::vector<uint> _host_offset;
-    // bool _host_empty;
-    // uint _dispatch_counter;
-    // uint _max_sub_coro;
-    // uint _max_frame_count;
-    // radix_sort::temp_storage _sort_temp_storage;
-    // radix_sort::instance<> _sort_token;
-    // radix_sort::instance<Buffer<uint>> _sort_hint;
-    // luisa::vector<bool> _have_hint;
-    // compute::Buffer<uint> _temp_key[2];
-    // compute::Buffer<uint> _temp_index;
+    using Container = SOA<CoroFrame>;
+    Shader1D<Buffer<uint>, Buffer<uint>, uint, Container, uint, uint, Args...> _gen_shader;
+    luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, Container, uint, Args...>> _resume_shaders;
+    Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
+    Shader1D<Buffer<uint>, Buffer<uint>, Container, uint> _gather_shader;
+    Shader1D<Buffer<uint>, Container, uint> _initialize_shader;
+    Shader1D<Buffer<uint>, Container, uint, uint> _compact_shader;
+    Shader1D<Buffer<uint>, uint> _clear_shader;
+    Container _frame;
+    Buffer<uint> _resume_index;
+    Buffer<uint> _resume_count;
+    ///offset calculate from count, will be end after gathering
+    Buffer<uint> _resume_offset;
+    Buffer<uint> _global_buffer;
+    Buffer<uint> _debug_buffer;
+    luisa::vector<uint> _host_count;
+    luisa::vector<uint> _host_offset;
+    bool _host_empty;
+    uint _dispatch_counter;
+    uint _max_sub_coro;
+    uint _max_frame_count;
+    radix_sort::temp_storage _sort_temp_storage;
+    radix_sort::instance<> _sort_token;
+    radix_sort::instance<Buffer<uint>> _sort_hint;
+    luisa::vector<bool> _have_hint;
+    Buffer<uint> _temp_key[2];
+    Buffer<uint> _temp_index;
 
 private:
     void _create_shader(Device &device, const Coroutine<void(Args...)> &coro,
                         const WavefrontCoroSchedulerConfig &config) noexcept {
+        if (config.soa) {
+            _frame = device.create_coro_frame_soa(coro.shared_frame(), config.max_instance_count, config.soa);
+        } else {
+
+        }
     }
 
     void _dispatch(Stream &stream, uint3 dispatch_size,

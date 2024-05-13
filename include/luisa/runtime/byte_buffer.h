@@ -10,8 +10,8 @@ LC_RUNTIME_API void error_buffer_size_not_aligned(size_t align) noexcept;
 class ByteBufferExprProxy;
 }// namespace detail
 
-template<>
-class SOA<coroutine::CoroFrame>;
+template<typename T>
+class SOA;
 
 class ByteBufferView;
 
@@ -38,10 +38,7 @@ public:
         return *this;
     }
     ByteBuffer &operator=(ByteBuffer const &) noexcept = delete;
-    [[nodiscard]] auto view() const noexcept {
-        _check_is_valid();
-        return ByteBufferView{this->native_handle(), this->handle(), 0u, size_bytes()};
-    }
+    [[nodiscard]] ByteBufferView view() const noexcept;
     using Resource::operator bool;
     [[nodiscard]] auto copy_to(void *data) const noexcept {
         _check_is_valid();
@@ -112,8 +109,8 @@ public:
     [[nodiscard]] auto handle() const noexcept { return _handle; }
     [[nodiscard]] auto native_handle() const noexcept { return _native_handle; }
     [[nodiscard]] auto offset() const noexcept { return _offset_bytes; }
-    [[nodiscard]] auto size() const noexcept { return _size; }
     [[nodiscard]] auto size_bytes() const noexcept { return _size; }
+    [[nodiscard]] auto total_size() const noexcept { return _total_size; }
     [[nodiscard]] auto original() const noexcept {
         return ByteBufferView{_native_handle, _handle, 0u, _total_size, _total_size};
     }

@@ -35,6 +35,11 @@ ByteBuffer::~ByteBuffer() noexcept {
     if (*this) { device()->destroy_buffer(handle()); }
 }
 
+ByteBufferView ByteBuffer::view() const noexcept {
+    _check_is_valid();
+    return ByteBufferView{this->native_handle(), this->handle(), 0u, size_bytes(), size_bytes()};
+}
+
 ByteBuffer Device::create_byte_buffer(size_t byte_size) noexcept {
     return ByteBuffer{impl(), byte_size};
 }

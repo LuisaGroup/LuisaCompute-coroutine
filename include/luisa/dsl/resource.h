@@ -123,11 +123,15 @@ public:
         : Expr{ByteBufferView{buffer}} {}
 
     /// Construct from Var<ByteBuffer>.
-    Expr(const Var<ByteBuffer> &buffer) noexcept
+    template<typename T>
+        requires std::same_as<T, ByteBuffer>
+    Expr(const Var<T> &buffer) noexcept
         : Expr{buffer.expression()} {}
 
-    /// Construct from Var<ByteBuffer>.
-    Expr(const Var<ByteBufferView> &buffer) noexcept
+    /// Construct from Var<ByteBufferView>.
+    template<typename T>
+        requires std::same_as<T, ByteBufferView>
+    Expr(const Var<T> &buffer) noexcept
         : Expr{buffer.expression()} {}
 
     /// Return RefExpr

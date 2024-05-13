@@ -301,7 +301,8 @@ int main(int argc, char *argv[]) {
 
     auto coro_buffer = device.create_coro_frame_buffer(coro.frame(), 1024u);
 
-    coroutine::StateMachineCoroScheduler scheduler{device, coro};
+    // coroutine::StateMachineCoroScheduler scheduler{device, coro};
+    coroutine::WavefrontCoroScheduler scheduler{device, coro};
 
     Kernel2D accumulate_kernel = [&](ImageFloat accum_image, ImageFloat curr_image) noexcept {
         UInt2 p = dispatch_id().xy();

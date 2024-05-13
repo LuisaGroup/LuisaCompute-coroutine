@@ -9,7 +9,9 @@
 
 #include <luisa/runtime/byte_buffer.h>
 #include <luisa/dsl/resource.h>
+#include <luisa/dsl/builtin.h>
 #include <luisa/coro/v2/coro_frame.h>
+#include <luisa/core/logging.h>
 
 #include <utility>
 
@@ -105,6 +107,7 @@ protected:
 public:
     SOABase() noexcept = default;
     SOABase(SOABase &&) noexcept = default;
+    SOABase(const SOABase &) noexcept = default;
     SOABase(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc,
             luisa::shared_ptr<luisa::vector<size_t>> field_offsets,
             size_t offset_elements, size_t size_elements) noexcept
@@ -133,6 +136,8 @@ public:
         requires std::same_as<T, SOA<coroutine::CoroFrame>>
     SOAView(const T &soa) noexcept
         : SOAView{soa.view()} {}
+    SOAView(const SOAView &) noexcept = default;
+    SOAView(SOAView &&) noexcept = default;
     ~SOAView() noexcept = default;
 
     [[nodiscard]] auto subview(uint offset_elements, uint size_elements) noexcept {
@@ -158,7 +163,7 @@ private:
     ByteBuffer _buffer;
 
 public:
-    SOA(DeviceInterface *device, luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, uint n) noexcept
+    SOA(DeviceInterface *device, luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, size_t n) noexcept
         : SOABase{std::move(desc), luisa::make_shared<luisa::vector<size_t>>(),
                   0u, n} {
         size_t size_bytes = 0u;
@@ -169,7 +174,7 @@ public:
             size_bytes = (size_bytes + field->alignment() - 1u) & ~(field->alignment() - 1u);
             _field_offsets->emplace_back(size_bytes);
             if (field->size() % field->alignment() != 0u) [[unlikely]] {
-                detail::error_buffer_invalid_alignment(size_bytes + field->size(), field->alignment());
+                luisa::compute::detail::error_buffer_invalid_alignment(size_bytes + field->size(), field->alignment());
             }
             size_bytes += field->size() * _size_elements;
         }
@@ -239,7 +244,7 @@ public:
         auto fb = detail::FunctionBuilder::current();
         auto field_type = _desc->type()->members()[field_index];
         auto offset = _field_offsets->at(field_index);
-        auto offset_var = offset + (_offset_elements + index) * field_type->size();
+        auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
         auto f = fb->local(field_type);
         auto s = fb->call(
             field_type, CallOp::BYTE_BUFFER_READ,
@@ -255,7 +260,7 @@ public:
         auto fb = detail::FunctionBuilder::current();
         auto field_type = _desc->type()->members()[field_index];
         auto offset = _field_offsets->at(field_index);
-        auto offset_var = offset + (_offset_elements + index) * field_type->size();
+        auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
         auto s = fb->call(
             field_type, CallOp::BYTE_BUFFER_WRITE,
             {_expression, detail::extract_expression(offset_var), detail::extract_expression(value)});
@@ -272,7 +277,7 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto offset_var = offset + (_offset_elements + index) * field_type->size();
+            auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
             auto s = fb->call(
                 field_type, CallOp::BYTE_BUFFER_READ,
                 {_expression, detail::extract_expression(offset_var)});
@@ -292,7 +297,7 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto offset_var = offset + (_offset_elements + index) * field_type->size();
+            auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
             auto f = fb->member(field_type, frame.expression(), i);
             auto s = fb->call(
                 field_type, CallOp::BYTE_BUFFER_WRITE,

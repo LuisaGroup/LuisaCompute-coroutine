@@ -42,7 +42,7 @@ public:
     template<typename T>
     [[nodiscard]] Var<T> &get(uint index) noexcept {
         _check_member_index(index);
-        auto fb = detail::FunctionBuilder::current();
+        auto fb = luisa::compute::detail::FunctionBuilder::current();
         auto member = fb->member(_desc->type()->members()[index], _expression, index);
         return *fb->create_temporary<Var<T>>(member);
     }

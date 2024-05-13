@@ -26,41 +26,64 @@ public:
     LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(CoroFrameSOAExprProxy)
 
 public:
+    /// Read field with field_index at index
     template<typename V, typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
         return Expr<SOAOrView>{_soa}.template read_field<V>(std::forward<I>(index), field_index);
     }
+    /// Read field named with "name" at index
     template<typename V, typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] Var<V> read_field(I &&index, luisa::string_view name) const noexcept {
         return read_field<V>(std::forward<I>(index), _soa.desc()->designated_field(name));
     }
 
+    /// Write field with field_index at index
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write_field(I &&index, V &&value, uint field_index) const noexcept {
+        Expr<SOAOrView>{_soa}.write_field(std::forward<I>(index),
+                                          std::forward<V>(value),
+                                          field_index);
+    }
+    /// Write field named with "name" at index
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write_field(I &&index, V &&value, luisa::string_view name) const noexcept {
+        write_field(std::forward<I>(index),
+                    std::forward<V>(value),
+                    _soa.desc()->designated_field(name));
+    }
+
+    /// Read index
     template<typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] auto read(I &&index) const noexcept {
         return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::nullopt);
     }
+    /// Read index with active fields
     template<typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
         return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::make_optional(active_fields));
     }
 
+    /// Write index
     template<typename I, typename V>
         requires is_integral_expr_v<I>
     void write(I &&index, V &&value) const noexcept {
         Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
-                            std::forward<V>(value),
-                            luisa::nullopt);
+                                    std::forward<V>(value),
+                                    luisa::nullopt);
     }
+    /// Write index with active fields
     template<typename I, typename V>
         requires is_integral_expr_v<I>
     void write(I &&index, V &&value, luisa::span<const uint> active_fields) const noexcept {
         Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
-                            std::forward<V>(value),
-                            luisa::make_optional(active_fields));
+                                    std::forward<V>(value),
+                                    luisa::make_optional(active_fields));
     }
 
     [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
@@ -209,7 +232,7 @@ public:
     /// Return RefExpr
     [[nodiscard]] const RefExpr *expression() const noexcept { return _expression; }
 
-    /// Read field at index
+    /// Read field with field_index at index
     template<typename V, typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
@@ -223,6 +246,19 @@ public:
             {_expression, detail::extract_expression(offset_var)});
         fb->assign(f, s);
         return Var<V>(f);
+    }
+
+    /// Write field with field_index at index
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write_field(I &&index, V &&value, uint field_index) const noexcept {
+        auto fb = detail::FunctionBuilder::current();
+        auto field_type = _desc->type()->members()[field_index];
+        auto offset = _field_offsets->at(field_index);
+        auto offset_var = offset + (_offset_elements + index) * field_type->size();
+        auto s = fb->call(
+            field_type, CallOp::BYTE_BUFFER_WRITE,
+            {_expression, detail::extract_expression(offset_var), detail::extract_expression(value)});
     }
 
     /// Read index with active fields

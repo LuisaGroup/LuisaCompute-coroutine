@@ -7,6 +7,7 @@ namespace luisa::compute {
 
 namespace detail {
 LC_RUNTIME_API void error_buffer_size_not_aligned(size_t align) noexcept;
+template<typename BufferOrExpr>
 class ByteBufferExprProxy;
 }// namespace detail
 
@@ -79,7 +80,7 @@ public:
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
         _check_is_valid();
-        return reinterpret_cast<const detail::ByteBufferExprProxy *>(this);
+        return reinterpret_cast<const detail::ByteBufferExprProxy<ByteBuffer> *>(this);
     }
 };
 
@@ -133,7 +134,7 @@ public:
     }
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
-        return reinterpret_cast<const detail::ByteBufferExprProxy *>(this);
+        return reinterpret_cast<const detail::ByteBufferExprProxy<ByteBufferView> *>(this);
     }
 };
 

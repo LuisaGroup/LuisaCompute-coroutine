@@ -25,10 +25,7 @@ ByteBuffer::ByteBuffer(DeviceInterface *device, size_t size_bytes) noexcept
               if ((size_bytes & 3) != 0) [[unlikely]] {
                   detail::error_buffer_size_not_aligned(4);
               }
-              return device->create_buffer(
-                  Type::of<uint>(),
-                  (size_bytes + sizeof(uint) - 1u) / sizeof(uint),
-                  nullptr);
+              return device->create_buffer(Type::of<ByteBuffer>(), size_bytes, nullptr);
           }()} {}
 
 ByteBuffer::~ByteBuffer() noexcept {
@@ -45,9 +42,7 @@ ByteBuffer Device::create_byte_buffer(size_t byte_size) noexcept {
 }
 
 ByteBuffer Device::import_external_byte_buffer(void *external_memory, size_t byte_size) noexcept {
-    auto info = impl()->create_buffer(Type::of<uint>(),
-                                      (byte_size + sizeof(uint) - 1u) / sizeof(uint),
-                                      external_memory);
+    auto info = impl()->create_buffer(Type::of<ByteBuffer>(), byte_size, external_memory);
     return ByteBuffer{impl(), info};
 }
 

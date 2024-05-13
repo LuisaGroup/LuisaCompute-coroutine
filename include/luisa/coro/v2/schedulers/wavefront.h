@@ -58,7 +58,7 @@ private:
     void _create_shader(Device &device, const Coroutine<void(Args...)> &coro,
                         const WavefrontCoroSchedulerConfig &config) noexcept {
         if (config.soa) {
-            _frame = device.create_coro_frame_soa(coro.shared_frame(), config.max_instance_count, config.soa);
+            _frame = device.create_coro_frame_soa(coro.shared_frame(), config.max_instance_count);
         } else {
 
         }

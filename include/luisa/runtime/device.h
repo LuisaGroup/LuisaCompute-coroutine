@@ -263,8 +263,8 @@ public:
     template<typename Desc>
         requires std::same_as<std::remove_cvref_t<Desc>, luisa::shared_ptr<const coroutine::CoroFrameDesc>> ||
                  std::same_as<std::remove_cvref_t<Desc>, const coroutine::CoroFrameDesc *>
-    [[nodiscard]] auto create_coro_frame_soa(Desc &&desc, size_t size, bool soa) noexcept {
-        return SOA<coroutine::CoroFrame>{impl(), std::forward<Desc>(desc), size, soa};
+    [[nodiscard]] auto create_coro_frame_soa(Desc &&desc, size_t size) noexcept {
+        return SOA<coroutine::CoroFrame>{impl(), std::forward<Desc>(desc), size};
     }
 
     template<typename T>

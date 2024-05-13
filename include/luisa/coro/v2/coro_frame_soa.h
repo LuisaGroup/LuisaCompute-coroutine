@@ -40,8 +40,8 @@ public:
         I &&index, V &&value,
         luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
         Expr<T>{_soa}.write(std::forward<I>(index),
-                                       std::forward<V>(value),
-                                       std::move(active_fields));
+                            std::forward<V>(value),
+                            std::move(active_fields));
     }
     [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
         return Expr<T>{_soa}.device_address();
@@ -56,17 +56,18 @@ class SOA;
 struct SOABase {
 protected:
     luisa::shared_ptr<const coroutine::CoroFrameDesc> _desc;
-    luisa::shared_ptr<luisa::vector<uint>> _field_offsets;
-    uint _range_start{0u}, _size{0u};
+    luisa::shared_ptr<luisa::vector<size_t>> _field_offsets;
+    size_t _offset_elements{0u}, _size_elements{0u};
 
 public:
     SOABase() noexcept = default;
+    SOABase(SOABase &&) noexcept = default;
     SOABase(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc,
-            luisa::shared_ptr<luisa::vector<uint>> field_offsets,
-            uint range_start, uint size) noexcept
+            luisa::shared_ptr<luisa::vector<size_t>> field_offsets,
+            size_t offset_elements, size_t size_elements) noexcept
         : _desc{std::move(desc)},
           _field_offsets{std::move(field_offsets)},
-          _range_start{range_start}, _size{size} {}
+          _offset_elements{offset_elements}, _size_elements{size_elements} {}
 };
 
 template<>
@@ -77,9 +78,9 @@ private:
 public:
     SOAView() noexcept = default;
     SOAView(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, ByteBufferView buffer_view,
-            luisa::shared_ptr<luisa::vector<uint>> field_offsets,
-            uint range_start, uint size) noexcept
-        : SOABase{std::move(desc), field_offsets, range_start, size},
+            luisa::shared_ptr<luisa::vector<size_t>> field_offsets,
+            size_t offset_elements, size_t size_elements) noexcept
+        : SOABase{std::move(desc), std::move(field_offsets), offset_elements, size_elements},
           _buffer_view{buffer_view} {
         LUISA_ASSERT((_buffer_view.offset() == 0u) &&
                          (_buffer_view.size_bytes() == _buffer_view.total_size()),
@@ -91,10 +92,14 @@ public:
         : SOAView{soa.view()} {}
     ~SOAView() noexcept = default;
 
+    [[nodiscard]] auto subview(uint offset_elements, uint size_elements) noexcept {
+        return SOAView{_desc, _buffer_view.subview(offset_elements, size_elements),
+                       _field_offsets, _offset_elements, _size_elements};
+    }
     [[nodiscard]] auto desc() const noexcept { return _desc.get(); }
     [[nodiscard]] auto handle() const noexcept { return _buffer_view.handle(); }
-    [[nodiscard]] auto range_start() const noexcept { return _range_start; }
-    [[nodiscard]] auto size() const noexcept { return _size; }
+    [[nodiscard]] auto offset_elements() const noexcept { return _offset_elements; }
+    [[nodiscard]] auto size_elements() const noexcept { return _size_elements; }
     [[nodiscard]] auto size_bytes() const noexcept { return _buffer_view.size_bytes(); }
     [[nodiscard]] auto field_offsets() const noexcept { return _field_offsets; }
     // DSL interface
@@ -103,8 +108,6 @@ public:
     }
 };
 
-
-
 template<>
 class SOA<coroutine::CoroFrame> : public SOABase {
 
@@ -112,9 +115,10 @@ private:
     ByteBuffer _buffer;
 
 public:
-    SOA(DeviceInterface *device, luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, uint n, bool soa) noexcept
-        : SOABase{std::move(desc), luisa::make_shared<luisa::vector<uint>>(), 0u, n} {
-        auto size_bytes = 0u;
+    SOA(DeviceInterface *device, luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, uint n) noexcept
+        : SOABase{std::move(desc), luisa::make_shared<luisa::vector<size_t>>(),
+                  0u, n} {
+        size_t size_bytes = 0u;
         size_bytes = 0u;
         auto fields = _desc->type()->members();
         _field_offsets->reserve(fields.size());
@@ -124,11 +128,11 @@ public:
             if (field->size() % field->alignment() != 0u) [[unlikely]] {
                 detail::error_buffer_invalid_alignment(size_bytes + field->size(), field->alignment());
             }
-            size_bytes += field->size() * _size;
+            size_bytes += field->size() * _size_elements;
         }
-        auto buffer_element_count = (size_bytes + sizeof(uint) - 1u) / sizeof(uint);
+        auto buffer_element_count = (size_bytes + 3u) & ~3u;
         auto info = device->create_buffer(
-            Type::of<uint>(),
+            Type::of<ByteBuffer>(),
             buffer_element_count,
             nullptr);
         _buffer = std::move(ByteBuffer{device, info});
@@ -139,7 +143,7 @@ public:
     SOA &operator=(const SOA &) = delete;
     SOA &operator=(SOA &&x) noexcept {
         _desc = std::move(x._desc);
-        _size = x._size;
+        _size_elements = x._size_elements;
         _field_offsets = std::move(x._field_offsets);
         _buffer = std::move(x._buffer);
         return *this;
@@ -154,7 +158,7 @@ public:
             _buffer.view(),
             _field_offsets,
             0u,
-            _size};
+            _size_elements};
     }
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
@@ -173,7 +177,7 @@ public:
     /// Construct from SOAView<coroutine::CoroFrame>. Will call buffer_binding() to bind buffer
     Expr(const SOAView<coroutine::CoroFrame> &soa_view) noexcept
         : SOABase{soa_view.desc()->shared_from_this(), soa_view.field_offsets(),
-                  soa_view.range_start(), soa_view.size()},
+                  soa_view.offset_elements(), soa_view.size_elements()},
           _expression{detail::FunctionBuilder::current()->buffer_binding(
               Type::buffer(Type::of<ByteBuffer>()), soa_view.handle(),
               0u, soa_view.size_bytes())} {}
@@ -198,7 +202,7 @@ public:
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
             auto f = fb->member(field_type, frame, i);
-            auto offset_var = offset + index * field_type->size();
+            auto offset_var = offset + (_offset_elements + index) * field_type->size();
             auto s = fb->call(
                 field_type, CallOp::BYTE_BUFFER_READ,
                 {_expression, detail::extract_expression(offset_var)});
@@ -218,7 +222,7 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto offset_var = offset + index * field_type->size();
+            auto offset_var = offset + (_offset_elements + index) * field_type->size();
             auto f = fb->member(field_type, frame.expression(), i);
             auto s = fb->call(
                 field_type, CallOp::BYTE_BUFFER_WRITE,

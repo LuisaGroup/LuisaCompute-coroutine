@@ -17,34 +17,54 @@ namespace luisa::compute {
 
 namespace detail {
 
-template<typename T>
+template<typename SOAOrView>
 class CoroFrameSOAExprProxy {
-
 private:
-    T _soa;
+    SOAOrView _soa;
 
 public:
     LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(CoroFrameSOAExprProxy)
 
 public:
+    template<typename V, typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
+        return Expr<SOAOrView>{_soa}.template read_field<V>(std::forward<I>(index), field_index);
+    }
+    template<typename V, typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] Var<V> read_field(I &&index, luisa::string_view name) const noexcept {
+        return read_field<V>(std::forward<I>(index), _soa.desc()->designated_field(name));
+    }
+
     template<typename I>
         requires is_integral_expr_v<I>
-    [[nodiscard]] auto read(
-        I &&index,
-        luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
-        return Expr<T>{_soa}.read(std::forward<I>(index), std::move(active_fields));
+    [[nodiscard]] auto read(I &&index) const noexcept {
+        return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::nullopt);
+    }
+    template<typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
+        return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::make_optional(active_fields));
+    }
+
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write(I &&index, V &&value) const noexcept {
+        Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
+                            std::forward<V>(value),
+                            luisa::nullopt);
     }
     template<typename I, typename V>
         requires is_integral_expr_v<I>
-    void write(
-        I &&index, V &&value,
-        luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
-        Expr<T>{_soa}.write(std::forward<I>(index),
+    void write(I &&index, V &&value, luisa::span<const uint> active_fields) const noexcept {
+        Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
                             std::forward<V>(value),
-                            std::move(active_fields));
+                            luisa::make_optional(active_fields));
     }
+
     [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
-        return Expr<T>{_soa}.device_address();
+        return Expr<SOAOrView>{_soa}.device_address();
     }
 };
 
@@ -189,11 +209,26 @@ public:
     /// Return RefExpr
     [[nodiscard]] const RefExpr *expression() const noexcept { return _expression; }
 
+    /// Read field at index
+    template<typename V, typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
+        auto fb = detail::FunctionBuilder::current();
+        auto field_type = _desc->type()->members()[field_index];
+        auto offset = _field_offsets->at(field_index);
+        auto offset_var = offset + (_offset_elements + index) * field_type->size();
+        auto f = fb->local(field_type);
+        auto s = fb->call(
+            field_type, CallOp::BYTE_BUFFER_READ,
+            {_expression, detail::extract_expression(offset_var)});
+        fb->assign(f, s);
+        return Var<V>(f);
+    }
+
     /// Read index with active fields
     template<typename I>
     [[nodiscard]] auto read(
-        I &&index,
-        luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
+        I &&index, luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
         auto fb = detail::FunctionBuilder::current();
         auto frame = fb->local(_desc->type());
         auto fields = _desc->type()->members();
@@ -201,11 +236,11 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto f = fb->member(field_type, frame, i);
             auto offset_var = offset + (_offset_elements + index) * field_type->size();
             auto s = fb->call(
                 field_type, CallOp::BYTE_BUFFER_READ,
                 {_expression, detail::extract_expression(offset_var)});
+            auto f = fb->member(field_type, frame, i);
             fb->assign(f, s);
         }
         return coroutine::CoroFrame{_desc, frame};
@@ -213,9 +248,8 @@ public:
 
     /// Write index with active fields
     template<typename I>
-    void write(
-        I &&index, const coroutine::CoroFrame &frame,
-        luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
+    void write(I &&index, const coroutine::CoroFrame &frame,
+               luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
         auto fb = detail::FunctionBuilder::current();
         auto fields = _desc->type()->members();
         for (auto i = 0u; i < fields.size(); i++) {

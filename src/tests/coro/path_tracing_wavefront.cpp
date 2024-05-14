@@ -272,7 +272,7 @@ int main(int argc, char *argv[]) {
             Float cos_wi_light = dot(wi_light, n);
             Float cos_light = -dot(light_normal, wi_light);
 
-            $suspend("evaluate_surface", std::make_pair(hit.inst, "coro_hint"));
+            $suspend("evaluate_surface");
             Float3 albedo = materials.read(hit.inst);
             $if (!occluded & cos_wi_light > 1e-4f & cos_light > 1e-4f) {
                 Float pdf_light = (d_light * d_light) / (light_area * cos_light);
@@ -310,11 +310,10 @@ int main(int argc, char *argv[]) {
         image.write(coord, color);
     };
 
-    LUISA_INFO_WITH_LOCATION("askjdhfpahfdsalk;fd");
-
     coroutine::WavefrontCoroSchedulerConfig config{
-        .thread_count = 16_M,
-        .soa = false,
+        .thread_count = 256_k,
+        .soa = true,
+        .sort = true,
     };
     coroutine::WavefrontCoroScheduler scheduler{device, coro, config};
     // coroutine::PersistentThreadsCoroScheduler scheduler{device, coro};

@@ -203,13 +203,17 @@ int main(int argc, char *argv[]) {
         UInt pixel_id = coro_id().x % pixel_count;
         UInt2 coord = make_uint2(pixel_id % resolution.x, pixel_id / resolution.x);
 
+        // UInt2 coord = dispatch_id().xy();
+
         Float frame_size = min(resolution.x, resolution.y).cast<float>();
         UInt state = seed_image.read(coord).x;
         Float rx = lcg(state);
         Float ry = lcg(state);
         Float2 pixel = (make_float2(coord) + make_float2(rx, ry)) / frame_size * 2.0f - 1.0f;
         Float3 radiance = def(make_float3(0.0f));
-        $suspend("per_spp");
+
+        $suspend("per_dispatch");
+
         // $if (all(coord == make_uint2(50u, 500u))) {
         //     device_log("coord: {}", coord);
         // };
@@ -223,10 +227,10 @@ int main(int argc, char *argv[]) {
         constexpr float3 light_emission = make_float3(17.0f, 12.0f, 4.0f);
         Float light_area = length(cross(light_u, light_v));
         Float3 light_normal = normalize(cross(light_u, light_v));
-        $suspend("per_depth");
+
         $for (depth, 10u) {
             // trace
-            $suspend("before_tracing");
+            $suspend("intersect");
             Var<TriangleHit> hit = accel.intersect(ray, {});
             reorder_shader_execution();
             $if (hit->miss()) { $break; };
@@ -236,7 +240,6 @@ int main(int argc, char *argv[]) {
             Float3 p2 = vertex_buffer->read(triangle.i2);
             Float3 p = triangle_interpolate(hit.bary, p0, p1, p2);
             Float3 n = normalize(cross(p1 - p0, p2 - p0));
-            $suspend("after_tracing");
 
             Float cos_wo = dot(-ray->direction(), n);
             $if (cos_wo < 1e-4f) { $break; };
@@ -263,10 +266,13 @@ int main(int argc, char *argv[]) {
             Float3 pp_light = offset_ray_origin(p_light, light_normal);
             Float d_light = distance(pp, pp_light);
             Float3 wi_light = normalize(pp_light - pp);
+
             Var<Ray> shadow_ray = make_ray(offset_ray_origin(pp, n), wi_light, 0.f, d_light);
             Bool occluded = accel.intersect_any(shadow_ray, {});
             Float cos_wi_light = dot(wi_light, n);
             Float cos_light = -dot(light_normal, wi_light);
+
+            $suspend("evaluate_surface", std::make_pair(hit.inst, "coro_hint"));
             Float3 albedo = materials.read(hit.inst);
             $if (!occluded & cos_wi_light > 1e-4f & cos_light > 1e-4f) {
                 Float pdf_light = (d_light * d_light) / (light_area * cos_light);
@@ -277,7 +283,6 @@ int main(int argc, char *argv[]) {
             };
 
             // sample BSDF
-            $suspend("sample_bsdf");
             Var<Onb> onb = make_onb(n);
             Float ux = lcg(state);
             Float uy = lcg(state);
@@ -297,6 +302,7 @@ int main(int argc, char *argv[]) {
             $if (r >= q) { $break; };
             beta *= 1.0f / q;
         };
+
         $suspend("write_film");
         seed_image.write(coord, make_uint4(state));
         $if (any(dsl::isnan(radiance))) { radiance = make_float3(0.0f); };
@@ -304,11 +310,14 @@ int main(int argc, char *argv[]) {
         image.write(coord, color);
     };
 
+    LUISA_INFO_WITH_LOCATION("askjdhfpahfdsalk;fd");
+
     coroutine::WavefrontCoroSchedulerConfig config{
         .thread_count = 16_M,
-        .soa = true,
+        .soa = false,
     };
     coroutine::WavefrontCoroScheduler scheduler{device, coro, config};
+    // coroutine::PersistentThreadsCoroScheduler scheduler{device, coro};
 
     Kernel2D accumulate_kernel = [&](ImageFloat accum_image, ImageFloat curr_image) noexcept {
         UInt2 p = dispatch_id().xy();
@@ -373,7 +382,7 @@ int main(int argc, char *argv[]) {
 
     while (!window.should_close()) {
         stream << scheduler(framebuffer, seed_image, accel, resolution)
-                      .dispatch(resolution.x * resolution.y * spp_per_dispatch)
+                      .dispatch(resolution.x * resolution.y)
                << accumulate_shader(accum_image, framebuffer)
                       .dispatch(resolution)
                << hdr2ldr_shader(accum_image, ldr_image, 1.0f, swap_chain.backend_storage() != PixelStorage::BYTE4).dispatch(resolution)

@@ -6,7 +6,7 @@
 
 #include <luisa/runtime/buffer.h>
 #include <luisa/dsl/resource.h>
-#include <luisa/coro/v2/coro_frame.h>
+#include <luisa/coro/coro_frame.h>
 
 namespace luisa::compute {
 

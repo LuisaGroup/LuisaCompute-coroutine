@@ -3,7 +3,7 @@
 //
 
 #include <luisa/dsl/sugar.h>
-#include <luisa/coro/v2/schedulers/state_machine.h>
+#include <luisa/coro/schedulers/state_machine.h>
 
 namespace luisa::compute::coroutine::detail {
 

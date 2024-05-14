@@ -3,7 +3,6 @@
 /// reference: [Onesweep: A Faster Least Significant Digit Radix Sort for GPUs]
 /// https://arxiv.org/abs/2206.01784
 #include <luisa/luisa-compute.h>
-#include <luisa/coro/coro_dispatcher.h>
 #include <luisa/coro/radix_sort.h>
 using namespace luisa;
 using namespace luisa::compute;

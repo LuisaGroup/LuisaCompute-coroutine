@@ -133,24 +133,6 @@ void FunctionBuilder::bind_promise_(const Expression *expr, luisa::string name) 
     _create_and_append_statement<CoroBindStmt>(expr, std::move(name));
 }
 
-const MemberExpr *FunctionBuilder::read_promise_(const Type *type, const Expression *expr, luisa::string_view name) noexcept {
-    LUISA_ASSERT(expr->type()->is_coroframe(), "Promise reading is only allowed for CoroFrame type");
-    auto var = expr->type()->member(name);
-    if (var != -1) {
-        auto mem_type = expr->type()->corotype()->members()[var];
-        LUISA_ASSERT(*mem_type == *type,
-                     "Promise '{}' type mismatch: expected {}, got {}.",
-                     name, type->description(), mem_type->description());
-        return _create_expression<MemberExpr>(expr->type()->corotype()->members()[var], expr, var);
-    }
-    return nullptr;
-}
-void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
-    auto member_coro_id = member(Type::of<uint3>(), expr, 0u);
-    auto member_coro_token = member(Type::of<uint>(), expr, 1u);
-    assign(member_coro_id, coro_id);
-    assign(member_coro_token, literal(Type::of<uint>(), 0u));
-}
 const CallExpr *FunctionBuilder::coro_id() noexcept {
     check_is_coroutine();
     return call(Type::of<uint3>(), CallOp::CORO_ID, {});
@@ -896,11 +878,6 @@ bool FunctionBuilder::requires_atomic_float() const noexcept {
 
 bool FunctionBuilder::requires_autodiff() const noexcept {
     return _propagated_builtin_callables.uses_autodiff();
-}
-
-void FunctionBuilder::coroframe_replace(const Type *type) noexcept {
-    LUISA_ASSERT(_arguments.size() > 0, "Lack of parameter for coroutine generated callables!");
-    _arguments[0]._type = type;
 }
 
 bool FunctionBuilder::requires_printing() const noexcept {

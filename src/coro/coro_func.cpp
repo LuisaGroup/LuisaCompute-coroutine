@@ -3,7 +3,7 @@
 //
 
 #include <luisa/dsl/sugar.h>
-#include <luisa/coro/v2/coro_func.h>
+#include <luisa/coro/coro_func.h>
 
 namespace luisa::compute::coroutine::detail {
 

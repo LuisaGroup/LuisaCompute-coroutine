@@ -8,13 +8,12 @@
 #include <luisa/dsl/syntax.h>
 #include <luisa/gui/window.h>
 #include <luisa/dsl/sugar.h>
-#include <luisa/coro/coro_dispatcher.h>
+
 using namespace luisa;
 using namespace luisa::compute;
-struct alignas(4) Skyline {
-};
+
 const bool SHOW = true;
-LUISA_COROFRAME_STRUCT(Skyline) {};
+
 int main(int argc, char *argv[]) {
 
     Context context{argv[0]};
@@ -824,7 +823,7 @@ int main(int argc, char *argv[]) {
         image.write(xy, make_float4(sqrt(RayTrace(make_float2(xy), time)), 1.0f));
     };
     is_coroutine = true;
-    Coroutine coro = [&](Var<Skyline> &frame, Float time) noexcept {
+    Kernel2D coro = [&](Float time) noexcept {
         auto xy = make_uint2(coro_id().x % width, coro_id().x / width);
         device_image->write(xy, make_float4(sqrt(RayTrace(make_float2(xy), time)), 1.0f));
     };

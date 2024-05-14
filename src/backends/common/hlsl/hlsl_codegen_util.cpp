@@ -381,10 +381,6 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
         case Type::Tag::CUSTOM: {
             str << '_' << type.description();
         } break;
-        case Type::Tag::COROFRAME: {
-            auto customType = opt->CreateStruct(type.corotype());
-            str << customType;
-        } break;
         default:
             LUISA_ERROR_WITH_LOCATION("Bad.");
             break;

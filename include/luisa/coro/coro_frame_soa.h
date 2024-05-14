@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include "luisa/runtime/device.h"
-#include "spdlog/fmt/bundled/compile.h"
-
+#include <luisa/runtime/device.h>
 #include <luisa/runtime/byte_buffer.h>
 #include <luisa/dsl/resource.h>
 #include <luisa/dsl/builtin.h>
-#include <luisa/coro/v2/coro_frame.h>
+#include <luisa/coro/coro_frame.h>
 #include <luisa/core/logging.h>
 
 #include <utility>

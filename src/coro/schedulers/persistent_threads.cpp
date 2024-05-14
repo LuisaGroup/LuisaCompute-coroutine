@@ -3,10 +3,10 @@
 //
 
 #include <luisa/dsl/sugar.h>
-#include <luisa/coro/v2/coro_graph.h>
-#include <luisa/coro/v2/coro_frame_smem.h>
-#include <luisa/coro/v2/coro_frame_buffer.h>
-#include <luisa/coro/v2/schedulers/persistent_threads.h>
+#include <luisa/coro/coro_graph.h>
+#include <luisa/coro/coro_frame_smem.h>
+#include <luisa/coro/coro_frame_buffer.h>
+#include <luisa/coro/schedulers/persistent_threads.h>
 
 namespace luisa::compute::coroutine::detail {
 
@@ -161,8 +161,6 @@ void persistent_threads_coro_scheduler_main_kernel_impl(
             launch_condition = (all_token[pid] == work_stat[1]);
         }
         $if (launch_condition) {
-            constexpr auto valid_token_mask = coro_token_terminal - 1u;
-            static_assert(valid_token_mask == 0x7fff'ffffu);
             $switch (all_token[pid]) {
                 $case (0u) {
                     $if (gen_st + thread_x() < workload[1]) {
@@ -175,7 +173,7 @@ void persistent_threads_coro_scheduler_main_kernel_impl(
                         auto index_y = index_xy / dispatch_shape.x;
                         auto frame = CoroFrame::create(graph->shared_frame(), make_uint3(index_x, index_y, index_z));
                         call_subroutine(frame, coro_token_entry);
-                        auto next = frame.target_token & valid_token_mask;
+                        auto next = frame.target_token & coro_token_valid_mask;
                         frames.write(pid, frame, graph->entry().output_fields());
                         all_token[pid] = next;
                         work_counter.atomic(next).fetch_add(1u);
@@ -187,7 +185,7 @@ void persistent_threads_coro_scheduler_main_kernel_impl(
                         work_counter.atomic(i).fetch_sub(1u);
                         auto frame = frames.read(pid, graph->node(i).input_fields());
                         call_subroutine(frame, i);
-                        auto next = frame.target_token & valid_token_mask;
+                        auto next = frame.target_token & coro_token_valid_mask;
                         frames.write(pid, frame, graph->node(i).output_fields());
                         all_token[pid] = next;
                         work_counter.atomic(next).fetch_add(1u);

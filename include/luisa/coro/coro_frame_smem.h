@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include "coro_token.h"
-
 #include <luisa/dsl/shared.h>
-#include <luisa/coro/v2/coro_frame.h>
+#include <luisa/coro/coro_frame.h>
 
 namespace luisa::compute {
 

@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <luisa/coro/v2/coro_scheduler.h>
-#include <luisa/coro/v2/coro_func.h>
-#include <luisa/coro/v2/coro_graph.h>
-#include <luisa/coro/v2/coro_frame_soa.h>
-#include <luisa/coro/v2/coro_frame_buffer.h>
+#include <luisa/coro/coro_scheduler.h>
+#include <luisa/coro/coro_func.h>
+#include <luisa/coro/coro_graph.h>
+#include <luisa/coro/coro_frame_soa.h>
+#include <luisa/coro/coro_frame_buffer.h>
 
 namespace luisa::compute::coroutine {
 
@@ -139,10 +139,10 @@ private:
                 device_log("Index out of range {}/{}", index, _config.thread_count);
             };
             if (_config.soa) {
-                return _frame_soa->read_field<uint>(index, "target_token") & token_mask;
+                return _frame_soa->read_field<uint>(index, "target_token") & coro_token_valid_mask;
             } else {
                 CoroFrame frame = _frame_buffer->read(index);
-                return frame.target_token & token_mask;
+                return frame.target_token & coro_token_valid_mask;
             }
         };
         Callable identical = [](UInt index) {
@@ -216,7 +216,7 @@ private:
                 _frame_buffer->write(frame_id, frame);
             }
             if (!_config.sort) {
-                auto nxt = frame.target_token & token_mask;
+                auto nxt = frame.target_token & coro_token_valid_mask;
                 count.atomic(nxt).fetch_add(1u);
             }
         };
@@ -250,7 +250,7 @@ private:
                 }
 
                 if (!_config.sort) {
-                    auto nxt = frame.target_token & token_mask;
+                    auto nxt = frame.target_token & coro_token_valid_mask;
                     $if (nxt < _max_sub_coro) {
                         count.atomic(nxt).fetch_add(1u);
                     };
@@ -276,10 +276,10 @@ private:
             auto x = dispatch_x();
             UInt r_id;
             if (_config.soa) {
-                r_id = _frame_soa->read_field<uint>(x, "target_token") & token_mask;
+                r_id = _frame_soa->read_field<uint>(x, "target_token") & coro_token_valid_mask;
             } else {
                 auto frame = _frame_buffer->read(x);
-                r_id = frame.target_token & token_mask;
+                r_id = frame.target_token & coro_token_valid_mask;
             }
             auto q_id = prefix.atomic(r_id).fetch_add(1u);
             index.write(q_id, x);
@@ -297,7 +297,7 @@ private:
                     CoroFrame frame = _frame_buffer->read(empty_offset + x);
                     token = frame.target_token;
                 }
-                $if ((token & token_mask) != 0u) {
+                $if ((token & coro_token_valid_mask) != 0u) {
                     auto res = _global_buffer->atomic(0u).fetch_add(1u);
                     auto slot = index.read(res);
                     if (!_config.sort) {

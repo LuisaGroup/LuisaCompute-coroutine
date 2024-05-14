@@ -137,8 +137,6 @@ static void collect_types_in_function(Function f,
                 for (auto m : t->members()) {
                     self(self, m);
                 }
-            } else if (t->is_coroframe()) {
-                self(self, t->corotype());
             }
         }
     };

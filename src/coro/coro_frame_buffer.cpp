@@ -3,7 +3,7 @@
 //
 
 #include <luisa/core/logging.h>
-#include <luisa/coro/v2/coro_frame_buffer.h>
+#include <luisa/coro/coro_frame_buffer.h>
 
 namespace luisa::compute::detail {
 void error_coro_frame_buffer_invalid_element_size(size_t stride, size_t expected) noexcept {

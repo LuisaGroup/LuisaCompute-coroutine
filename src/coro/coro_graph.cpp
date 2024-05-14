@@ -5,8 +5,8 @@
 #include <luisa/core/logging.h>
 #include <luisa/ast/function_builder.h>
 #include <luisa/ir/ir2ast.h>
-#include <luisa/coro/v2/coro_frame_desc.h>
-#include <luisa/coro/v2/coro_graph.h>
+#include <luisa/coro/coro_frame_desc.h>
+#include <luisa/coro/coro_graph.h>
 
 #ifdef LUISA_ENABLE_IR
 #include <luisa/ir/ast2ir.h>

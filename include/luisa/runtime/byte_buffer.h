@@ -1,6 +1,5 @@
 #pragma once
 
-#include "luisa/coro/v2/coro_frame.h"
 #include <luisa/runtime/buffer.h>
 
 namespace luisa::compute {
@@ -13,6 +12,10 @@ class ByteBufferExprProxy;
 
 template<typename T>
 class SOA;
+
+namespace coroutine {
+class CoroFrame;
+}// namespace coroutine
 
 class ByteBufferView;
 

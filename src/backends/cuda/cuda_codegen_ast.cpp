@@ -1528,8 +1528,6 @@ static void collect_types_in_function(Function f,
                 for (auto m : t->members()) {
                     self(self, m);
                 }
-            } else if (t->is_coroframe()) {
-                self(self, t->corotype());
             }
         }
     };
@@ -1761,10 +1759,6 @@ void CUDACodegenAST::_emit_type_name(const Type *type, bool hack_float_to_int) n
                     "Unsupported custom type: {}.",
                     type->description());
             }
-            break;
-        }
-        case Type::Tag::COROFRAME: {
-            _emit_type_name(type->corotype());
             break;
         }
         default: break;

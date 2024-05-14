@@ -242,8 +242,6 @@ public:
     /// Return suspend id to token map
     [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &coro_tokens() const noexcept { return _coro_tokens; }
 
-    void coroframe_replace(const Type *type) noexcept;
-    // build primitives
     /// Define a kernel function with given definition
     template<typename Def>
     static auto define_kernel(Def &&def) {
@@ -407,12 +405,8 @@ public:
     // For coroutine use only
     /// check if function is coroutine
     void check_is_coroutine() noexcept;
-    /// initialize coroframe
-    void initialize_coroframe(const Expression *expr, const Expression *coro_id) noexcept;
     /// bind local to promise
     void bind_promise_(const Expression *var, luisa::string name) noexcept;
-    /// read local from promise
-    const MemberExpr *read_promise_(const Type *type, const Expression *expr, luisa::string_view name) noexcept;
     /// Return coroutine id in coroframe
     [[nodiscard]] const CallExpr *coro_id() noexcept;
     /// Return coroutine token in coroframe

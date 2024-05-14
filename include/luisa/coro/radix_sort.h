@@ -6,7 +6,7 @@
 #include <luisa/runtime/rhi/command_encoder.h>
 #include <luisa/core/stl.h>
 #include <luisa/runtime/shader.h>
-#include <luisa/dsl/builtin.h>
+#include <luisa/dsl/sugar.h>
 namespace luisa::compute {
 namespace radix_sort {
 const uint HIST_BLOCK_SIZE = 128;

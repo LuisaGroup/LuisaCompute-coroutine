@@ -5,8 +5,8 @@
 #pragma once
 
 #include <luisa/core/dll_export.h>
-#include <luisa/coro/v2/coro_frame.h>
-#include <luisa/coro/v2/coro_graph.h>
+#include <luisa/coro/coro_frame.h>
+#include <luisa/coro/coro_graph.h>
 #include <luisa/dsl/func.h>
 
 namespace luisa::compute::coroutine {

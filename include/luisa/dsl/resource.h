@@ -561,7 +561,7 @@ public:
     template<typename T, typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] auto read(I &&index) const noexcept {
-        return Expr<BufferOrExpr>{_buffer}.read<T, I>(std::forward<I>(index));
+        return Expr<BufferOrExpr>{_buffer}.template read<T, I>(std::forward<I>(index));
     }
     template<typename I, typename V>
         requires is_integral_expr_v<I>

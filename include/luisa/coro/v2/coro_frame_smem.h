@@ -54,10 +54,10 @@ public:
     [[nodiscard]] auto is_soa() const noexcept { return _expressions.size() > 1; }
     [[nodiscard]] auto size() const noexcept { return _size; }
 
-
-private:
+public:
+    /// Read index with active fields
     template<typename I>
-    [[nodiscard]] auto _read(I &&index, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
+    [[nodiscard]] auto read(I &&index, luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
         auto i = def(std::forward<I>(index));
         auto fb = detail::FunctionBuilder::current();
         auto frame = fb->local(_desc->type());
@@ -88,9 +88,9 @@ private:
         return coroutine::CoroFrame{_desc, frame};
     }
 
-    /// Write index
+    /// Write index with active fields
     template<typename I>
-    void _write(I &&index, const coroutine::CoroFrame &frame, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
+    void write(I &&index, const coroutine::CoroFrame &frame, luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
         auto i = def(std::forward<I>(index));
         auto fb = detail::FunctionBuilder::current();
         if (!is_soa()) {
@@ -116,24 +116,6 @@ private:
                 }
             }
         }
-    }
-
-public:
-    template<typename I>
-    [[nodiscard]] auto read(I &&index) const noexcept {
-        return _read(std::forward<I>(index), luisa::nullopt);
-    }
-    template<typename I>
-    [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
-        return _read(std::forward<I>(index), luisa::make_optional(active_fields));
-    }
-    template<typename I>
-    void write(I &&index, const coroutine::CoroFrame &frame) const noexcept {
-        _write(std::forward<I>(index), frame, luisa::nullopt);
-    }
-    template<typename I>
-    void write(I &&index, const coroutine::CoroFrame &frame, luisa::span<const uint> active_fields) const noexcept {
-        _write(std::forward<I>(index), frame, luisa::make_optional(active_fields));
     }
 };
 

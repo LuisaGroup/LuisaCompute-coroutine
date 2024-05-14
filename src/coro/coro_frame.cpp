@@ -64,7 +64,7 @@ void CoroFrame::_check_member_index(uint index) const noexcept {
 }
 
 Var<bool> CoroFrame::is_terminated() const noexcept {
-    return target_token == coro_token_terminal;
+    return (target_token & coro_token_terminal) != 0u;
 }
 
 }// namespace luisa::compute::coro_v2

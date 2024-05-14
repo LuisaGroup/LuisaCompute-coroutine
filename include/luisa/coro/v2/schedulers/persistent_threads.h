@@ -25,7 +25,7 @@ public:
 
 private:
     Config _config;
-    Shader1D<Buffer<uint>, uint, uint2, Args...> _pt_shader;
+    Shader1D<Buffer<uint>, uint3, Args...> _pt_shader;
     Shader1D<Buffer<uint>> _clear_shader;
     Buffer<uint> _global;
     Buffer<CoroFrame> _global_frames;
@@ -35,13 +35,13 @@ private:
     void _prepare(Device &device, const Coro &coro) noexcept {
         _global = device.create_buffer<uint>(1);
         auto q_fac = 1u;
-        auto g_fac = std::max<uint>(coro.subroutine_count() - q_fac, 0);
+        auto g_fac = coro.subroutine_count() - q_fac;
         auto global_queue_size = _config.block_size * g_fac;
         if (_config.global_ext_memory) {
             auto global_ext_size = _config.thread_count * g_fac;
             _global_frames = device.create_buffer<CoroFrame>(coro.shared_frame(), global_ext_size);
         }
-        Kernel1D<Buffer<uint>, uint, uint2, Args...> main_kernel = [&](BufferUInt global, UInt dispatch_size, UInt2 dispatch_shape, Var<Args>... args) noexcept {
+        Kernel1D main_kernel = [&](BufferUInt global, UInt3 dispatch_shape, Var<Args>... args) noexcept {
             set_block_size(_config.block_size, 1u, 1u);
             auto shared_queue_size = _config.block_size * q_fac;
             Shared<CoroFrame> frames{coro.shared_frame(), shared_queue_size, _config.shared_memory_soa};
@@ -56,7 +56,7 @@ private:
             for (auto index : dsl::dynamic_range(q_fac)) {
                 auto s = index * _config.block_size + thread_x();
                 all_token[s] = 0u;
-                frames.write(s, coro.instantiate());
+                // frames.write(s, coro.instantiate(), std::array{0u, 1u});
             }
             for (auto index : dsl::dynamic_range(g_fac)) {
                 auto s = index * _config.block_size + thread_x();
@@ -81,8 +81,9 @@ private:
             sync_block();
             auto count = def(0u);
             auto count_limit = def<uint>(-1);
+            auto dispatch_size = dispatch_shape.x * dispatch_shape.y * dispatch_shape.z;
             loop([&] {
-                if_(!(rem_global[0] != 0u | rem_local[0] != 0u) & (count != count_limit), [&] { break_(); });
+                if_(!((rem_global[0] != 0u | rem_local[0] != 0u) & (count != count_limit)), [&] { break_(); });
                 sync_block();//very important, synchronize for condition
                 rem_local[0] = 0u;
                 count += 1;
@@ -190,7 +191,6 @@ private:
                     std::move(switch_stmt).case_(0u, [&] {
                         if_(gen_st + thread_x() < workload[1], [&] {
                             work_counter.atomic(0u).fetch_sub(1u);
-                            auto work_id = gen_st + thread_x();
                             auto global_index = gen_st + thread_x();
                             auto image_size = dispatch_shape.x * dispatch_shape.y;
                             auto index_z = global_index / image_size;
@@ -199,8 +199,8 @@ private:
                             auto index_y = index_xy / dispatch_shape.x;
                             auto frame = coro.instantiate(make_uint3(index_x, index_y, index_z));
                             coro.entry()(frame, args...);
-                            auto next = frame.target_token;
-                            frames.write(pid, frame);
+                            auto next = frame.target_token & token_mask;
+                            frames.write(pid, frame, coro.graph()->entry().output_fields());
                             all_token[pid] = next;
                             work_counter.atomic(next).fetch_add(1u);
                             workload.atomic(0).fetch_add(1u);
@@ -209,10 +209,10 @@ private:
                     for (auto i = 1u; i < coro.subroutine_count(); i++) {
                         std::move(switch_stmt).case_(i, [&] {
                             work_counter.atomic(i).fetch_sub(1u);
-                            auto frame = frames.read(pid);
+                            auto frame = frames.read(pid, coro.graph()->node(i).input_fields());
                             coro[i](frame, args...);
-                            auto next = frame.target_token;
-                            frames.write(pid, frame);
+                            auto next = frame.target_token & token_mask;
+                            frames.write(pid, frame, coro.graph()->node(i).output_fields());
                             all_token[pid] = next;
                             work_counter.atomic(next).fetch_add(1u);
                         });
@@ -237,8 +237,7 @@ private:
             _initialize_shader = device.compile<1>([&](UInt n) noexcept {
                 auto x = dispatch_x();
                 $if (x < n) {
-                    auto frame = coro.instantiate();
-                    _global_frames->write(x, frame);
+                    _global_frames->write(x, coro.instantiate());
                 };
             });
         }
@@ -251,9 +250,7 @@ private:
             auto n = static_cast<uint>(_global_frames.size());
             stream << _initialize_shader(n).dispatch(n);
         }
-        auto size = make_ulong3(dispatch_size);
-        auto n = size.x * size.y * size.z;
-        stream << _pt_shader(_global, static_cast<uint>(n), dispatch_size.xy(), args...).dispatch(static_cast<uint>(n));
+        stream << _pt_shader(_global, dispatch_size, args...).dispatch(_config.thread_count);
     }
 
 public:

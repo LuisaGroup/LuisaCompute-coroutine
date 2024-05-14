@@ -689,7 +689,6 @@ public:
                         $case (0u) {
                             $if (gen_st + thread_x() < workload[1]) {
                                 work_counter.atomic(0u).fetch_sub(1u);
-                                auto work_id = gen_st + thread_x();
                                 initialize_coroframe(frames[pid], def<uint3>(gen_st + thread_x(), 0, 0));
                                 (*coroutine)(frames[pid], args...);//only work when kernel 0s are continue
                                 auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;

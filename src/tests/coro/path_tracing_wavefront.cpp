@@ -159,7 +159,7 @@ int main(int argc, char *argv[]) {
         return pdf_a / max(pdf_a + pdf_b, 1e-4f);
     };
 
-    auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 64u;
+    auto spp_per_dispatch = 16u;
 
     coroutine::Coroutine coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
         UInt2 coord = dispatch_id().xy();
@@ -171,7 +171,7 @@ int main(int argc, char *argv[]) {
         Float2 pixel = (make_float2(coord) + make_float2(rx, ry)) / frame_size * 2.0f - 1.0f;
         Float3 radiance = def(make_float3(0.0f));
 
-        $suspend("per_dispatch");
+        // $suspend("per_dispatch");
 
         // $if (all(coord == make_uint2(50u, 500u))) {
         //     device_log("coord: {}", coord);
@@ -253,7 +253,7 @@ int main(int argc, char *argv[]) {
             beta *= albedo;// * cos_wi * inv_pi / pdf_bsdf => * 1.f
 
             // rr
-            $suspend("rr");
+            // $suspend("rr");
             Float l = dot(make_float3(0.212671f, 0.715160f, 0.072169f), beta);
             $if (l == 0.0f) { $break; };
             Float q = max(l, 0.05f);
@@ -271,8 +271,8 @@ int main(int argc, char *argv[]) {
 
     coroutine::WavefrontCoroSchedulerConfig config{
         .thread_count = 4_M,
-        .soa = true,
-        .sort = true,
+        .global_memory_soa = true,
+        .gather_by_sorting = false,
     };
     coroutine::WavefrontCoroScheduler scheduler{device, coro, config};
     // coroutine::PersistentThreadsCoroScheduler scheduler{device, coro};

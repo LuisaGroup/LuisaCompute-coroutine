@@ -15,9 +15,9 @@ namespace luisa::compute::coroutine {
 struct WavefrontCoroSchedulerConfig {
     // uint3 block_size = make_uint3(8u, 8u, 1u);
     uint thread_count = 2_M;
-    bool soa = true;
-    bool sort = true;// use sort for coro token gathering
-    bool compact = true;
+    bool global_memory_soa = true;
+    bool gather_by_sorting = true;// use sort for coro token gathering
+    bool frame_buffer_compaction = true;
     uint hint_range = 0xffff'ffff;
     luisa::vector<luisa::string> hint_fields;
 };
@@ -94,12 +94,12 @@ private:
     void _create_shader(Device &device, const Coroutine<void(Args...)> &coroutine,
                         const WavefrontCoroSchedulerConfig &config) noexcept {
         _config = config;
-        if (_config.soa) {
+        if (_config.global_memory_soa) {
             _frame_soa = device.create_soa<CoroFrame>(coroutine.shared_frame(), _config.thread_count);
         } else {
             _frame_buffer = device.create_coro_frame_buffer(coroutine.shared_frame(), _config.thread_count);
         }
-        bool use_sort = _config.sort || !_config.hint_fields.empty();
+        bool use_sort = _config.gather_by_sorting || !_config.hint_fields.empty();
         _max_sub_coro = coroutine.subroutine_count();
         _resume_index = device.create_buffer<uint>(_config.thread_count);
         if (use_sort) {
@@ -138,7 +138,7 @@ private:
             $if (index > _config.thread_count) {
                 device_log("Index out of range {}/{}", index, _config.thread_count);
             };
-            if (_config.soa) {
+            if (_config.global_memory_soa) {
                 return _frame_soa->read_field<uint>(index, "target_token") & coro_token_valid_mask;
             } else {
                 CoroFrame frame = _frame_buffer->read(index);
@@ -155,7 +155,7 @@ private:
         Callable get_coro_hint = [&](UInt index, BufferUInt val) {
             if (!_config.hint_fields.empty()) {
                 auto id = keep_index(index, val);
-                if (_config.soa) {
+                if (_config.global_memory_soa) {
                     return _frame_soa->read_field<uint>(id, "coro_hint");
                 } else {
                     CoroFrame frame = _frame_buffer->read(id);
@@ -168,7 +168,7 @@ private:
             _sort_temp_storage = radix_sort::temp_storage(
                 device, _config.thread_count, std::max(std::min(_config.hint_range, 128u), _max_sub_coro));
         }
-        if (_config.sort) {
+        if (_config.gather_by_sorting) {
             _sort_token = radix_sort::instance<>(
                 device, _config.thread_count, _sort_temp_storage, &get_coro_token, &identical,
                 &get_coro_token, 1, _max_sub_coro);
@@ -194,12 +194,12 @@ private:
                 $return();
             };
             UInt frame_id;
-            if (!_config.compact) {
+            if (!_config.frame_buffer_compaction) {
                 frame_id = index->read(x);
             } else {
                 frame_id = offset + x;
             }
-            if (!_config.sort) {
+            if (!_config.gather_by_sorting) {
                 count.atomic(0u).fetch_add(-1u);
             }
             auto global_id = st_task_id + x;
@@ -210,12 +210,12 @@ private:
             auto global_id_y = global_id_xy / dispatch_shape.x;
             CoroFrame frame = coroutine.instantiate(make_uint3(global_id_x, global_id_y, global_id_z));
             coroutine.entry()(frame, args...);
-            if (_config.soa) {
+            if (_config.global_memory_soa) {
                 _frame_soa->write(frame_id, frame, coroutine.graph()->node(0u).output_fields());
             } else {
                 _frame_buffer->write(frame_id, frame);
             }
-            if (!_config.sort) {
+            if (!_config.gather_by_sorting) {
                 auto nxt = frame.target_token & coro_token_valid_mask;
                 count.atomic(nxt).fetch_add(1u);
             }
@@ -233,23 +233,23 @@ private:
                 };
                 auto frame_id = index.read(x);
                 CoroFrame frame = coroutine.instantiate();
-                if (_config.soa) {
+                if (_config.global_memory_soa) {
                     //frame = frame_buffer.read(frame_id);
                     frame = _frame_soa->read(frame_id, coroutine.graph()->node(i).input_fields());
                 } else {
                     frame = _frame_buffer->read(frame_id);
                 }
-                if (!_config.sort) {
+                if (!_config.gather_by_sorting) {
                     count.atomic(i).fetch_sub(1u);
                 }
                 coroutine[i](frame, args...);
-                if (_config.soa) {
+                if (_config.global_memory_soa) {
                     _frame_soa->write(frame_id, frame, coroutine.graph()->node(i).output_fields());
                 } else {
                     _frame_buffer->write(frame_id, frame);
                 }
 
-                if (!_config.sort) {
+                if (!_config.gather_by_sorting) {
                     auto nxt = frame.target_token & coro_token_valid_mask;
                     $if (nxt < _max_sub_coro) {
                         count.atomic(nxt).fetch_add(1u);
@@ -275,7 +275,7 @@ private:
         Kernel1D _gather_kernel = [&](BufferUInt index, BufferUInt prefix, UInt n) {
             auto x = dispatch_x();
             UInt r_id;
-            if (_config.soa) {
+            if (_config.global_memory_soa) {
                 r_id = _frame_soa->read_field<uint>(x, "target_token") & coro_token_valid_mask;
             } else {
                 auto frame = _frame_buffer->read(x);
@@ -291,7 +291,7 @@ private:
             auto x = dispatch_x();
             $if (empty_offset + x < n) {
                 UInt token;
-                if (_config.soa) {
+                if (_config.global_memory_soa) {
                     token = _frame_soa->read_field<uint>(empty_offset + x, "target_token");
                 } else {
                     CoroFrame frame = _frame_buffer->read(empty_offset + x);
@@ -300,20 +300,20 @@ private:
                 $if ((token & coro_token_valid_mask) != 0u) {
                     auto res = _global_buffer->atomic(0u).fetch_add(1u);
                     auto slot = index.read(res);
-                    if (!_config.sort) {
+                    if (!_config.gather_by_sorting) {
                         $while (slot >= empty_offset) {
                             res = _global_buffer->atomic(0u).fetch_add(1u);
                             slot = index.read(res);
                         };
                     }
-                    if (_config.soa) {
+                    if (_config.global_memory_soa) {
                         auto frame = _frame_soa->read(empty_offset + x);
                         _frame_soa->write(slot, frame);
                     } else {
                         auto frame = _frame_buffer->read(empty_offset + x);
                         _frame_buffer->write(slot, frame);
                     }
-                    if (_config.soa) {
+                    if (_config.global_memory_soa) {
                         _frame_soa->write_field(empty_offset + x, 0u, "target_token");
                     } else {
                         CoroFrame empty_frame = coroutine.instantiate();
@@ -329,7 +329,7 @@ private:
             auto x = dispatch_x();
             $if (x < n) {
                 CoroFrame frame = coroutine.instantiate();
-                if (_config.soa) {
+                if (_config.global_memory_soa) {
                     _frame_soa->write(x, frame, std::array{0u, 1u});
                 } else {
                     _frame_buffer->write(x, frame);
@@ -363,7 +363,7 @@ private:
         }
     }
     void _await_step(Stream &stream) noexcept {
-        if (_config.sort) {
+        if (_config.gather_by_sorting) {
             auto host_update = [&] {
                 _host_empty = true;
                 for (uint i = 0u; i < _max_sub_coro; i++) {
@@ -380,7 +380,7 @@ private:
 
             if (_host_count[0] > _config.thread_count * 0.5f && !this->_all_dispatched()) {
                 auto gen_count = std::min(_dispatch_size - _dispatch_counter, _host_count[0]);
-                if (_host_count[0] != _config.thread_count && _config.compact) {
+                if (_host_count[0] != _config.thread_count && _config.frame_buffer_compaction) {
                     stream << _clear_shader(_global_buffer, 1).dispatch(1u);
                     stream << _compact_shader(_resume_index, _config.thread_count - _host_count[0], _config.thread_count).dispatch(_host_count[0]);
                 }
@@ -413,7 +413,7 @@ private:
             stream << _gather_shader(_resume_index, _resume_offset, _config.thread_count).dispatch(_config.thread_count);
             if (_host_count[0] > _config.thread_count / 2 && !_all_dispatched()) {
                 auto gen_count = std::min(_dispatch_size - _dispatch_counter, _host_count[0]);
-                if (_host_count[0] != _config.thread_count && _config.compact) {
+                if (_host_count[0] != _config.thread_count && _config.frame_buffer_compaction) {
                     stream << _clear_shader(_global_buffer, 1).dispatch(1u);
                     stream
                         << _compact_shader(_resume_index.view(_host_offset[0], _host_count[0]),

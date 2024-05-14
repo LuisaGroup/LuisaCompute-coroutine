@@ -30,17 +30,24 @@ int main(int argc, char *argv[]) {
         }
     };
 
-    coroutine::Coroutine coro = [](UInt n) {
+    coroutine::Coroutine nested2 = [](UInt n) {
         $for (i, n) {
-            device_log("{} / {}", i, n);
+            device_log("nested2: {} / {}", i, n);
             $suspend();
         };
     };
 
-    coroutine::Coroutine awaiter = [&coro] {
-        $await coro(dispatch_x());
+    coroutine::Coroutine nested1 = [&](UInt n) {
+        $for (i, n) {
+            $await nested2(i);
+            device_log("nested1: {} / {}", i, n);
+        };
     };
 
-    coroutine::StateMachineCoroScheduler sched{device, awaiter};
-    stream << sched().dispatch(10u) << synchronize();
+    coroutine::Coroutine top_level = [&]() {
+        $await nested1(10u);
+    };
+
+    coroutine::StateMachineCoroScheduler sched{device, top_level};
+    stream << sched().dispatch(1u) << synchronize();
 }

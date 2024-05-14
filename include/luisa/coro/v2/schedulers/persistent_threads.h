@@ -19,7 +19,7 @@ struct PersistentThreadsCoroSchedulerConfig {
 };
 
 namespace detail {
-LC_CORO_API void persistent_threads_scheduler_main_kernel_impl(
+LC_CORO_API void persistent_threads_coro_scheduler_main_kernel_impl(
     const PersistentThreadsCoroSchedulerConfig &config,
     uint q_fac, uint g_fac, uint shared_queue_size, uint global_queue_size,
     const CoroGraph *graph, Shared<CoroFrame> &frames, Expr<uint3> dispatch_shape,
@@ -57,7 +57,7 @@ private:
             auto shared_queue_size = _config.block_size * q_fac;
             auto call_subroutine = [&](CoroFrame &frame, CoroToken token) noexcept { coro[token](frame, args...); };
             Shared<CoroFrame> frames{graph->shared_frame(), shared_queue_size, _config.shared_memory_soa};
-            detail::persistent_threads_scheduler_main_kernel_impl(
+            detail::persistent_threads_coro_scheduler_main_kernel_impl(
                 _config, q_fac, g_fac, shared_queue_size, global_queue_size, graph,
                 frames, dispatch_shape, global, _global_frames, call_subroutine);
         };

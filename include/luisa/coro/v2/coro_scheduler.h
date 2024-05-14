@@ -41,7 +41,7 @@ private:
 
 private:
     friend Scheduler;
-    CoroSchedulerInvoke(Scheduler *scheduler, compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept
+    explicit CoroSchedulerInvoke(Scheduler *scheduler, compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept
         : _scheduler{scheduler}, _args{args...} {}
 
 public:

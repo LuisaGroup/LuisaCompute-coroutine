@@ -90,7 +90,7 @@ public:
 public:
     [[nodiscard]] auto instantiate() const noexcept { return CoroFrame::create(_graph->shared_frame()); }
     [[nodiscard]] auto instantiate(Expr<uint3> coro_id) const noexcept { return CoroFrame::create(_graph->shared_frame(), coro_id); }
-    [[nodiscard]] auto subroutine_count() const noexcept { return _graph->nodes().size(); }
+    [[nodiscard]] auto subroutine_count() const noexcept { return static_cast<uint>(_graph->nodes().size()); }
     [[nodiscard]] auto operator[](CoroToken token) const noexcept { return Subroutine{_graph->node(token).cc()}; }
     [[nodiscard]] auto operator[](luisa::string_view name) const noexcept { return Subroutine{_graph->node(name).cc()}; }
     [[nodiscard]] auto entry() const noexcept { return (*this)[coro_token_entry]; }

@@ -29,12 +29,15 @@ struct StateMachineCoroSchedulerConfig {
 template<typename... Args>
 class StateMachineCoroScheduler : public CoroScheduler<Args...> {
 
+public:
+    using Coro = Coroutine<void(Args...)>;
+    using Config = StateMachineCoroSchedulerConfig;
+
 private:
     Shader3D<Args...> _shader;
 
 private:
-    void _create_shader(Device &device, const Coroutine<void(Args...)> &coroutine,
-                                             const StateMachineCoroSchedulerConfig &config) noexcept {
+    void _create_shader(Device &device, const Coro &coroutine, const Config &config) noexcept {
         Kernel3D kernel = [&coroutine, &config](Var<Args>... args) noexcept {
             set_block_size(config.block_size);
             if (config.shared_memory) {
@@ -63,14 +66,14 @@ private:
     }
 
 public:
-    StateMachineCoroScheduler(Device &device, const Coroutine<void(Args...)> &coro,
-                              const StateMachineCoroSchedulerConfig &config) noexcept {
+    StateMachineCoroScheduler(Device &device, const Coro &coro, const Config &config) noexcept {
         _create_shader(device, coro, config);
     }
-    StateMachineCoroScheduler(Device &device, const Coroutine<void(Args...)> &coro) noexcept
-        : StateMachineCoroScheduler{device, coro, StateMachineCoroSchedulerConfig{}} {}
+    StateMachineCoroScheduler(Device &device, const Coro &coro) noexcept
+        : StateMachineCoroScheduler{device, coro, Config{}} {}
 };
 
+// User-defined CTAD guides
 template<typename... Args>
 StateMachineCoroScheduler(Device &, const Coroutine<void(Args...)> &)
     -> StateMachineCoroScheduler<Args...>;

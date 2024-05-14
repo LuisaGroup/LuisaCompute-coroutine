@@ -213,93 +213,91 @@ int main(int argc, char *argv[]) {
         // $if (all(coord == make_uint2(50u, 500u))) {
         //     device_log("coord: {}", coord);
         // };
-        $for (i, spp_per_dispatch) {
-            Var<Ray> ray = generate_ray(pixel * make_float2(1.0f, -1.0f));
-            Float3 beta = def(make_float3(1.0f));
-            Float pdf_bsdf = def(0.0f);
-            constexpr float3 light_position = make_float3(-0.24f, 1.98f, 0.16f);
-            constexpr float3 light_u = make_float3(-0.24f, 1.98f, -0.22f) - light_position;
-            constexpr float3 light_v = make_float3(0.23f, 1.98f, 0.16f) - light_position;
-            constexpr float3 light_emission = make_float3(17.0f, 12.0f, 4.0f);
-            Float light_area = length(cross(light_u, light_v));
-            Float3 light_normal = normalize(cross(light_u, light_v));
-            $suspend("per_depth");
-            $for (depth, 10u) {
-                // trace
-                $suspend("before_tracing");
-                Var<TriangleHit> hit = accel.intersect(ray, {});
-                reorder_shader_execution();
-                $if (hit->miss()) { $break; };
-                Var<Triangle> triangle = heap->buffer<Triangle>(hit.inst).read(hit.prim);
-                Float3 p0 = vertex_buffer->read(triangle.i0);
-                Float3 p1 = vertex_buffer->read(triangle.i1);
-                Float3 p2 = vertex_buffer->read(triangle.i2);
-                Float3 p = triangle_interpolate(hit.bary, p0, p1, p2);
-                Float3 n = normalize(cross(p1 - p0, p2 - p0));
-                $suspend("after_tracing");
 
-                Float cos_wo = dot(-ray->direction(), n);
-                $if (cos_wo < 1e-4f) { $break; };
+        Var<Ray> ray = generate_ray(pixel * make_float2(1.0f, -1.0f));
+        Float3 beta = def(make_float3(1.0f));
+        Float pdf_bsdf = def(0.0f);
+        constexpr float3 light_position = make_float3(-0.24f, 1.98f, 0.16f);
+        constexpr float3 light_u = make_float3(-0.24f, 1.98f, -0.22f) - light_position;
+        constexpr float3 light_v = make_float3(0.23f, 1.98f, 0.16f) - light_position;
+        constexpr float3 light_emission = make_float3(17.0f, 12.0f, 4.0f);
+        Float light_area = length(cross(light_u, light_v));
+        Float3 light_normal = normalize(cross(light_u, light_v));
+        $suspend("per_depth");
+        $for (depth, 10u) {
+            // trace
+            $suspend("before_tracing");
+            Var<TriangleHit> hit = accel.intersect(ray, {});
+            reorder_shader_execution();
+            $if (hit->miss()) { $break; };
+            Var<Triangle> triangle = heap->buffer<Triangle>(hit.inst).read(hit.prim);
+            Float3 p0 = vertex_buffer->read(triangle.i0);
+            Float3 p1 = vertex_buffer->read(triangle.i1);
+            Float3 p2 = vertex_buffer->read(triangle.i2);
+            Float3 p = triangle_interpolate(hit.bary, p0, p1, p2);
+            Float3 n = normalize(cross(p1 - p0, p2 - p0));
+            $suspend("after_tracing");
 
-                // hit light
-                $if (hit.inst == static_cast<uint>(meshes.size() - 1u)) {
-                    $if (depth == 0u) {
-                        radiance += light_emission;
-                    }
-                    $else {
-                        Float pdf_light = length_squared(p - ray->origin()) / (light_area * cos_wo);
-                        Float mis_weight = balanced_heuristic(pdf_bsdf, pdf_light);
-                        radiance += mis_weight * beta * light_emission;
-                    };
-                    $break;
+            Float cos_wo = dot(-ray->direction(), n);
+            $if (cos_wo < 1e-4f) { $break; };
+
+            // hit light
+            $if (hit.inst == static_cast<uint>(meshes.size() - 1u)) {
+                $if (depth == 0u) {
+                    radiance += light_emission;
+                }
+                $else {
+                    Float pdf_light = length_squared(p - ray->origin()) / (light_area * cos_wo);
+                    Float mis_weight = balanced_heuristic(pdf_bsdf, pdf_light);
+                    radiance += mis_weight * beta * light_emission;
                 };
-
-                // sample light
-                $suspend("sample_light");
-                Float ux_light = lcg(state);
-                Float uy_light = lcg(state);
-                Float3 p_light = light_position + ux_light * light_u + uy_light * light_v;
-                Float3 pp = offset_ray_origin(p, n);
-                Float3 pp_light = offset_ray_origin(p_light, light_normal);
-                Float d_light = distance(pp, pp_light);
-                Float3 wi_light = normalize(pp_light - pp);
-                Var<Ray> shadow_ray = make_ray(offset_ray_origin(pp, n), wi_light, 0.f, d_light);
-                Bool occluded = accel.intersect_any(shadow_ray, {});
-                Float cos_wi_light = dot(wi_light, n);
-                Float cos_light = -dot(light_normal, wi_light);
-                Float3 albedo = materials.read(hit.inst);
-                $if (!occluded & cos_wi_light > 1e-4f & cos_light > 1e-4f) {
-                    Float pdf_light = (d_light * d_light) / (light_area * cos_light);
-                    Float pdf_bsdf = cos_wi_light * inv_pi;
-                    Float mis_weight = balanced_heuristic(pdf_light, pdf_bsdf);
-                    Float3 bsdf = albedo * inv_pi * cos_wi_light;
-                    radiance += beta * bsdf * mis_weight * light_emission / max(pdf_light, 1e-4f);
-                };
-
-                // sample BSDF
-                $suspend("sample_bsdf");
-                Var<Onb> onb = make_onb(n);
-                Float ux = lcg(state);
-                Float uy = lcg(state);
-                Float3 wi_local = cosine_sample_hemisphere(make_float2(ux, uy));
-                Float cos_wi = abs(wi_local.z);
-                Float3 new_direction = onb->to_world(wi_local);
-                ray = make_ray(pp, new_direction);
-                pdf_bsdf = cos_wi * inv_pi;
-                beta *= albedo;// * cos_wi * inv_pi / pdf_bsdf => * 1.f
-
-                // rr
-                $suspend("rr");
-                Float l = dot(make_float3(0.212671f, 0.715160f, 0.072169f), beta);
-                $if (l == 0.0f) { $break; };
-                Float q = max(l, 0.05f);
-                Float r = lcg(state);
-                $if (r >= q) { $break; };
-                beta *= 1.0f / q;
+                $break;
             };
+
+            // sample light
+            $suspend("sample_light");
+            Float ux_light = lcg(state);
+            Float uy_light = lcg(state);
+            Float3 p_light = light_position + ux_light * light_u + uy_light * light_v;
+            Float3 pp = offset_ray_origin(p, n);
+            Float3 pp_light = offset_ray_origin(p_light, light_normal);
+            Float d_light = distance(pp, pp_light);
+            Float3 wi_light = normalize(pp_light - pp);
+            Var<Ray> shadow_ray = make_ray(offset_ray_origin(pp, n), wi_light, 0.f, d_light);
+            Bool occluded = accel.intersect_any(shadow_ray, {});
+            Float cos_wi_light = dot(wi_light, n);
+            Float cos_light = -dot(light_normal, wi_light);
+            Float3 albedo = materials.read(hit.inst);
+            $if (!occluded & cos_wi_light > 1e-4f & cos_light > 1e-4f) {
+                Float pdf_light = (d_light * d_light) / (light_area * cos_light);
+                Float pdf_bsdf = cos_wi_light * inv_pi;
+                Float mis_weight = balanced_heuristic(pdf_light, pdf_bsdf);
+                Float3 bsdf = albedo * inv_pi * cos_wi_light;
+                radiance += beta * bsdf * mis_weight * light_emission / max(pdf_light, 1e-4f);
+            };
+
+            // sample BSDF
+            $suspend("sample_bsdf");
+            Var<Onb> onb = make_onb(n);
+            Float ux = lcg(state);
+            Float uy = lcg(state);
+            Float3 wi_local = cosine_sample_hemisphere(make_float2(ux, uy));
+            Float cos_wi = abs(wi_local.z);
+            Float3 new_direction = onb->to_world(wi_local);
+            ray = make_ray(pp, new_direction);
+            pdf_bsdf = cos_wi * inv_pi;
+            beta *= albedo;// * cos_wi * inv_pi / pdf_bsdf => * 1.f
+
+            // rr
+            $suspend("rr");
+            Float l = dot(make_float3(0.212671f, 0.715160f, 0.072169f), beta);
+            $if (l == 0.0f) { $break; };
+            Float q = max(l, 0.05f);
+            Float r = lcg(state);
+            $if (r >= q) { $break; };
+            beta *= 1.0f / q;
         };
         $suspend("write_film");
-        radiance /= static_cast<float>(spp_per_dispatch);
         seed_image.write(coord, make_uint4(state));
         $if (any(dsl::isnan(radiance))) { radiance = make_float3(0.0f); };
         auto color = make_float4(clamp(radiance, 0.0f, 30.0f), 1.0f);
@@ -375,7 +373,7 @@ int main(int argc, char *argv[]) {
 
     while (!window.should_close()) {
         stream << scheduler(framebuffer, seed_image, accel, resolution)
-                      .dispatch(resolution)
+                      .dispatch(resolution.x * resolution.y * spp_per_dispatch)
                << accumulate_shader(accum_image, framebuffer)
                       .dispatch(resolution)
                << hdr2ldr_shader(accum_image, ldr_image, 1.0f, swap_chain.backend_storage() != PixelStorage::BYTE4).dispatch(resolution)

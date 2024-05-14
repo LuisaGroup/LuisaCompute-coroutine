@@ -39,7 +39,6 @@ struct TypeImpl final : public Type {
     uint index{};
     luisa::string description;
     luisa::vector<const Type *> members;
-    luisa::unordered_map<luisa::string, size_t> member_names;
     luisa::vector<Attribute> member_attributes;
 };
 
@@ -107,7 +106,6 @@ public:
     [[nodiscard]] const Type *decode_type(luisa::string_view desc) noexcept;
     /// Construct custom type
     [[nodiscard]] const Type *custom_type(luisa::string_view desc) noexcept;
-    [[nodiscard]] const Type *coroframe_type(luisa::string_view desc) noexcept;
     /// Return type count
     [[nodiscard]] size_t type_count() const noexcept;
     /// Traverse all types using visitor
@@ -158,48 +156,6 @@ const Type *TypeRegistry::custom_type(luisa::string_view name) noexcept {
     auto t = _type_pool.create();
     t->hash = h;
     t->tag = Type::Tag::CUSTOM;
-    t->size = Type::custom_struct_size;
-    t->alignment = Type::custom_struct_alignment;
-    t->dimension = 1u;
-    t->description = name;
-    return _register(t);
-}
-
-const Type *TypeRegistry::coroframe_type(luisa::string_view name) noexcept {
-    // validate name
-    LUISA_ASSERT(!name.empty() &&
-                     name != "void" &&
-                     name != "int" &&
-                     name != "uint" &&
-                     name != "short" &&
-                     name != "ushort" &&
-                     name != "long" &&
-                     name != "ulong" &&
-                     name != "float" &&
-                     name != "half" &&
-                     name != "double" &&
-                     name != "bool" &&
-                     !name.starts_with("vector<") &&
-                     !name.starts_with("matrix<") &&
-                     !name.starts_with("array<") &&
-                     !name.starts_with("struct<") &&
-                     !name.starts_with("buffer<") &&
-                     !name.starts_with("texture<") &&
-                     name != "accel" &&
-                     name != "bindless_array" &&
-                     !isdigit(name.front() /* already checked not empty */),
-                 "Invalid custom type name: {}", name);
-    LUISA_ASSERT(std::all_of(name.cbegin(), name.cend(),
-                             [](char c) { return isalnum(c) || c == '_'; }),
-                 "Invalid custom type name: {}", name);
-    std::lock_guard lock{_mutex};
-    auto h = _compute_hash(name);
-    if (auto iter = _type_set.find(TypeDescAndHash{name, h});
-        iter != _type_set.end()) { return *iter; }
-
-    auto t = _type_pool.create();
-    t->hash = h;
-    t->tag = Type::Tag::COROFRAME;
     t->size = Type::custom_struct_size;
     t->alignment = Type::custom_struct_alignment;
     t->dimension = 1u;

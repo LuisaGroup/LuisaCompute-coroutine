@@ -131,12 +131,7 @@ namespace detail {
 
 static void perform_coroutine_transform(ir::CallableModule *m) noexcept {
     auto coroutine_pipeline = ir::luisa_compute_ir_transform_pipeline_new();
-    // ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "canonicalize_control_flow");
-    // ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "demote_locals");
-    // ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "defer_load");
-    // ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "extract_loop_cond");
-    // ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "split_coro");
-    ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "materialize_coro_v2");
+    ir::luisa_compute_ir_transform_pipeline_add_transform(coroutine_pipeline, "materialize_coro");
     auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform_callable(coroutine_pipeline, *m);
     ir::luisa_compute_ir_transform_pipeline_destroy(coroutine_pipeline);
     *m = converted_module;

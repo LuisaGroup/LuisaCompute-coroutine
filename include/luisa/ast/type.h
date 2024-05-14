@@ -310,8 +310,6 @@ public:
         TEXTURE,
         BINDLESS_ARRAY,
         ACCEL,
-
-        COROFRAME,
         CUSTOM
     };
 

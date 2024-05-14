@@ -345,9 +345,6 @@ void MetalCodegenAST::_emit_type_name(const Type *type, Usage usage) noexcept {
             }
             break;
         }
-        case Type::Tag::COROFRAME:
-            _emit_type_name(type->corotype());
-            break;
     }
 }
 

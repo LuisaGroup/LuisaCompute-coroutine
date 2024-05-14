@@ -102,7 +102,7 @@ impl<'a> AST2IRType<'a> {
             }
             "BINDLESS_ARRAY" => Type::void(),
             "ACCEL" => Type::void(),
-            "COROFRAME" | "CUSTOM" => Type::opaque(j["id"].as_str().unwrap().into()),
+            "CUSTOM" => Type::opaque(j["id"].as_str().unwrap().into()),
             _ => panic!("Invalid type tag: {}", tag),
         };
         self.types.insert(i, t.clone());

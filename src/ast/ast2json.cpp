@@ -629,7 +629,6 @@ private:
                     t["element"] = _type_index(type->element());
                     break;
                 }
-                case Type::Tag::COROFRAME: [[fallthrough]];
                 case Type::Tag::CUSTOM: {
                     t["id"] = type->description();
                     break;

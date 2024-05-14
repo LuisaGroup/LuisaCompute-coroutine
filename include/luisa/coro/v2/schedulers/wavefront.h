@@ -34,7 +34,7 @@ private:
     luisa::optional<ArgPack> _args;
     SOA<CoroFrame> _frame_soa;
     Buffer<CoroFrame> _frame_buffer;
-    Shader1D<Buffer<uint>, Buffer<uint>, uint, uint, uint, Args...> _gen_shader;
+    Shader1D<Buffer<uint>, Buffer<uint>, uint3, uint, uint, uint, Args...> _gen_shader;
     luisa::vector<Shader1D<Buffer<uint>, Buffer<uint>, uint, Args...>> _resume_shaders;
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _count_prefix_shader;
     Shader1D<Buffer<uint>, Buffer<uint>, uint> _gather_shader;
@@ -48,6 +48,7 @@ private:
     Buffer<uint> _global_buffer;
     luisa::vector<uint> _host_count;
     luisa::vector<uint> _host_offset;
+    uint3 _dispatch_shape;
     bool _host_empty;
     uint _dispatch_counter;
     uint _max_sub_coro;
@@ -63,6 +64,7 @@ private:
     void _dispatch(Stream &stream, uint3 dispatch_size,
                    compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept override {
         _args.emplace(std::forward<compute::detail::prototype_to_shader_invocation_t<Args>>(args)...);
+        _dispatch_shape = dispatch_size;
         _dispatch_size = dispatch_size.x * dispatch_size.y * dispatch_size.z;// TODO
         _dispatch_counter = 0;
         _host_empty = true;
@@ -186,7 +188,7 @@ private:
                     &get_coro_hint, 0, 128, 0, highbit);
             }
         }
-        Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, UInt offset, UInt st_task_id, UInt n, Var<Args>... args) {
+        Kernel1D gen_kernel = [&](BufferUInt index, BufferUInt count, UInt3 dispatch_shape, UInt offset, UInt st_task_id, UInt n, Var<Args>... args) {
             auto x = dispatch_x();
             $if (x >= n) {
                 $return();
@@ -200,8 +202,13 @@ private:
             if (!_config.sort) {
                 count.atomic(0u).fetch_add(-1u);
             }
-
-            CoroFrame frame = coroutine.instantiate(make_uint3(st_task_id + x, 0u, 0u));
+            auto global_id = st_task_id + x;
+            auto image_size = dispatch_shape.x * dispatch_shape.y;
+            auto global_id_z = global_id / image_size;
+            auto global_id_xy = global_id % image_size;
+            auto global_id_x = global_id_xy % dispatch_shape.x;
+            auto global_id_y = global_id_xy / dispatch_shape.x;
+            CoroFrame frame = coroutine.instantiate(make_uint3(global_id_x, global_id_y, global_id_z));
             coroutine.entry()(frame, args...);
             if (_config.soa) {
                 _frame_soa->write(frame_id, frame, coroutine.graph()->node(0u).output_fields());
@@ -378,7 +385,7 @@ private:
                     stream << _compact_shader(_resume_index, _config.thread_count - _host_count[0], _config.thread_count).dispatch(_host_count[0]);
                 }
                 stream << _invoke(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]),
-                                  _resume_count, _config.thread_count - _host_count[0], _dispatch_counter,
+                                  _resume_count, _dispatch_shape, _config.thread_count - _host_count[0], _dispatch_counter,
                                   _config.thread_count)
                               .dispatch(gen_count);
                 _dispatch_counter += gen_count;
@@ -414,7 +421,7 @@ private:
                                .dispatch(_host_count[0]);
                 }
                 stream << _invoke(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]),
-                                  _resume_count, _config.thread_count - _host_count[0], _dispatch_counter, _config.thread_count)
+                                  _resume_count, _dispatch_shape, _config.thread_count - _host_count[0], _dispatch_counter, _config.thread_count)
                               .dispatch(gen_count);
                 _dispatch_counter += gen_count;
                 _host_empty = false;

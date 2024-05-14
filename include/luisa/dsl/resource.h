@@ -548,11 +548,11 @@ public:
     }
 };
 
-template<typename BufferOrExpr>
+template<typename BufferOrView>
 class ByteBufferExprProxy {
 
 private:
-    BufferOrExpr _buffer;
+    BufferOrView _buffer;
 
 public:
     LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(ByteBufferExprProxy)
@@ -561,16 +561,16 @@ public:
     template<typename V, typename I>
         requires is_integral_expr_v<I>
     [[nodiscard]] auto read(I &&index) const noexcept {
-        return Expr<BufferOrExpr>{_buffer}.template read<V, I>(std::forward<I>(index));
+        return Expr<BufferOrView>{_buffer}.template read<V, I>(std::forward<I>(index));
     }
     template<typename I, typename V>
         requires is_integral_expr_v<I>
     void write(I &&index, V &&value) const noexcept {
-        Expr<BufferOrExpr>{_buffer}.write(std::forward<I>(index),
+        Expr<BufferOrView>{_buffer}.write(std::forward<I>(index),
                                           std::forward<V>(value));
     }
     [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
-        return Expr<BufferOrExpr>{_buffer}.device_address();
+        return Expr<BufferOrView>{_buffer}.device_address();
     }
 };
 

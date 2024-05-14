@@ -10,7 +10,7 @@
 
 namespace luisa::compute::coroutine::detail {
 
-void create_persistent_threads_scheduler_main_kernel(
+void persistent_threads_scheduler_main_kernel_impl(
     const PersistentThreadsCoroSchedulerConfig &config,
     uint q_fac, uint g_fac, uint shared_queue_size, uint global_queue_size,
     const CoroGraph *graph, Shared<CoroFrame> &frames, Expr<uint3> dispatch_shape,

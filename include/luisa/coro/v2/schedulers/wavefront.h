@@ -13,8 +13,8 @@
 namespace luisa::compute::coroutine {
 
 struct WavefrontCoroSchedulerConfig {
-    uint3 block_size = make_uint3(8u, 8u, 1u);
-    uint max_instance_count = 2_M;
+    // uint3 block_size = make_uint3(8u, 8u, 1u);
+    uint thread_count = 2_M;
     bool soa = true;
     bool sort = true;// use sort for coro token gathering
     bool compact = true;
@@ -25,8 +25,11 @@ struct WavefrontCoroSchedulerConfig {
 template<typename... Args>
 class WavefrontCoroScheduler : public CoroScheduler<Args...> {
 
+public:
+    using Config = WavefrontCoroSchedulerConfig;
+
 private:
-    WavefrontCoroSchedulerConfig _config;
+    Config _config;
     using ArgPack = std::tuple<compute::detail::prototype_to_shader_invocation_t<Args>...>;
     luisa::optional<ArgPack> _args;
     SOA<CoroFrame> _frame_soa;
@@ -59,20 +62,20 @@ private:
 private:
     void _dispatch(Stream &stream, uint3 dispatch_size,
                    compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept override {
+        _args.emplace(std::forward<compute::detail::prototype_to_shader_invocation_t<Args>>(args)...);
         _dispatch_size = dispatch_size.x * dispatch_size.y * dispatch_size.z;// TODO
         _dispatch_counter = 0;
         _host_empty = true;
         for (auto i = 0u; i < _max_sub_coro; i++) {
             if (i) {
                 _host_count[i] = 0;
-                _host_offset[i] = _config.max_instance_count;
+                _host_offset[i] = _config.thread_count;
             } else {
-                _host_count[i] = _config.max_instance_count;
+                _host_count[i] = _config.thread_count;
                 _host_offset[i] = 0;
             }
         }
-        stream << _initialize_shader(_resume_count, _config.max_instance_count).dispatch(_config.max_instance_count);
-        _args.emplace(std::forward<compute::detail::prototype_to_shader_invocation_t<Args>>(args)...);
+        stream << _initialize_shader(_resume_count, _config.thread_count).dispatch(_config.thread_count);
         this->_await_all(stream);
     }
 
@@ -90,17 +93,17 @@ private:
                         const WavefrontCoroSchedulerConfig &config) noexcept {
         _config = config;
         if (_config.soa) {
-            _frame_soa = device.create_soa<CoroFrame>(coroutine.shared_frame(), _config.max_instance_count);
+            _frame_soa = device.create_soa<CoroFrame>(coroutine.shared_frame(), _config.thread_count);
         } else {
-            _frame_buffer = device.create_coro_frame_buffer(coroutine.shared_frame(), _config.max_instance_count);
+            _frame_buffer = device.create_coro_frame_buffer(coroutine.shared_frame(), _config.thread_count);
         }
         bool use_sort = _config.sort || !_config.hint_fields.empty();
         _max_sub_coro = coroutine.subroutine_count();
-        _resume_index = device.create_buffer<uint>(_config.max_instance_count);
+        _resume_index = device.create_buffer<uint>(_config.thread_count);
         if (use_sort) {
-            _temp_index = device.create_buffer<uint>(_config.max_instance_count);
-            _temp_key[0] = device.create_buffer<uint>(_config.max_instance_count);
-            _temp_key[1] = device.create_buffer<uint>(_config.max_instance_count);
+            _temp_index = device.create_buffer<uint>(_config.thread_count);
+            _temp_key[0] = device.create_buffer<uint>(_config.thread_count);
+            _temp_key[1] = device.create_buffer<uint>(_config.thread_count);
         }
         _resume_count = device.create_buffer<uint>(_max_sub_coro);
         _resume_offset = device.create_buffer<uint>(_max_sub_coro);
@@ -111,8 +114,8 @@ private:
         _host_count.resize(_max_sub_coro);
         _have_hint.resize(_max_sub_coro, false);
         for (auto &token : _config.hint_fields) {
-            auto id = coroutine.frame()->designated_fields().find(token);
-            if (id != coroutine.frame()->designated_fields().end()) {
+            auto id = coroutine.graph()->named_tokens().find(token);
+            if (id != coroutine.graph()->named_tokens().end()) {
                 LUISA_ASSERT(id->second < _max_sub_coro,
                              "coroutine token {} of id {} out of range {}", token, id->second, _max_sub_coro);
                 _have_hint[id->second] = true;
@@ -123,15 +126,15 @@ private:
         for (auto i = 0u; i < _max_sub_coro; i++) {
             if (i) {
                 _host_count[i] = 0;
-                _host_offset[i] = _config.max_instance_count;
+                _host_offset[i] = _config.thread_count;
             } else {
-                _host_count[i] = _config.max_instance_count;
+                _host_count[i] = _config.thread_count;
                 _host_offset[i] = 0;
             }
         }
         Callable get_coro_token = [&](UInt index) {
-            $if (index > _config.max_instance_count) {
-                device_log("Index out of range {}/{}", index, _config.max_instance_count);
+            $if (index > _config.thread_count) {
+                device_log("Index out of range {}/{}", index, _config.thread_count);
             };
             if (_config.soa) {
                 return _frame_soa->read_field<uint>(index, "target_token") & token_mask;
@@ -161,17 +164,17 @@ private:
         };
         if (use_sort) {
             _sort_temp_storage = radix_sort::temp_storage(
-                device, _config.max_instance_count, std::max(std::min(_config.hint_range, 128u), _max_sub_coro));
+                device, _config.thread_count, std::max(std::min(_config.hint_range, 128u), _max_sub_coro));
         }
         if (_config.sort) {
             _sort_token = radix_sort::instance<>(
-                device, _config.max_instance_count, _sort_temp_storage, &get_coro_token, &identical,
+                device, _config.thread_count, _sort_temp_storage, &get_coro_token, &identical,
                 &get_coro_token, 1, _max_sub_coro);
         }
         if (!_config.hint_fields.empty()) {
             if (_config.hint_range <= 128) {
                 _sort_hint = radix_sort::instance<Buffer<uint>>(
-                    device, _config.max_instance_count, _sort_temp_storage, &get_coro_hint, &keep_index,
+                    device, _config.thread_count, _sort_temp_storage, &get_coro_hint, &keep_index,
                     &get_coro_hint, 1, _config.hint_range);
             } else {
                 auto highbit = 0;
@@ -179,7 +182,7 @@ private:
                     highbit++;
                 }
                 _sort_hint = radix_sort::instance<Buffer<uint>>(
-                    device, _config.max_instance_count, _sort_temp_storage, &get_coro_hint, &keep_index,
+                    device, _config.thread_count, _sort_temp_storage, &get_coro_hint, &keep_index,
                     &get_coro_hint, 0, 128, 0, highbit);
             }
         }
@@ -198,15 +201,15 @@ private:
                 count.atomic(0u).fetch_add(-1u);
             }
 
-            CoroFrame frame = coroutine.instantiate(def<uint3>(st_task_id + x, 0, 0));
-            coroutine[0u](frame, args...);
+            CoroFrame frame = coroutine.instantiate(make_uint3(st_task_id + x, 0u, 0u));
+            coroutine.entry()(frame, args...);
             if (_config.soa) {
                 _frame_soa->write(frame_id, frame, coroutine.graph()->node(0u).output_fields());
             } else {
                 _frame_buffer->write(frame_id, frame);
             }
             if (!_config.sort) {
-                auto nxt = frame.get<uint>("coro_hint") & token_mask;
+                auto nxt = frame.target_token & token_mask;
                 count.atomic(nxt).fetch_add(1u);
             }
         };
@@ -230,7 +233,7 @@ private:
                     frame = _frame_buffer->read(frame_id);
                 }
                 if (!_config.sort) {
-                    count.atomic(i).fetch_add(-1u);
+                    count.atomic(i).fetch_sub(1u);
                 }
                 coroutine[i](frame, args...);
                 if (_config.soa) {
@@ -240,7 +243,7 @@ private:
                 }
 
                 if (!_config.sort) {
-                    auto nxt = frame.get<uint>("target_token") & token_mask;
+                    auto nxt = frame.target_token & token_mask;
                     $if (nxt < _max_sub_coro) {
                         count.atomic(nxt).fetch_add(1u);
                     };
@@ -255,7 +258,7 @@ private:
                 auto pre = def(0u);
                 for (auto i = 0u; i < _max_sub_coro; ++i) {
                     auto val = count.read(i);
-                    prefix.write(def(i), pre);
+                    prefix.write(i, pre);
                     pre = pre + val;
                 }
             };
@@ -269,7 +272,7 @@ private:
                 r_id = _frame_soa->read_field<uint>(x, "target_token") & token_mask;
             } else {
                 auto frame = _frame_buffer->read(x);
-                r_id = frame.get<uint>("target_token") & token_mask;
+                r_id = frame.target_token & token_mask;
             }
             auto q_id = prefix.atomic(r_id).fetch_add(1u);
             index.write(q_id, x);
@@ -285,7 +288,7 @@ private:
                     token = _frame_soa->read_field<uint>(empty_offset + x, "target_token");
                 } else {
                     CoroFrame frame = _frame_buffer->read(empty_offset + x);
-                    token = frame.get<uint>("target_token");
+                    token = frame.target_token;
                 }
                 $if ((token & token_mask) != 0u) {
                     auto res = _global_buffer->atomic(0u).fetch_add(1u);
@@ -297,7 +300,6 @@ private:
                         };
                     }
                     if (_config.soa) {
-                        // TODO: active fields here?
                         auto frame = _frame_soa->read(empty_offset + x);
                         _frame_soa->write(slot, frame);
                     } else {
@@ -319,16 +321,15 @@ private:
         Kernel1D _initialize_kernel = [&](BufferUInt count, UInt n) {
             auto x = dispatch_x();
             $if (x < n) {
+                CoroFrame frame = coroutine.instantiate();
                 if (_config.soa) {
-                    CoroFrame frame = coroutine.instantiate();
                     _frame_soa->write(x, frame, std::array{0u, 1u});
                 } else {
-                    CoroFrame frame = coroutine.instantiate();
                     _frame_buffer->write(x, frame);
                 }
             };
             $if (x < _max_sub_coro) {
-                count.write(x, ite(x == 0u, _config.max_instance_count, 0u));
+                count.write(x, ite(x == 0u, _config.thread_count, 0u));
             };
         };
         _initialize_shader = device.compile(_initialize_kernel);
@@ -359,26 +360,26 @@ private:
             auto host_update = [&] {
                 _host_empty = true;
                 for (uint i = 0u; i < _max_sub_coro; i++) {
-                    _host_count[i] = (i + 1u == _max_sub_coro ? _config.max_instance_count : _host_offset[i + 1u]) - _host_offset[i];
+                    _host_count[i] = (i + 1u == _max_sub_coro ? _config.thread_count : _host_offset[i + 1u]) - _host_offset[i];
                     _host_empty = _host_empty && (i == 0u || _host_count[i] == 0u);
                 }
             };
             _sort_token.sort(stream, _temp_key[0], _resume_index, _temp_key[1],
-                             _resume_index, _config.max_instance_count);
+                             _resume_index, _config.thread_count);
 
             stream << _sort_temp_storage.hist_buffer.view(0u, _max_sub_coro).copy_to(_host_offset.data())
                    << host_update
                    << synchronize();
 
-            if (_host_count[0] > _config.max_instance_count * 0.5f && !this->_all_dispatched()) {
+            if (_host_count[0] > _config.thread_count * 0.5f && !this->_all_dispatched()) {
                 auto gen_count = std::min(_dispatch_size - _dispatch_counter, _host_count[0]);
-                if (_host_count[0] != _config.max_instance_count && _config.compact) {
+                if (_host_count[0] != _config.thread_count && _config.compact) {
                     stream << _clear_shader(_global_buffer, 1).dispatch(1u);
-                    stream << _compact_shader(_resume_index, _config.max_instance_count - _host_count[0], _config.max_instance_count).dispatch(_host_count[0]);
+                    stream << _compact_shader(_resume_index, _config.thread_count - _host_count[0], _config.thread_count).dispatch(_host_count[0]);
                 }
                 stream << _invoke(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]),
-                                  _resume_count, _config.max_instance_count - _host_count[0], _dispatch_counter,
-                                  _config.max_instance_count)
+                                  _resume_count, _config.thread_count - _host_count[0], _dispatch_counter,
+                                  _config.thread_count)
                               .dispatch(gen_count);
                 _dispatch_counter += gen_count;
                 _host_empty = false;
@@ -389,11 +390,11 @@ private:
                             BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
                             BufferView<uint> _key[2] = {_temp_key[1].view(_host_offset[i], _host_count[i]), _temp_key[0].view(_host_offset[i], _host_count[i])};
                             uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i], _resume_index.view(_host_offset[i], _host_count[i]));
-                            stream << _invoke(_resume_shaders[i], _index[out], _resume_count, _config.max_instance_count)
+                            stream << _invoke(_resume_shaders[i], _index[out], _resume_count, _config.thread_count)
                                           .dispatch(_host_count[i]);
                         } else {
                             stream << _invoke(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
-                                              _resume_count, _config.max_instance_count)
+                                              _resume_count, _config.thread_count)
                                           .dispatch(_host_count[i]);
                         }
                     }
@@ -402,18 +403,18 @@ private:
             stream << synchronize();
         } else {
             stream << _count_prefix_shader(_resume_count, _resume_offset, _max_sub_coro).dispatch(1u);
-            stream << _gather_shader(_resume_index, _resume_offset, _config.max_instance_count).dispatch(_config.max_instance_count);
-            if (_host_count[0] > _config.max_instance_count / 2 && !_all_dispatched()) {
+            stream << _gather_shader(_resume_index, _resume_offset, _config.thread_count).dispatch(_config.thread_count);
+            if (_host_count[0] > _config.thread_count / 2 && !_all_dispatched()) {
                 auto gen_count = std::min(_dispatch_size - _dispatch_counter, _host_count[0]);
-                if (_host_count[0] != _config.max_instance_count && _config.compact) {
+                if (_host_count[0] != _config.thread_count && _config.compact) {
                     stream << _clear_shader(_global_buffer, 1).dispatch(1u);
                     stream
                         << _compact_shader(_resume_index.view(_host_offset[0], _host_count[0]),
-                                           _config.max_instance_count - _host_count[0], _config.max_instance_count)
+                                           _config.thread_count - _host_count[0], _config.thread_count)
                                .dispatch(_host_count[0]);
                 }
                 stream << _invoke(_gen_shader, _resume_index.view(_host_offset[0], _host_count[0]),
-                                  _resume_count, _config.max_instance_count - _host_count[0], _dispatch_counter, _config.max_instance_count)
+                                  _resume_count, _config.thread_count - _host_count[0], _dispatch_counter, _config.thread_count)
                               .dispatch(gen_count);
                 _dispatch_counter += gen_count;
                 _host_empty = false;
@@ -424,11 +425,11 @@ private:
                             BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
                             BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
                             uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i], _resume_index.view(_host_offset[i], _host_count[i]));
-                            stream << _invoke(_resume_shaders[i], _index[out], _resume_count, _config.max_instance_count)
+                            stream << _invoke(_resume_shaders[i], _index[out], _resume_count, _config.thread_count)
                                           .dispatch(_host_count[i]);
                         } else {
                             stream << _invoke(_resume_shaders[i], _resume_index.view(_host_offset[i], _host_count[i]),
-                                              _resume_count, _config.max_instance_count)
+                                              _resume_count, _config.thread_count)
                                           .dispatch(_host_count[i]);
                         }
                     }

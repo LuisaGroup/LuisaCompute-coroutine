@@ -184,7 +184,7 @@ int main(int argc, char *argv[]) {
         .block_size = 64u,
         .fetch_size = 3u,
         .shared_memory_soa = false,
-        .global_ext_memory = false};
+        .global_memory_ext = false};
     coroutine::PersistentThreadsCoroScheduler scheduler{device, coro, config};
 
     auto clear_shader = device.compile<2>([&] {

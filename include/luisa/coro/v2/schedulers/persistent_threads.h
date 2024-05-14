@@ -13,7 +13,7 @@ struct PersistentThreadsCoroSchedulerConfig {
     uint block_size = 128;
     uint fetch_size = 16;
     bool shared_memory_soa = true;
-    bool global_ext_memory = false;
+    bool global_memory_ext = false;
 };
 
 template<typename... Args>
@@ -37,7 +37,7 @@ private:
         auto q_fac = 1u;
         auto g_fac = coro.subroutine_count() - q_fac;
         auto global_queue_size = _config.block_size * g_fac;
-        if (_config.global_ext_memory) {
+        if (_config.global_memory_ext) {
             auto global_ext_size = _config.thread_count * g_fac;
             _global_frames = device.create_buffer<CoroFrame>(coro.shared_frame(), global_ext_size);
         }
@@ -48,7 +48,7 @@ private:
             Shared<uint> path_id{shared_queue_size};
             Shared<uint> work_counter{coro.subroutine_count()};
             Shared<uint> work_offset{2u};
-            Shared<uint> all_token{_config.global_ext_memory ?
+            Shared<uint> all_token{_config.global_memory_ext ?
                                        shared_queue_size + global_queue_size :
                                        shared_queue_size};
             Shared<uint> workload{2};
@@ -65,7 +65,7 @@ private:
             if_(thread_x() < coro.subroutine_count(), [&] {
                 if_(thread_x() == 0u, [&] {
                     work_counter[thread_x()] =
-                        _config.global_ext_memory ?
+                        _config.global_memory_ext ?
                             shared_queue_size + global_queue_size :
                             shared_queue_size;
                 }).else_([&] {
@@ -118,7 +118,7 @@ private:
                 work_offset[0] = 0;
                 work_offset[1] = 0;
                 sync_block();
-                if (!_config.global_ext_memory) {
+                if (!_config.global_memory_ext) {
                     for (auto index : dsl::dynamic_range(q_fac)) {//collect indices
                         auto frame_token = all_token[index * _config.block_size + thread_x()];
                         if_(frame_token == work_stat[1], [&] {
@@ -175,13 +175,13 @@ private:
                 auto gen_st = workload[0];
                 sync_block();
                 auto pid = def(0u);
-                if (_config.global_ext_memory) {
+                if (_config.global_memory_ext) {
                     pid = thread_x();
                 } else {
                     pid = path_id[thread_x()];
                 }
                 auto launch_condition = def(true);
-                if (!_config.global_ext_memory) {
+                if (!_config.global_memory_ext) {
                     launch_condition = (thread_x() < work_offset[0]);
                 } else {
                     launch_condition = (all_token[pid] == work_stat[1]);
@@ -233,7 +233,7 @@ private:
         _clear_shader = device.compile<1>([](BufferUInt global) {
             global->write(dispatch_x(), 0u);
         });
-        if (_config.global_ext_memory) {
+        if (_config.global_memory_ext) {
             _initialize_shader = device.compile<1>([&](UInt n) noexcept {
                 auto x = dispatch_x();
                 $if (x < n) {
@@ -246,7 +246,7 @@ private:
     void _dispatch(Stream &stream, uint3 dispatch_size,
                    compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept override {
         stream << _clear_shader(_global).dispatch(1u);
-        if (_config.global_ext_memory) {
+        if (_config.global_memory_ext) {
             auto n = static_cast<uint>(_global_frames.size());
             stream << _initialize_shader(n).dispatch(n);
         }

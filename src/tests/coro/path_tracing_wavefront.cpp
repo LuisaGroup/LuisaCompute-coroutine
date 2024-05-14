@@ -9,43 +9,6 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "../common/tiny_obj_loader.h"
 
-// namespace luisa::compute::coroutine {
-//
-// template<typename... Args>
-// class WavefrontCoroScheduler final : public CoroScheduler<Args...> {
-//
-// private:
-//     Device &_device;
-//     Coroutine<void(Args...)> _coro;
-//     Buffer<CoroFrame> _frame_buffer;
-//     luisa<vector<Shader3D<Args...>>> _shaders;
-//
-// private:
-//     void _prepare(uint n) noexcept {
-//         _frame_buffer = _device.create_buffer<CoroFrame>(_coro.frame(), n);
-//     }
-//
-// private:
-//     void _dispatch(Stream &stream, uint3 dispatch_size,
-//                    compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept override {
-//         auto s = luisa::make_ulong3(dispatch_size);
-//         auto n = s.x * s.y * s.z;
-//         LUISA_ASSERT(n < std::numeric_limits<uint>::max(), "Dispatch size is too large.");
-//         LUISA_ASSERT(n > 0u, "Dispatch size must be greater than zero.");
-//         if (!_frame_buffer || _frame_buffer.size() < n) { _prepare(n); }
-//         // generate
-//         stream << _shaders[0](args...).dispatch(dispatch_size);
-//         // loop over the subroutines until we found that all of them are done
-//
-//     }
-//
-// public:
-//     explicit WavefrontCoroScheduler(Device &device, Coroutine<void(Args...)> coro) noexcept
-//         : _device{device}, _coro{std::move(coro)} {}
-// };
-//
-// }// namespace luisa::compute::coroutine
-
 using namespace luisa;
 using namespace luisa::compute;
 
@@ -196,14 +159,10 @@ int main(int argc, char *argv[]) {
         return pdf_a / max(pdf_a + pdf_b, 1e-4f);
     };
 
-    auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 16u;
+    auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 64u;
 
     coroutine::Coroutine coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
-        UInt pixel_count = resolution.x * resolution.y;
-        UInt pixel_id = coro_id().x % pixel_count;
-        UInt2 coord = make_uint2(pixel_id % resolution.x, pixel_id / resolution.x);
-
-        // UInt2 coord = dispatch_id().xy();
+        UInt2 coord = dispatch_id().xy();
 
         Float frame_size = min(resolution.x, resolution.y).cast<float>();
         UInt state = seed_image.read(coord).x;
@@ -311,7 +270,7 @@ int main(int argc, char *argv[]) {
     };
 
     coroutine::WavefrontCoroSchedulerConfig config{
-        .thread_count = 256_k,
+        .thread_count = 4_M,
         .soa = true,
         .sort = true,
     };
@@ -381,7 +340,7 @@ int main(int argc, char *argv[]) {
 
     while (!window.should_close()) {
         stream << scheduler(framebuffer, seed_image, accel, resolution)
-                      .dispatch(resolution.x * resolution.y)
+                      .dispatch(resolution.x, resolution.y, spp_per_dispatch)
                << accumulate_shader(accum_image, framebuffer)
                       .dispatch(resolution)
                << hdr2ldr_shader(accum_image, ldr_image, 1.0f, swap_chain.backend_storage() != PixelStorage::BYTE4).dispatch(resolution)

@@ -196,10 +196,13 @@ int main(int argc, char *argv[]) {
         return pdf_a / max(pdf_a + pdf_b, 1e-4f);
     };
 
-    auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 64u;
+    auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 16u;
 
     coroutine::Coroutine coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
-        UInt2 coord = dispatch_id().xy();
+        UInt pixel_count = resolution.x * resolution.y;
+        UInt pixel_id = coro_id().x % pixel_count;
+        UInt2 coord = make_uint2(pixel_id % resolution.x, pixel_id / resolution.x);
+
         Float frame_size = min(resolution.x, resolution.y).cast<float>();
         UInt state = seed_image.read(coord).x;
         Float rx = lcg(state);
@@ -207,6 +210,9 @@ int main(int argc, char *argv[]) {
         Float2 pixel = (make_float2(coord) + make_float2(rx, ry)) / frame_size * 2.0f - 1.0f;
         Float3 radiance = def(make_float3(0.0f));
         $suspend("per_spp");
+        // $if (all(coord == make_uint2(50u, 500u))) {
+        //     device_log("coord: {}", coord);
+        // };
         $for (i, spp_per_dispatch) {
             Var<Ray> ray = generate_ray(pixel * make_float2(1.0f, -1.0f));
             Float3 beta = def(make_float3(1.0f));
@@ -296,17 +302,15 @@ int main(int argc, char *argv[]) {
         radiance /= static_cast<float>(spp_per_dispatch);
         seed_image.write(coord, make_uint4(state));
         $if (any(dsl::isnan(radiance))) { radiance = make_float3(0.0f); };
-        image.write(dispatch_id().xy(), make_float4(clamp(radiance, 0.0f, 30.0f), 1.0f));
+        auto color = make_float4(clamp(radiance, 0.0f, 30.0f), 1.0f);
+        image.write(coord, color);
     };
 
-    auto coro_buffer = device.create_coro_frame_buffer(coro.frame(), 1024u);
-
-    // coroutine::StateMachineCoroScheduler scheduler{device, coro};
     coroutine::WavefrontCoroSchedulerConfig config{
-        .block_size = make_uint3(1024u, 1u, 1u),
         .max_instance_count = 16777216,
+        .soa = false,
     };
-    coroutine::WavefrontCoroScheduler scheduler{device, coro};
+    coroutine::WavefrontCoroScheduler scheduler{device, coro, config};
 
     Kernel2D accumulate_kernel = [&](ImageFloat accum_image, ImageFloat curr_image) noexcept {
         UInt2 p = dispatch_id().xy();

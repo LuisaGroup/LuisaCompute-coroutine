@@ -262,19 +262,10 @@ int main(int argc, char *argv[]) {
         image.write(dispatch_id().xy(), make_float4(clamp(radiance, 0.0f, 30.0f), 1.0f));
     };
 
-    coroutine::Coroutine raytrace_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution, UInt2 pixel_id) noexcept {
-        auto coro_id = make_uint3(pixel_id, 0u);
-        coro(image, seed_image, accel, resolution).set_id(coro_id).await();
-    };
-
-    coroutine::Coroutine raytracing_coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
-        raytrace_coro(image, seed_image, accel, resolution, dispatch_id().xy()).await();
-    };
-
     coroutine::StateMachineCoroSchedulerConfig config{.block_size = make_uint3(8u, 8u, 1u),
                                                       .shared_memory = false,
                                                       .shared_memory_soa = true};
-    coroutine::StateMachineCoroScheduler scheduler{device, raytracing_coro, config};
+    coroutine::StateMachineCoroScheduler scheduler{device, coro, config};
 
     Kernel2D accumulate_kernel = [&](ImageFloat accum_image, ImageFloat curr_image) noexcept {
         UInt2 p = dispatch_id().xy();

@@ -18,7 +18,6 @@ struct WavefrontCoroSchedulerConfig {
     bool soa = true;
     bool sort = true;// use sort for coro token gathering
     bool compact = true;
-    bool debug = false;
     uint hint_range = 0xffff'ffff;
     luisa::vector<luisa::string> hint_fields;
 };
@@ -49,6 +48,7 @@ private:
     bool _host_empty;
     uint _dispatch_counter;
     uint _max_sub_coro;
+    uint _dispatch_size;
     radix_sort::temp_storage _sort_temp_storage;
     radix_sort::instance<> _sort_token;
     radix_sort::instance<Buffer<uint>> _sort_hint;
@@ -59,7 +59,7 @@ private:
 private:
     void _dispatch(Stream &stream, uint3 dispatch_size,
                    compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept override {
-        _config.block_size.x = dispatch_size.x;
+        _dispatch_size = dispatch_size.x * dispatch_size.y * dispatch_size.z;   // TODO
         _dispatch_counter = 0;
         _host_empty = true;
         for (auto i = 0u; i < _max_sub_coro; i++) {
@@ -73,7 +73,7 @@ private:
         }
         stream << _initialize_shader(_resume_count, _config.max_instance_count).dispatch(_config.max_instance_count);
         _args.emplace(std::forward<compute::detail::prototype_to_shader_invocation_t<Args>>(args)...);
-        _await_all(stream);
+        this->_await_all(stream);
     }
 
     template<typename ShaderTytpe, typename... PrefixArgsType>
@@ -90,12 +90,12 @@ private:
                         const WavefrontCoroSchedulerConfig &config) noexcept {
         _config = config;
         const luisa::shared_ptr<const CoroFrameDesc> desc = coroutine.shared_frame();
-        if (config.soa) {
-            _frame_soa = device.create_soa<CoroFrame>(coroutine.shared_frame(), config.max_instance_count);
+        if (_config.soa) {
+            _frame_soa = device.create_soa<CoroFrame>(coroutine.shared_frame(), _config.max_instance_count);
         } else {
-            _frame_buffer = device.create_coro_frame_buffer(coroutine.shared_frame(), config.max_instance_count);
+            _frame_buffer = device.create_coro_frame_buffer(coroutine.shared_frame(), _config.max_instance_count);
         }
-        bool use_sort = config.sort || !config.hint_fields.empty();
+        bool use_sort = _config.sort || !_config.hint_fields.empty();
         _max_sub_coro = coroutine.subroutine_count();
         _resume_index = device.create_buffer<uint>(_config.max_instance_count);
         if (use_sort) {
@@ -111,7 +111,7 @@ private:
         _host_offset.resize(_max_sub_coro);
         _host_count.resize(_max_sub_coro);
         _have_hint.resize(_max_sub_coro, false);
-        for (auto &token : config.hint_fields) {
+        for (auto &token : _config.hint_fields) {
             auto id = coroutine.frame()->designated_fields().find(token);
             if (id != coroutine.frame()->designated_fields().end()) {
                 LUISA_ASSERT(id->second < _max_sub_coro,
@@ -134,7 +134,7 @@ private:
             $if (index > _config.max_instance_count) {
                 device_log("Index out of range {}/{}", index, _config.max_instance_count);
             };
-            if (config.soa) {
+            if (_config.soa) {
                 return _frame_soa->read_field<uint>(index, "target_token") & token_mask;
             } else {
                 CoroFrame frame = _frame_buffer->read(index);
@@ -149,9 +149,9 @@ private:
             return val.read(index);
         };
         Callable get_coro_hint = [&](UInt index, BufferUInt val) {
-            if (!config.hint_fields.empty()) {
+            if (!_config.hint_fields.empty()) {
                 auto id = keep_index(index, val);
-                if (config.soa) {
+                if (_config.soa) {
                     return _frame_soa->read_field<uint>(id, "coro_hint");
                 } else {
                     CoroFrame frame = _frame_buffer->read(id);
@@ -162,21 +162,21 @@ private:
         };
         if (use_sort) {
             _sort_temp_storage = radix_sort::temp_storage(
-                device, _config.max_instance_count, std::max(std::min(config.hint_range, 128u), _max_sub_coro));
+                device, _config.max_instance_count, std::max(std::min(_config.hint_range, 128u), _max_sub_coro));
         }
-        if (config.sort) {
+        if (_config.sort) {
             _sort_token = radix_sort::instance<>(
                 device, _config.max_instance_count, _sort_temp_storage, &get_coro_token, &identical,
                 &get_coro_token, 1, _max_sub_coro);
         }
-        if (!config.hint_fields.empty()) {
-            if (config.hint_range <= 128) {
+        if (!_config.hint_fields.empty()) {
+            if (_config.hint_range <= 128) {
                 _sort_hint = radix_sort::instance<Buffer<uint>>(
                     device, _config.max_instance_count, _sort_temp_storage, &get_coro_hint, &keep_index,
-                    &get_coro_hint, 1, config.hint_range);
+                    &get_coro_hint, 1, _config.hint_range);
             } else {
                 auto highbit = 0;
-                while ((config.hint_range >> highbit) != 1) {
+                while ((_config.hint_range >> highbit) != 1) {
                     highbit++;
                 }
                 _sort_hint = radix_sort::instance<Buffer<uint>>(
@@ -190,23 +190,23 @@ private:
                 $return();
             };
             UInt frame_id;
-            if (!config.compact) {
+            if (!_config.compact) {
                 frame_id = index->read(x);
             } else {
                 frame_id = offset + x;
             }
-            if (!config.sort) {
+            if (!_config.sort) {
                 count.atomic(0u).fetch_add(-1u);
             }
 
             CoroFrame frame = CoroFrame::create(desc, def<uint3>(st_task_id + x, 0, 0));
             coroutine[0u](frame, args...);
-            if (config.soa) {
+            if (_config.soa) {
                 _frame_soa->write(frame_id, frame, coroutine.graph()->node(0u).output_fields());
             } else {
                 _frame_buffer->write(frame_id, frame);
             }
-            if (!config.sort) {
+            if (!_config.sort) {
                 auto nxt = frame.get<uint>("coro_hint") & token_mask;
                 count.atomic(nxt).fetch_add(1u);
             }
@@ -224,23 +224,23 @@ private:
                 };
                 auto frame_id = index.read(x);
                 CoroFrame frame = CoroFrame::create(desc);
-                if (config.soa) {
+                if (_config.soa) {
                     //frame = frame_buffer.read(frame_id);
                     frame = _frame_soa->read(frame_id, coroutine.graph()->node(i).input_fields());
                 } else {
                     frame = _frame_buffer->read(frame_id);
                 }
-                if (!config.sort) {
+                if (!_config.sort) {
                     count.atomic(i).fetch_add(-1u);
                 }
                 coroutine[i](frame, args...);
-                if (config.soa) {
+                if (_config.soa) {
                     _frame_soa->write(frame_id, frame, coroutine.graph()->node(i).output_fields());
                 } else {
                     _frame_buffer->write(frame_id, frame);
                 }
 
-                if (!config.sort) {
+                if (!_config.sort) {
                     auto nxt = frame.get<uint>("target_token") & token_mask;
                     $if (nxt < _max_sub_coro) {
                         count.atomic(nxt).fetch_add(1u);
@@ -266,7 +266,7 @@ private:
         Kernel1D _gather_kernel = [&](BufferUInt index, BufferUInt prefix, UInt n) {
             auto x = dispatch_x();
             auto r_id = def(0u);
-            if (config.soa) {
+            if (_config.soa) {
                 r_id = _frame_soa->read_field<uint>(x, "target_token") & token_mask;
             } else {
                 auto frame = _frame_buffer->read(x);
@@ -282,7 +282,7 @@ private:
             auto x = dispatch_x();
             $if (empty_offset + x < n) {
                 auto token = def(0u);
-                if (config.soa) {
+                if (_config.soa) {
                     token = _frame_soa->read_field<uint>(empty_offset + x, "target_token");
                 } else {
                     CoroFrame frame = _frame_buffer->read(empty_offset + x);
@@ -291,13 +291,13 @@ private:
                 $if ((token & token_mask) != 0u) {
                     auto res = _global_buffer->atomic(0u).fetch_add(1u);
                     auto slot = index.read(res);
-                    if (!config.sort) {
+                    if (!_config.sort) {
                         $while (slot >= empty_offset) {
                             res = _global_buffer->atomic(0u).fetch_add(1u);
                             slot = index.read(res);
                         };
                     }
-                    if (config.soa) {
+                    if (_config.soa) {
                         // TODO: active fields here?
                         auto frame = _frame_soa->read(empty_offset + x);
                         _frame_soa->write(slot, frame);
@@ -305,7 +305,7 @@ private:
                         auto frame = _frame_buffer->read(empty_offset + x);
                         _frame_buffer->write(slot, frame);
                     }
-                    if (config.soa) {
+                    if (_config.soa) {
                         _frame_soa->write_field(empty_offset + x, 0u, "target_token");
                     } else {
                         CoroFrame empty_frame = CoroFrame::create(desc);
@@ -320,7 +320,7 @@ private:
         Kernel1D _initialize_kernel = [&](BufferUInt count, UInt n) {
             auto x = dispatch_x();
             $if (x < n) {
-                if (config.soa) {
+                if (_config.soa) {
                     CoroFrame frame = coroutine.instantiate(dispatch_id());
                     _frame_soa->write(x, frame, std::array{0u, 1u});
                 } else {
@@ -332,6 +332,8 @@ private:
                 count.write(x, ite(x == 0u, _config.max_instance_count, 0u));
             };
         };
+        _initialize_shader = device.compile(_initialize_kernel);
+
         Kernel1D clear = [&](BufferUInt buffer, UInt n) {
             auto x = dispatch_x();
             $if (x < n) {
@@ -339,19 +341,18 @@ private:
             };
         };
         _clear_shader = device.compile(clear);
-        _initialize_shader = device.compile(_initialize_kernel);
     }
 
     [[nodiscard]] bool _all_dispatched() const noexcept {
-        return _dispatch_counter == _config.max_instance_count;
+        return _dispatch_counter == _dispatch_size;
     }
     [[nodiscard]] bool _all_done() const noexcept {
-        return _host_empty && _all_dispatched();
+        return this->_all_dispatched() && _host_empty;
     }
 
     void _await_all(Stream &stream) noexcept {
-        while (!_all_done()) {
-            _await_step(stream);
+        while (!this->_all_done()) {
+            this->_await_step(stream);
         }
     }
     void _await_step(Stream &stream) noexcept {
@@ -370,8 +371,8 @@ private:
                    << host_update
                    << synchronize();
 
-            if (_host_count[0] > _config.max_instance_count * (0.5) && !_all_dispatched()) {
-                auto gen_count = std::min(_config.block_size.x - _dispatch_counter, _host_count[0]);
+            if (_host_count[0] > _config.max_instance_count * 0.5f && !this->_all_dispatched()) {
+                auto gen_count = std::min(_dispatch_size - _dispatch_counter, _host_count[0]);
                 if (_host_count[0] != _config.max_instance_count && _config.compact) {
                     stream << _clear_shader(_global_buffer, 1).dispatch(1u);
                     stream << _compact_shader(_resume_index, _config.max_instance_count - _host_count[0], _config.max_instance_count).dispatch(_host_count[0]);
@@ -404,7 +405,7 @@ private:
             stream << _count_prefix_shader(_resume_count, _resume_offset, _max_sub_coro).dispatch(1u);
             stream << _gather_shader(_resume_index, _resume_offset, _config.max_instance_count).dispatch(_config.max_instance_count);
             if (_host_count[0] > _config.max_instance_count / 2 && !_all_dispatched()) {
-                auto gen_count = std::min(_config.block_size.x - _dispatch_counter, _host_count[0]);
+                auto gen_count = std::min(_dispatch_size - _dispatch_counter, _host_count[0]);
                 if (_host_count[0] != _config.max_instance_count && _config.compact) {
                     stream << _clear_shader(_global_buffer, 1).dispatch(1u);
                     stream

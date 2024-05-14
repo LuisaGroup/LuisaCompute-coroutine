@@ -302,6 +302,10 @@ int main(int argc, char *argv[]) {
     auto coro_buffer = device.create_coro_frame_buffer(coro.frame(), 1024u);
 
     // coroutine::StateMachineCoroScheduler scheduler{device, coro};
+    coroutine::WavefrontCoroSchedulerConfig config{
+        .block_size = make_uint3(1024u, 1u, 1u),
+        .max_instance_count = 16777216,
+    };
     coroutine::WavefrontCoroScheduler scheduler{device, coro};
 
     Kernel2D accumulate_kernel = [&](ImageFloat accum_image, ImageFloat curr_image) noexcept {

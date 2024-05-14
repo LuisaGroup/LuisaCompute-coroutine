@@ -18,81 +18,8 @@
 namespace luisa::compute {
 
 namespace detail {
-
-template<typename SOAOrView>
-class CoroFrameSOAExprProxy {
-private:
-    SOAOrView _soa;
-
-public:
-    LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(CoroFrameSOAExprProxy)
-
-public:
-    /// Read field with field_index at index
-    template<typename V, typename I>
-        requires is_integral_expr_v<I>
-    [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
-        return Expr<SOAOrView>{_soa}.template read_field<V>(std::forward<I>(index), field_index);
-    }
-    /// Read field named with "name" at index
-    template<typename V, typename I>
-        requires is_integral_expr_v<I>
-    [[nodiscard]] Var<V> read_field(I &&index, luisa::string_view name) const noexcept {
-        return read_field<V>(std::forward<I>(index), _soa.desc()->designated_field(name));
-    }
-
-    /// Write field with field_index at index
-    template<typename I, typename V>
-        requires is_integral_expr_v<I>
-    void write_field(I &&index, V &&value, uint field_index) const noexcept {
-        Expr<SOAOrView>{_soa}.write_field(std::forward<I>(index),
-                                          std::forward<V>(value),
-                                          field_index);
-    }
-    /// Write field named with "name" at index
-    template<typename I, typename V>
-        requires is_integral_expr_v<I>
-    void write_field(I &&index, V &&value, luisa::string_view name) const noexcept {
-        write_field(std::forward<I>(index),
-                    std::forward<V>(value),
-                    _soa.desc()->designated_field(name));
-    }
-
-    /// Read index
-    template<typename I>
-        requires is_integral_expr_v<I>
-    [[nodiscard]] auto read(I &&index) const noexcept {
-        return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::nullopt);
-    }
-    /// Read index with active fields
-    template<typename I>
-        requires is_integral_expr_v<I>
-    [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
-        return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::make_optional(active_fields));
-    }
-
-    /// Write index
-    template<typename I, typename V>
-        requires is_integral_expr_v<I>
-    void write(I &&index, V &&value) const noexcept {
-        Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
-                                    std::forward<V>(value),
-                                    luisa::nullopt);
-    }
-    /// Write index with active fields
-    template<typename I, typename V>
-        requires is_integral_expr_v<I>
-    void write(I &&index, V &&value, luisa::span<const uint> active_fields) const noexcept {
-        Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
-                                    std::forward<V>(value),
-                                    luisa::make_optional(active_fields));
-    }
-
-    [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
-        return Expr<SOAOrView>{_soa}.device_address();
-    }
-};
-
+template<typename T>
+class SOAExprProxy;
 }// namespace detail
 
 template<typename T>
@@ -148,11 +75,12 @@ public:
     [[nodiscard]] auto handle() const noexcept { return _buffer_view.handle(); }
     [[nodiscard]] auto offset_elements() const noexcept { return _offset_elements; }
     [[nodiscard]] auto size_elements() const noexcept { return _size_elements; }
+    [[nodiscard]] auto buffer_offset() const noexcept { return _buffer_view.offset(); }
     [[nodiscard]] auto size_bytes() const noexcept { return _buffer_view.size_bytes(); }
     [[nodiscard]] auto field_offsets() const noexcept { return _field_offsets; }
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
-        return reinterpret_cast<const detail::CoroFrameSOAExprProxy<SOAView<coroutine::CoroFrame>> *>(this);
+        return reinterpret_cast<const detail::SOAExprProxy<SOAView<coroutine::CoroFrame>> *>(this);
     }
 };
 
@@ -210,7 +138,7 @@ public:
     }
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
-        return reinterpret_cast<const detail::CoroFrameSOAExprProxy<SOA<coroutine::CoroFrame>> *>(this);
+        return reinterpret_cast<const detail::SOAExprProxy<SOA<coroutine::CoroFrame>> *>(this);
     }
 };
 
@@ -227,8 +155,8 @@ public:
         : SOABase{soa_view.desc()->shared_from_this(), soa_view.field_offsets(),
                   soa_view.offset_elements(), soa_view.size_elements()},
           _expression{detail::FunctionBuilder::current()->buffer_binding(
-              Type::buffer(Type::of<ByteBuffer>()), soa_view.handle(),
-              0u, soa_view.size_bytes())} {}
+              Type::of<ByteBuffer>(), soa_view.handle(),
+              soa_view.buffer_offset(), soa_view.size_bytes())} {}
 
     /// Construct from SOA<coroutine::CoroFrame>. Will call buffer_binding() to bind buffer
     Expr(const SOA<coroutine::CoroFrame> &soa) noexcept
@@ -319,5 +247,158 @@ template<>
 struct Expr<SOAView<coroutine::CoroFrame>> : public Expr<SOA<coroutine::CoroFrame>> {
     using Expr<SOA<coroutine::CoroFrame>>::Expr;
 };
+
+namespace detail {
+
+template<template<typename T> typename B>
+class SOAExprProxy<B<coroutine::CoroFrame>> {
+private:
+    using SOAOrView = B<coroutine::CoroFrame>;
+    SOAOrView _soa;
+
+public:
+    LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(SOAExprProxy)
+
+public:
+    /// Read field with field_index at index
+    template<typename V, typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
+        return Expr<SOAOrView>{_soa}.template read_field<V>(std::forward<I>(index), field_index);
+    }
+    /// Read field named with "name" at index
+    template<typename V, typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] Var<V> read_field(I &&index, luisa::string_view name) const noexcept {
+        return read_field<V>(std::forward<I>(index), _soa.desc()->designated_field(name));
+    }
+
+    /// Write field with field_index at index
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write_field(I &&index, V &&value, uint field_index) const noexcept {
+        Expr<SOAOrView>{_soa}.write_field(std::forward<I>(index),
+                                          std::forward<V>(value),
+                                          field_index);
+    }
+    /// Write field named with "name" at index
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write_field(I &&index, V &&value, luisa::string_view name) const noexcept {
+        write_field(std::forward<I>(index),
+                    std::forward<V>(value),
+                    _soa.desc()->designated_field(name));
+    }
+
+    /// Read index
+    template<typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] auto read(I &&index) const noexcept {
+        return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::nullopt);
+    }
+    /// Read index with active fields
+    template<typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
+        return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::make_optional(active_fields));
+    }
+
+    /// Write index
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write(I &&index, V &&value) const noexcept {
+        Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
+                                    std::forward<V>(value),
+                                    luisa::nullopt);
+    }
+    /// Write index with active fields
+    template<typename I, typename V>
+        requires is_integral_expr_v<I>
+    void write(I &&index, V &&value, luisa::span<const uint> active_fields) const noexcept {
+        Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
+                                    std::forward<V>(value),
+                                    luisa::make_optional(active_fields));
+    }
+
+    [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
+        return Expr<SOAOrView>{_soa}.device_address();
+    }
+};
+
+// template<typename SOAOrView>
+// class SOAExprProxy<B<coroutine::CoroFrame>> {
+// private:
+//     SOAOrView _soa;
+//
+// public:
+//     LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(SOAExprProxy<B<coroutine::CoroFrame>>)
+//
+// public:
+//     /// Read field with field_index at index
+//     template<typename V, typename I>
+//         requires is_integral_expr_v<I>
+//     [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
+//         return Expr<SOAOrView>{_soa}.template read_field<V>(std::forward<I>(index), field_index);
+//     }
+//     /// Read field named with "name" at index
+//     template<typename V, typename I>
+//         requires is_integral_expr_v<I>
+//     [[nodiscard]] Var<V> read_field(I &&index, luisa::string_view name) const noexcept {
+//         return read_field<V>(std::forward<I>(index), _soa.desc()->designated_field(name));
+//     }
+//
+//     /// Write field with field_index at index
+//     template<typename I, typename V>
+//         requires is_integral_expr_v<I>
+//     void write_field(I &&index, V &&value, uint field_index) const noexcept {
+//         Expr<SOAOrView>{_soa}.write_field(std::forward<I>(index),
+//                                           std::forward<V>(value),
+//                                           field_index);
+//     }
+//     /// Write field named with "name" at index
+//     template<typename I, typename V>
+//         requires is_integral_expr_v<I>
+//     void write_field(I &&index, V &&value, luisa::string_view name) const noexcept {
+//         write_field(std::forward<I>(index),
+//                     std::forward<V>(value),
+//                     _soa.desc()->designated_field(name));
+//     }
+//
+//     /// Read index
+//     template<typename I>
+//         requires is_integral_expr_v<I>
+//     [[nodiscard]] auto read(I &&index) const noexcept {
+//         return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::nullopt);
+//     }
+//     /// Read index with active fields
+//     template<typename I>
+//         requires is_integral_expr_v<I>
+//     [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
+//         return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::make_optional(active_fields));
+//     }
+//
+//     /// Write index
+//     template<typename I, typename V>
+//         requires is_integral_expr_v<I>
+//     void write(I &&index, V &&value) const noexcept {
+//         Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
+//                                     std::forward<V>(value),
+//                                     luisa::nullopt);
+//     }
+//     /// Write index with active fields
+//     template<typename I, typename V>
+//         requires is_integral_expr_v<I>
+//     void write(I &&index, V &&value, luisa::span<const uint> active_fields) const noexcept {
+//         Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
+//                                     std::forward<V>(value),
+//                                     luisa::make_optional(active_fields));
+//     }
+//
+//     [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
+//         return Expr<SOAOrView>{_soa}.device_address();
+//     }
+// };
+
+}// namespace detail
 
 }// namespace luisa::compute

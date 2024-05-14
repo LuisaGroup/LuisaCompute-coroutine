@@ -59,7 +59,7 @@ private:
 private:
     void _dispatch(Stream &stream, uint3 dispatch_size,
                    compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept override {
-        _dispatch_size = dispatch_size.x * dispatch_size.y * dispatch_size.z;   // TODO
+        _dispatch_size = dispatch_size.x * dispatch_size.y * dispatch_size.z;// TODO
         _dispatch_counter = 0;
         _host_empty = true;
         for (auto i = 0u; i < _max_sub_coro; i++) {
@@ -89,7 +89,6 @@ private:
     void _create_shader(Device &device, const Coroutine<void(Args...)> &coroutine,
                         const WavefrontCoroSchedulerConfig &config) noexcept {
         _config = config;
-        const luisa::shared_ptr<const CoroFrameDesc> desc = coroutine.shared_frame();
         if (_config.soa) {
             _frame_soa = device.create_soa<CoroFrame>(coroutine.shared_frame(), _config.max_instance_count);
         } else {
@@ -199,7 +198,7 @@ private:
                 count.atomic(0u).fetch_add(-1u);
             }
 
-            CoroFrame frame = CoroFrame::create(desc, def<uint3>(st_task_id + x, 0, 0));
+            CoroFrame frame = coroutine.instantiate(def<uint3>(st_task_id + x, 0, 0));
             coroutine[0u](frame, args...);
             if (_config.soa) {
                 _frame_soa->write(frame_id, frame, coroutine.graph()->node(0u).output_fields());
@@ -223,7 +222,7 @@ private:
                     $return();
                 };
                 auto frame_id = index.read(x);
-                CoroFrame frame = CoroFrame::create(desc);
+                CoroFrame frame = coroutine.instantiate();
                 if (_config.soa) {
                     //frame = frame_buffer.read(frame_id);
                     frame = _frame_soa->read(frame_id, coroutine.graph()->node(i).input_fields());
@@ -265,7 +264,7 @@ private:
 
         Kernel1D _gather_kernel = [&](BufferUInt index, BufferUInt prefix, UInt n) {
             auto x = dispatch_x();
-            auto r_id = def(0u);
+            UInt r_id;
             if (_config.soa) {
                 r_id = _frame_soa->read_field<uint>(x, "target_token") & token_mask;
             } else {
@@ -281,7 +280,7 @@ private:
             //_global_buffer->write(0u, 0u);
             auto x = dispatch_x();
             $if (empty_offset + x < n) {
-                auto token = def(0u);
+                UInt token;
                 if (_config.soa) {
                     token = _frame_soa->read_field<uint>(empty_offset + x, "target_token");
                 } else {
@@ -308,7 +307,7 @@ private:
                     if (_config.soa) {
                         _frame_soa->write_field(empty_offset + x, 0u, "target_token");
                     } else {
-                        CoroFrame empty_frame = CoroFrame::create(desc);
+                        CoroFrame empty_frame = coroutine.instantiate();
                         _frame_buffer->write(empty_offset + x, empty_frame);
                     }
                 };
@@ -321,10 +320,10 @@ private:
             auto x = dispatch_x();
             $if (x < n) {
                 if (_config.soa) {
-                    CoroFrame frame = coroutine.instantiate(dispatch_id());
+                    CoroFrame frame = coroutine.instantiate();
                     _frame_soa->write(x, frame, std::array{0u, 1u});
                 } else {
-                    CoroFrame frame = coroutine.instantiate(dispatch_id());
+                    CoroFrame frame = coroutine.instantiate();
                     _frame_buffer->write(x, frame);
                 }
             };

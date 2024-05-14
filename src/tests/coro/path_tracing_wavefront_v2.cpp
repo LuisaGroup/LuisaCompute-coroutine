@@ -306,7 +306,7 @@ int main(int argc, char *argv[]) {
 
     coroutine::WavefrontCoroSchedulerConfig config{
         .max_instance_count = 16777216,
-        .soa = false,
+        .soa = true,
     };
     coroutine::WavefrontCoroScheduler scheduler{device, coro, config};
 

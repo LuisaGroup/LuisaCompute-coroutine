@@ -24,7 +24,6 @@ public:
     using Config = PersistentThreadsCoroSchedulerConfig;
 
 private:
-    Coro _coro;
     Config _config;
     Shader1D<Buffer<uint>, uint, uint2, Args...> _pt_shader;
     Shader1D<Buffer<uint>> _clear_shader;
@@ -33,21 +32,21 @@ private:
     Shader1D<uint> _initialize_shader;
 
 private:
-    void _prepare(Device &device) noexcept {
+    void _prepare(Device &device, const Coro &coro) noexcept {
         _global = device.create_buffer<uint>(1);
         auto q_fac = 1u;
-        auto g_fac = std::max<uint>(_coro.subroutine_count() - q_fac, 0);
+        auto g_fac = std::max<uint>(coro.subroutine_count() - q_fac, 0);
         auto global_queue_size = _config.block_size * g_fac;
         if (_config.global_ext_memory) {
             auto global_ext_size = _config.thread_count * g_fac;
-            _global_frames = device.create_buffer<CoroFrame>(global_ext_size);
+            _global_frames = device.create_buffer<CoroFrame>(coro.shared_frame(), global_ext_size);
         }
-        Kernel1D main_kernel = [&](BufferUInt global, UInt dispatch_size, UInt2 dispatch_shape, Var<Args>... args) noexcept {
+        Kernel1D<Buffer<uint>, uint, uint2, Args...> main_kernel = [&](BufferUInt global, UInt dispatch_size, UInt2 dispatch_shape, Var<Args>... args) noexcept {
             set_block_size(_config.block_size, 1u, 1u);
             auto shared_queue_size = _config.block_size * q_fac;
-            Shared<CoroFrame> frames{_coro.shared_frame(), shared_queue_size, _config.shared_memory_soa};
+            Shared<CoroFrame> frames{coro.shared_frame(), shared_queue_size, _config.shared_memory_soa};
             Shared<uint> path_id{shared_queue_size};
-            Shared<uint> work_counter{_coro.subroutine_count()};
+            Shared<uint> work_counter{coro.subroutine_count()};
             Shared<uint> work_offset{2u};
             Shared<uint> all_token{_config.global_ext_memory ?
                                        shared_queue_size + global_queue_size :
@@ -57,13 +56,13 @@ private:
             for (auto index : dsl::dynamic_range(q_fac)) {
                 auto s = index * _config.block_size + thread_x();
                 all_token[s] = 0u;
-                frames.write(s, _coro.instantiate());
+                frames.write(s, coro.instantiate());
             }
             for (auto index : dsl::dynamic_range(g_fac)) {
                 auto s = index * _config.block_size + thread_x();
                 all_token[shared_queue_size + s] = 0u;
             }
-            if_(thread_x() < _coro.subroutine_count(), [&] {
+            if_(thread_x() < coro.subroutine_count(), [&] {
                 if_(thread_x() == 0u, [&] {
                     work_counter[thread_x()] =
                         _config.global_ext_memory ?
@@ -100,7 +99,7 @@ private:
                     });
                 });
                 sync_block();
-                if_(thread_x() < _coro.subroutine_count(), [&] {//get max
+                if_(thread_x() < coro.subroutine_count(), [&] {//get max
                     if_(workload[0] < workload[1] | thread_x() != 0u, [&] {
                         if_(work_counter[thread_x()] != 0, [&] {
                             rem_local[0] = 1u;
@@ -109,7 +108,7 @@ private:
                     });
                 });
                 sync_block();
-                if_(thread_x() < _coro.subroutine_count(), [&] {//get argmax
+                if_(thread_x() < coro.subroutine_count(), [&] {//get argmax
                     if_(work_stat[0] == work_counter[thread_x()] & (workload[0] < workload[1] | thread_x() != 0u), [&] {
                         work_stat[1] = thread_x();
                     });
@@ -198,8 +197,8 @@ private:
                             auto index_xy = global_index % image_size;
                             auto index_x = index_xy % dispatch_shape.x;
                             auto index_y = index_xy / dispatch_shape.x;
-                            auto frame = _coro.instantiate(make_uint3(index_x, index_y, index_z));
-                            _coro.entry()(frame, args...);
+                            auto frame = coro.instantiate(make_uint3(index_x, index_y, index_z));
+                            coro.entry()(frame, args...);
                             auto next = frame.target_token;
                             frames.write(pid, frame);
                             all_token[pid] = next;
@@ -207,11 +206,11 @@ private:
                             workload.atomic(0).fetch_add(1u);
                         });
                     });
-                    for (auto i = 1u; i < _coro.subroutine_count(); i++) {
+                    for (auto i = 1u; i < coro.subroutine_count(); i++) {
                         std::move(switch_stmt).case_(i, [&] {
                             work_counter.atomic(i).fetch_sub(1u);
                             auto frame = frames.read(pid);
-                            _coro[i](frame, args...);
+                            coro[i](frame, args...);
                             auto next = frame.target_token;
                             frames.write(pid, frame);
                             all_token[pid] = next;
@@ -220,27 +219,29 @@ private:
                     }
                 });
                 sync_block();
+            });
 #ifndef NDEBUG
-                if_(count >= count_limit, [&] {
-                    device_log("block_id{},thread_id {}, loop not break! local:{}, global:{}", block_x(), thread_x(), rem_local[0], rem_global[0]);
-                    if_(thread_x() < _coro.subroutine_count(), [&] {
-                        device_log("work rem: id {}, size {}", thread_x(), work_counter[thread_x()]);
-                    });
+            if_(count >= count_limit, [&] {
+                device_log("block_id{},thread_id {}, loop not break! local:{}, global:{}", block_x(), thread_x(), rem_local[0], rem_global[0]);
+                if_(thread_x() < coro.subroutine_count(), [&] {
+                    device_log("work rem: id {}, size {}", thread_x(), work_counter[thread_x()]);
                 });
+            });
 #endif
-            });
-            _pt_shader = device.compile(main_kernel);
-            _clear_shader = device.compile<1>([](BufferUInt global) {
-                global->write(dispatch_x(), 0u);
-            });
-            _initialize_shader = device.compile<1>([&](UInt n) noexcept {
-                auto x = dispatch_x();
-                $if (x < n) {
-                    auto frame = _coro.instantiate();
-                    _global_frames->write(x, frame);
-                };
-            });
         };
+        _pt_shader = device.compile(main_kernel);
+        _clear_shader = device.compile<1>([](BufferUInt global) {
+            global->write(dispatch_x(), 0u);
+        });
+        if (_config.global_ext_memory) {
+            _initialize_shader = device.compile<1>([&](UInt n) noexcept {
+                    auto x = dispatch_x();
+                    $if (x < n) {
+                        auto frame = coro.instantiate();
+                        _global_frames->write(x, frame);
+                    };
+            });
+        }
     }
 
     void _dispatch(Stream &stream, uint3 dispatch_size,
@@ -257,9 +258,9 @@ private:
 
 public:
     PersistentThreadsCoroScheduler(Device &device, const Coro &coro, const Config &config) noexcept
-        : _coro{coro}, _config{config} {
+        : _config{config} {
         _config.thread_count = luisa::align(_config.thread_count, _config.block_size);
-        _prepare(device);
+        _prepare(device, coro);
     }
     PersistentThreadsCoroScheduler(Device &device, const Coro &coro) noexcept
         : PersistentThreadsCoroScheduler{device, coro, Config{}} {}

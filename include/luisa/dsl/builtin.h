@@ -1779,14 +1779,6 @@ template<typename T>
     return def<uint>(detail::FunctionBuilder::current()->coro_token());
 }
 
-template<typename Ret, typename T, typename S>
-inline auto read_promise(T &&t, S &&name) noexcept {
-    return def<Ret>(detail::FunctionBuilder::current()->read_promise_(
-        Type::of<Ret>(),
-        detail::extract_expression(std::forward<T>(t)),
-        std::forward<S>(name)));
-}
-
 template<typename T>
 [[nodiscard]] inline auto grad(const Local<T> &x) noexcept {
     auto b = detail::FunctionBuilder::current();

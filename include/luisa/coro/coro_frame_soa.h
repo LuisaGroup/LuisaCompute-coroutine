@@ -96,7 +96,7 @@ public:
         auto fields = _desc->type()->members();
         _field_offsets->reserve(fields.size());
         for (const auto field_type : fields) {
-            auto alignment = std::max(field_type->alignment(), 4ull);
+            auto alignment = std::max<size_t>(field_type->alignment(), 4u);
             size_bytes = (size_bytes + alignment - 1u) & ~(alignment - 1u);
             _field_offsets->emplace_back(size_bytes);
             auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
@@ -168,7 +168,7 @@ public:
         auto fb = detail::FunctionBuilder::current();
         auto field_type = _desc->type()->members()[field_index];
         auto offset = _field_offsets->at(field_index);
-        auto alignment = std::max(field_type->alignment(), 4ull);
+        auto alignment = std::max<size_t>(field_type->alignment(), 4u);
         auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
         auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
         auto f = fb->local(field_type);
@@ -186,7 +186,7 @@ public:
         auto fb = detail::FunctionBuilder::current();
         auto field_type = _desc->type()->members()[field_index];
         auto offset = _field_offsets->at(field_index);
-        auto alignment = std::max(field_type->alignment(), 4ull);
+        auto alignment = std::max<size_t>(field_type->alignment(), 4u);
         auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
         auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
         fb->call(CallOp::BYTE_BUFFER_WRITE,
@@ -206,7 +206,7 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto alignment = std::max(field_type->alignment(), 4ull);
+            auto alignment = std::max<size_t>(field_type->alignment(), 4u);
             auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
             auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
             auto s = fb->call(
@@ -228,14 +228,12 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto alignment = std::max(field_type->alignment(), 4ull);
+            auto alignment = std::max<size_t>(field_type->alignment(), 4u);
             auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
             auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
             auto f = fb->member(field_type, frame.expression(), i);
             fb->call(CallOp::BYTE_BUFFER_WRITE,
-                     {_expression,
-                      detail::extract_expression(offset_var),
-                      f});
+                     {_expression, detail::extract_expression(offset_var), f});
         }
     }
 

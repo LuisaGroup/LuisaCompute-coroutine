@@ -37,23 +37,23 @@ private:
     Shader3D<Args...> _shader;
 
 private:
-    void _create_shader(Device &device, const Coro &coro, const Config &config) noexcept {
-        Kernel3D kernel = [&coro, &config](Var<Args>... args) noexcept {
+    void _create_shader(Device &device, const Coro &coroutine, const Config &config) noexcept {
+        Kernel3D kernel = [&coroutine, &config](Var<Args>... args) noexcept {
             set_block_size(config.block_size);
             if (config.shared_memory) {
                 auto n = config.block_size.x * config.block_size.y * config.block_size.z;
-                Shared<CoroFrame> sm{coro.shared_frame(), n, config.shared_memory_soa, std::array{0u, 1u}};
+                Shared<CoroFrame> sm{coroutine.shared_frame(), n, config.shared_memory_soa, std::array{0u, 1u}};
                 detail::coro_scheduler_state_machine_smem_impl(
-                    sm, coro.graph(),
+                    sm, coroutine.graph(),
                     [&](CoroToken token, CoroFrame &frame) noexcept {
-                        coro.subroutine(token)(frame, args...);
+                        coroutine.subroutine(token)(frame, args...);
                     });
             } else {
-                auto frame = coro.instantiate(dispatch_id());
+                auto frame = coroutine.instantiate(dispatch_id());
                 detail::coro_scheduler_state_machine_impl(
-                    frame, coro.subroutine_count(),
+                    frame, coroutine.subroutine_count(),
                     [&](CoroToken token) noexcept {
-                        coro.subroutine(token)(frame, args...);
+                        coroutine.subroutine(token)(frame, args...);
                     });
             }
         };

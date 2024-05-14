@@ -810,18 +810,21 @@ void Type::update_from(const Type *type) {
 }
 
 size_t Type::add_member(const luisa::string &name) noexcept {
+    LUISA_ERROR_WITH_LOCATION("Deprecated.");
     LUISA_ASSERT(name != "coro_id" && name != "coro_token",
                  "{} is a reserved name for coroframe type.", name);
     return detail::_add_member(this, name);
 }
 
 void Type::set_member_name(size_t index, luisa::string name) noexcept {
+    LUISA_ERROR_WITH_LOCATION("Deprecated.");
     LUISA_ASSERT(name != "coro_id" && name != "coro_token",
                  "{} is a reserved name for coroframe type.", name);
     detail::_set_member_name(this, index, std::move(name));
 }
 
 size_t Type::member(luisa::string_view name) const noexcept {
+    LUISA_ERROR_WITH_LOCATION("Deprecated.");
     if (name == "coro_id") return 0;
     if (name == "coro_token") return 1u;
     auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;

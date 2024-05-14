@@ -67,4 +67,4 @@ Var<bool> CoroFrame::is_terminated() const noexcept {
     return (target_token & coro_token_terminal) != 0u;
 }
 
-}// namespace luisa::compute::coro_v2
+}// namespace luisa::compute::coroutine

@@ -141,7 +141,7 @@ struct WavefrontCoroDispatcherConfig {
     bool sort = true;//use sort for coro token gathering
     bool compact = true;
     bool debug = false;
-    uint hint_range=0xffff'ffff;
+    uint hint_range = 0xffff'ffff;
     luisa::vector<luisa::string> hint_fields;
 };
 
@@ -187,8 +187,8 @@ private:
     compute::Buffer<uint> _temp_index;
     Stream &_stream;
 public:
-    bool all_dispatched() const noexcept;
-    bool all_done() const noexcept;
+    [[nodiscard]] bool all_dispatched() const noexcept;
+    [[nodiscard]] bool all_done() const noexcept;
 
     WavefrontCoroDispatcher(Coroutine<void(FrameRef, Args...)> *coroutine,
                             Device &device, Stream &stream,
@@ -205,7 +205,7 @@ public:
             hint_token = {};
             LUISA_INFO("Using wavefront dispatcher without cuda, the sorting will be disabled!");
         }*/
-        bool use_sort = sort_base_gather||!config.hint_fields.empty();
+        bool use_sort = sort_base_gather || !config.hint_fields.empty();
         uint max_sub_coro = coroutine->suspend_count() + 1;
         _max_sub_coro = max_sub_coro;
         _resume_index = device.create_buffer<uint>(_max_frame_count);
@@ -228,10 +228,9 @@ public:
         for (auto &token : config.hint_fields) {
             auto id = coroutine->coro_tokens().find(token);
             if (id != coroutine->coro_tokens().end()) {
-                LUISA_ASSERT(id->second<max_sub_coro, "coroutine token {} of id {} out of range {}", token,id->second,max_sub_coro);
+                LUISA_ASSERT(id->second < max_sub_coro, "coroutine token {} of id {} out of range {}", token, id->second, max_sub_coro);
                 _have_hint[id->second] = true;
-            }
-            else
+            } else
                 LUISA_WARNING("coroutine token {} not found, hint disabled", token);
         }
         for (auto i = 0u; i < max_sub_coro; i++) {
@@ -254,34 +253,33 @@ public:
             return index;
         };
 
-        Callable keep_index = [&](UInt index,BufferUInt val) {
+        Callable keep_index = [&](UInt index, BufferUInt val) {
             return val.read(index);
         };
-        Callable get_coro_hint = [&](UInt index,BufferUInt val) {
+        Callable get_coro_hint = [&](UInt index, BufferUInt val) {
             if (!config.hint_fields.empty()) {
-                auto id = keep_index(index,val);
+                auto id = keep_index(index, val);
                 auto frame = _frame->read(id);
-                auto x=read_promise<uint>(frame, "coro_hint");
+                auto x = read_promise<uint>(frame, "coro_hint");
                 return x;
             } else {
                 return def<uint>(0u);
             }
         };
         if (use_sort) {
-            _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(std::min(config.hint_range,128u), max_sub_coro));
+            _sort_temp_storage = radix_sort::temp_storage(device, _max_frame_count, std::max(std::min(config.hint_range, 128u), max_sub_coro));
         }
         if (sort_base_gather) {
             _sort_token = radix_sort::instance<>(device, _max_frame_count, _sort_temp_storage,
-                                     &get_coro_token, &identical, &get_coro_token, 1, max_sub_coro);
+                                                 &get_coro_token, &identical, &get_coro_token, 1, max_sub_coro);
         }
         if (!config.hint_fields.empty()) {
-            if(config.hint_range<=128){
+            if (config.hint_range <= 128) {
                 _sort_hint = radix_sort::instance<Buffer<uint>>(device, _max_frame_count, _sort_temp_storage,
-                                                    &get_coro_hint, &keep_index, &get_coro_hint, 1, config.hint_range);
-            }
-            else{
-                auto highbit=0;
-                while((config.hint_range>>highbit)!=1){
+                                                                &get_coro_hint, &keep_index, &get_coro_hint, 1, config.hint_range);
+            } else {
+                auto highbit = 0;
+                while ((config.hint_range >> highbit) != 1) {
                     highbit++;
                 }
                 _sort_hint = radix_sort::instance<Buffer<uint>>(device, _max_frame_count, _sort_temp_storage,
@@ -528,19 +526,19 @@ public:
                              Device &device, Stream &stream,
                              const PersistentCoroDispatcherConfig &config) noexcept
         : CoroDispatcherBase<void(FrameRef, Args...)>{coroutine, device},
-          _max_thread_count{(config.max_thread_count+config.block_size-1)/config.block_size*config.block_size},
+          _max_thread_count{(config.max_thread_count + config.block_size - 1) / config.block_size * config.block_size},
           _block_size{config.block_size},
           _debug{config.debug}, _stream{stream} {
-        auto use_global=config.global;
+        auto use_global = config.global;
         _global = device.create_buffer<uint>(1);
         auto q_fac = 1u;
         uint max_sub_coro = coroutine->suspend_count() + 1;
-        auto g_fac=(uint)std::max((int)(max_sub_coro-q_fac),0);
-        auto global_queue_size= config.block_size * g_fac;
-        _global_size=0;
-        if(use_global) {
-            _global_frame = device.create_buffer<FrameType>(_max_thread_count*g_fac);
-            _global_size = _max_thread_count*g_fac;
+        auto g_fac = (uint)std::max((int)(max_sub_coro - q_fac), 0);
+        auto global_queue_size = config.block_size * g_fac;
+        _global_size = 0;
+        if (use_global) {
+            _global_frame = device.create_buffer<FrameType>(_max_thread_count * g_fac);
+            _global_size = _max_thread_count * g_fac;
         }
         _max_sub_coro = max_sub_coro;
         _dispatched = false;
@@ -552,7 +550,7 @@ public:
             Shared<uint> path_id{shared_queue_size};
             Shared<uint> work_counter{max_sub_coro};
             Shared<uint> work_offset{2u};
-            Shared<uint> all_token{use_global?(shared_queue_size+global_queue_size):shared_queue_size};
+            Shared<uint> all_token{use_global ? (shared_queue_size + global_queue_size) : shared_queue_size};
             Shared<uint> workload{2};
             Shared<uint> work_stat{2};//0 max_count,1 max_id
             //Shared<uint> tag_counter{use_tag_sort ? pipeline().surfaces().size() : 0};
@@ -562,11 +560,11 @@ public:
                 initialize_coroframe(frames[index * config.block_size + thread_x()], def<uint3>(0, 0, 0));
             };
             $for (index, 0u, g_fac) {
-                all_token[shared_queue_size+index * config.block_size + thread_x()] = 0u;
+                all_token[shared_queue_size + index * config.block_size + thread_x()] = 0u;
             };
             $if (thread_x() < max_sub_coro) {
                 $if (thread_x() == 0) {
-                    work_counter[thread_x()] = use_global?(shared_queue_size+global_queue_size):shared_queue_size;
+                    work_counter[thread_x()] = use_global ? (shared_queue_size + global_queue_size) : shared_queue_size;
                 }
                 $else {
                     work_counter[thread_x()] = 0u;
@@ -618,7 +616,7 @@ public:
                 work_offset[0] = 0;
                 work_offset[1] = 0;
                 sync_block();
-                if(!use_global) {
+                if (!use_global) {
                     $for (index, 0u, q_fac) {//collect indices
                         auto frame_token = all_token[index * config.block_size + thread_x()];
                         $if (frame_token == work_stat[1]) {
@@ -626,8 +624,8 @@ public:
                             path_id[id] = index * config.block_size + thread_x();
                         };
                     };
-                }else{
-                    $for(index, 0u, q_fac) {//collect switch out indices
+                } else {
+                    $for (index, 0u, q_fac) {//collect switch out indices
                         auto frame_token = all_token[index * config.block_size + thread_x()];
                         $if (frame_token != work_stat[1]) {
                             auto id = work_offset.atomic(0).fetch_add(1u);
@@ -635,37 +633,36 @@ public:
                         };
                     };
                     sync_block();
-                    $if(shared_queue_size - work_offset[0] < config.block_size) {//no enough work
-                        $for(index, 0u, g_fac) {                           //swap frames
+                    $if (shared_queue_size - work_offset[0] < config.block_size) {//no enough work
+                        $for (index, 0u, g_fac) {                                 //swap frames
                             auto global_id = block_x() * global_queue_size + index * config.block_size + thread_x();
-                            auto g_queue_id=index * config.block_size + thread_x();
-                            auto coro_token=all_token[shared_queue_size+g_queue_id];
-                            $if(coro_token == work_stat[1]) {
+                            auto g_queue_id = index * config.block_size + thread_x();
+                            auto coro_token = all_token[shared_queue_size + g_queue_id];
+                            $if (coro_token == work_stat[1]) {
                                 auto id = work_offset.atomic(1).fetch_add(1u);
-                                $if(id < work_offset[0]) {
+                                $if (id < work_offset[0]) {
                                     auto dst = path_id[id];
                                     auto frame_token = all_token[dst];
-                                    $if(coro_token != 0u) {
-                                        $if(frame_token != 0u) {
+                                    $if (coro_token != 0u) {
+                                        $if (frame_token != 0u) {
                                             auto g_state = _global_frame->read(global_id);
-                                            _global_frame->write(global_id,frames[dst]);
-                                            frames[dst]=g_state;
-                                            all_token[shared_queue_size+g_queue_id]=frame_token;
-                                            all_token[dst]=coro_token;
-
+                                            _global_frame->write(global_id, frames[dst]);
+                                            frames[dst] = g_state;
+                                            all_token[shared_queue_size + g_queue_id] = frame_token;
+                                            all_token[dst] = coro_token;
                                         }
                                         $else {
                                             auto g_state = _global_frame->read(global_id);
-                                            frames[dst]=g_state;
-                                            all_token[shared_queue_size+g_queue_id]=frame_token;
-                                            all_token[dst]=coro_token;
+                                            frames[dst] = g_state;
+                                            all_token[shared_queue_size + g_queue_id] = frame_token;
+                                            all_token[dst] = coro_token;
                                         };
                                     }
                                     $else {
-                                        $if(frame_token != 0u) {
-                                            _global_frame->write(global_id,frames[dst]);
-                                            all_token[shared_queue_size+g_queue_id]=frame_token;
-                                            all_token[dst]=coro_token;
+                                        $if (frame_token != 0u) {
+                                            _global_frame->write(global_id, frames[dst]);
+                                            all_token[shared_queue_size + g_queue_id] = frame_token;
+                                            all_token[dst] = coro_token;
                                         };
                                     };
                                 };
@@ -684,9 +681,8 @@ public:
                 auto launch_condition = def(true);
                 if (!use_global) {
                     launch_condition = (thread_x() < work_offset[0]);
-                }
-                else{
-                    launch_condition = (all_token[pid]==work_stat[1]);
+                } else {
+                    launch_condition = (all_token[pid] == work_stat[1]);
                 }
                 $if (launch_condition) {
                     $switch (all_token[pid]) {
@@ -697,7 +693,7 @@ public:
                                 initialize_coroframe(frames[pid], def<uint3>(gen_st + thread_x(), 0, 0));
                                 (*coroutine)(frames[pid], args...);//only work when kernel 0s are continue
                                 auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;
-                                all_token[pid]=nxt;
+                                all_token[pid] = nxt;
                                 work_counter.atomic(nxt).fetch_add(1u);
                                 workload.atomic(0).fetch_add(1u);
                             };
@@ -707,7 +703,7 @@ public:
                                 work_counter.atomic(i).fetch_sub(1u);
                                 (*coroutine)[i](frames[pid], args...);
                                 auto nxt = read_promise<uint>(frames[pid], "coro_token") & token_mask;
-                                all_token[pid]=nxt;
+                                all_token[pid] = nxt;
                                 work_counter.atomic(nxt).fetch_add(1u);
                             };
                         }
@@ -731,7 +727,7 @@ public:
             $if (x < n) {
                 auto frame = def<FrameType>();
                 initialize_coroframe(frame, def<uint3>(0, 0, 0));
-                frame_buffer.write(x,frame);
+                frame_buffer.write(x, frame);
             };
         };
         _clear_shader = device.compile(clear);
@@ -859,7 +855,7 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
                     if (_have_hint[i]) {
                         BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
                         BufferView<uint> _key[2] = {_temp_key[1].view(_host_offset[i], _host_count[i]), _temp_key[0].view(_host_offset[i], _host_count[i])};
-                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i],_resume_index.view(_host_offset[i], _host_count[i]));
+                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i], _resume_index.view(_host_offset[i], _host_count[i]));
                         stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
                                                                                                              _resume_count, _frame, _max_frame_count)
                                       .dispatch(_host_count[i]);
@@ -903,7 +899,7 @@ void WavefrontCoroDispatcher<FrameRef, Args...>::_await_step(Stream &stream) noe
                     if (_have_hint[i]) {
                         BufferView<uint> _index[2] = {_resume_index.view(_host_offset[i], _host_count[i]), _temp_index.view(_host_offset[i], _host_count[i])};
                         BufferView<uint> _key[2] = {_temp_key[0].view(_host_offset[i], _host_count[i]), _temp_key[1].view(_host_offset[i], _host_count[i])};
-                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i],_resume_index.view(_host_offset[i], _host_count[i]));
+                        uint out = _sort_hint.sort_switch(stream, _key, _index, _host_count[i], _resume_index.view(_host_offset[i], _host_count[i]));
                         stream << this->template call_shader<1, Buffer<uint>, Buffer<uint>, Container, uint>(_resume_shaders[i], _index[out],
                                                                                                              _resume_count, _frame, _max_frame_count)
                                       .dispatch(_host_count[i]);

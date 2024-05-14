@@ -104,6 +104,8 @@ public:
           _size{size}, _total_size{total_size} {}
 
     ByteBufferView(const ByteBuffer &buffer) noexcept : ByteBufferView{buffer.view()} {}
+    ByteBufferView(const ByteBufferView &) noexcept = default;
+    ByteBufferView(ByteBufferView &&) noexcept = default;
     ByteBufferView() noexcept : ByteBufferView{nullptr, invalid_resource_handle, 0u, 0u, 0u} {}
     [[nodiscard]] explicit operator bool() const noexcept { return _handle != invalid_resource_handle; }
 

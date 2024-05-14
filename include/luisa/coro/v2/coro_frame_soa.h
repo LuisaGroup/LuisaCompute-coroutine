@@ -95,21 +95,19 @@ public:
         : SOABase{std::move(desc), luisa::make_shared<luisa::vector<size_t>>(),
                   0u, n} {
         size_t size_bytes = 0u;
-        size_bytes = 0u;
         auto fields = _desc->type()->members();
         _field_offsets->reserve(fields.size());
-        for (const auto field : fields) {
-            size_bytes = (size_bytes + field->alignment() - 1u) & ~(field->alignment() - 1u);
+        for (const auto field_type : fields) {
+            auto alignment = std::max(field_type->alignment(), 4ull);
+            size_bytes = (size_bytes + alignment - 1u) & ~(alignment - 1u);
             _field_offsets->emplace_back(size_bytes);
-            if (field->size() % field->alignment() != 0u) [[unlikely]] {
-                luisa::compute::detail::error_buffer_invalid_alignment(size_bytes + field->size(), field->alignment());
-            }
-            size_bytes += field->size() * _size_elements;
+            auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
+            size_bytes += aligned_size * _size_elements;
         }
-        auto buffer_element_count = (size_bytes + 3u) & ~3u;
+        size_bytes = (size_bytes + 3u) & ~3u;
         auto info = device->create_buffer(
             Type::of<ByteBuffer>(),
-            buffer_element_count,
+            size_bytes,
             nullptr);
         _buffer = std::move(ByteBuffer{device, info});
     }
@@ -172,7 +170,9 @@ public:
         auto fb = detail::FunctionBuilder::current();
         auto field_type = _desc->type()->members()[field_index];
         auto offset = _field_offsets->at(field_index);
-        auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
+        auto alignment = std::max(field_type->alignment(), 4ull);
+        auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
+        auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
         auto f = fb->local(field_type);
         auto s = fb->call(
             field_type, CallOp::BYTE_BUFFER_READ,
@@ -188,10 +188,13 @@ public:
         auto fb = detail::FunctionBuilder::current();
         auto field_type = _desc->type()->members()[field_index];
         auto offset = _field_offsets->at(field_index);
-        auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
-        auto s = fb->call(
-            field_type, CallOp::BYTE_BUFFER_WRITE,
-            {_expression, detail::extract_expression(offset_var), detail::extract_expression(value)});
+        auto alignment = std::max(field_type->alignment(), 4ull);
+        auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
+        auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
+        fb->call(CallOp::BYTE_BUFFER_WRITE,
+                 {_expression,
+                  detail::extract_expression(offset_var),
+                  detail::extract_expression(value)});
     }
 
     /// Read index with active fields
@@ -205,7 +208,9 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
+            auto alignment = std::max(field_type->alignment(), 4ull);
+            auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
+            auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
             auto s = fb->call(
                 field_type, CallOp::BYTE_BUFFER_READ,
                 {_expression, detail::extract_expression(offset_var)});
@@ -225,11 +230,14 @@ public:
             if (active_fields && std::find(active_fields->begin(), active_fields->end(), i) == active_fields->end()) { continue; }
             auto field_type = fields[i];
             auto offset = _field_offsets->at(i);
-            auto offset_var = offset + (_offset_elements + ULong(index)) * field_type->size();
+            auto alignment = std::max(field_type->alignment(), 4ull);
+            auto aligned_size = (field_type->size() + alignment - 1u) & ~(alignment - 1u);
+            auto offset_var = offset + (_offset_elements + ULong(index)) * aligned_size;
             auto f = fb->member(field_type, frame.expression(), i);
-            auto s = fb->call(
-                field_type, CallOp::BYTE_BUFFER_WRITE,
-                {_expression, detail::extract_expression(offset_var), f});
+            fb->call(CallOp::BYTE_BUFFER_WRITE,
+                     {_expression,
+                      detail::extract_expression(offset_var),
+                      f});
         }
     }
 
@@ -324,80 +332,6 @@ public:
         return Expr<SOAOrView>{_soa}.device_address();
     }
 };
-
-// template<typename SOAOrView>
-// class SOAExprProxy<B<coroutine::CoroFrame>> {
-// private:
-//     SOAOrView _soa;
-//
-// public:
-//     LUISA_RESOURCE_PROXY_AVOID_CONSTRUCTION(SOAExprProxy<B<coroutine::CoroFrame>>)
-//
-// public:
-//     /// Read field with field_index at index
-//     template<typename V, typename I>
-//         requires is_integral_expr_v<I>
-//     [[nodiscard]] Var<V> read_field(I &&index, uint field_index) const noexcept {
-//         return Expr<SOAOrView>{_soa}.template read_field<V>(std::forward<I>(index), field_index);
-//     }
-//     /// Read field named with "name" at index
-//     template<typename V, typename I>
-//         requires is_integral_expr_v<I>
-//     [[nodiscard]] Var<V> read_field(I &&index, luisa::string_view name) const noexcept {
-//         return read_field<V>(std::forward<I>(index), _soa.desc()->designated_field(name));
-//     }
-//
-//     /// Write field with field_index at index
-//     template<typename I, typename V>
-//         requires is_integral_expr_v<I>
-//     void write_field(I &&index, V &&value, uint field_index) const noexcept {
-//         Expr<SOAOrView>{_soa}.write_field(std::forward<I>(index),
-//                                           std::forward<V>(value),
-//                                           field_index);
-//     }
-//     /// Write field named with "name" at index
-//     template<typename I, typename V>
-//         requires is_integral_expr_v<I>
-//     void write_field(I &&index, V &&value, luisa::string_view name) const noexcept {
-//         write_field(std::forward<I>(index),
-//                     std::forward<V>(value),
-//                     _soa.desc()->designated_field(name));
-//     }
-//
-//     /// Read index
-//     template<typename I>
-//         requires is_integral_expr_v<I>
-//     [[nodiscard]] auto read(I &&index) const noexcept {
-//         return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::nullopt);
-//     }
-//     /// Read index with active fields
-//     template<typename I>
-//         requires is_integral_expr_v<I>
-//     [[nodiscard]] auto read(I &&index, luisa::span<const uint> active_fields) const noexcept {
-//         return Expr<SOAOrView>{_soa}.read(std::forward<I>(index), luisa::make_optional(active_fields));
-//     }
-//
-//     /// Write index
-//     template<typename I, typename V>
-//         requires is_integral_expr_v<I>
-//     void write(I &&index, V &&value) const noexcept {
-//         Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
-//                                     std::forward<V>(value),
-//                                     luisa::nullopt);
-//     }
-//     /// Write index with active fields
-//     template<typename I, typename V>
-//         requires is_integral_expr_v<I>
-//     void write(I &&index, V &&value, luisa::span<const uint> active_fields) const noexcept {
-//         Expr<SOAOrView>{_soa}.write(std::forward<I>(index),
-//                                     std::forward<V>(value),
-//                                     luisa::make_optional(active_fields));
-//     }
-//
-//     [[nodiscard]] Expr<uint64_t> device_address() const noexcept {
-//         return Expr<SOAOrView>{_soa}.device_address();
-//     }
-// };
 
 }// namespace detail
 

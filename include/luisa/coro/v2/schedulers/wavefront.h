@@ -140,7 +140,7 @@ private:
                 return _frame_soa->read_field<uint>(index, "target_token") & token_mask;
             } else {
                 CoroFrame frame = _frame_buffer->read(index);
-                return frame.get<uint>("target_token") & token_mask;
+                return frame.target_token & token_mask;
             }
         };
         Callable identical = [](UInt index) {

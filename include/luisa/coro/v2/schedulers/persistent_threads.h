@@ -235,11 +235,11 @@ private:
         });
         if (_config.global_ext_memory) {
             _initialize_shader = device.compile<1>([&](UInt n) noexcept {
-                    auto x = dispatch_x();
-                    $if (x < n) {
-                        auto frame = coro.instantiate();
-                        _global_frames->write(x, frame);
-                    };
+                auto x = dispatch_x();
+                $if (x < n) {
+                    auto frame = coro.instantiate();
+                    _global_frames->write(x, frame);
+                };
             });
         }
     }

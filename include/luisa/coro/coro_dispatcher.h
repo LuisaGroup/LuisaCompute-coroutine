@@ -583,30 +583,10 @@ public:
             auto count_limit = def<uint>(-1);
             $while ((rem_global[0] != 0u | rem_local[0] != 0u) & (count != count_limit)) {
                 sync_block();//very important, synchronize for condition
-
                 rem_local[0] = 0u;
                 count += 1;
                 work_stat[0] = 0;
                 work_stat[1] = -1;
-                /* $if(thread_x() < (uint)KERNEL_COUNT) {//clear counter
-                work_counter[thread_x()] = 0u;
-            };
-            sync_block();
-            $for(index, 0u, q_factor) {
-                for (auto i = 0u; i < KERNEL_COUNT; ++i) {//count the kernels
-                    auto state = path_state[index*block_size+thread_x()];
-                    $if(state.kernel_index == i) {
-                        if (i != (uint)INVALID) {
-                            rem_local[0] = 1u;
-                        } else {
-                            $if(workload[0] < workload[1]) {
-                                rem_local[0] = 1u;
-                            };
-                        }
-                        work_counter.atomic(i).fetch_add(1u);
-                    };
-                }
-            };*/
                 sync_block();
                 $if (thread_x() == config.block_size - 1) {
                     $if ((workload[0] >= workload[1]) & (rem_global[0] == 1u)) {//fetch new workload
@@ -764,7 +744,6 @@ public:
         _done = false;
         _stream << _clear_shader(_global).dispatch(1u);
         if(_global_size) {
-
             _stream << _initialize_shader(_global_frame, _global_size).dispatch(_global_size);
         }
     }

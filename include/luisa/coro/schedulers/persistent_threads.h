@@ -15,7 +15,7 @@ struct PersistentThreadsCoroSchedulerConfig {
     uint thread_count = 64_k;
     uint block_size = 128;
     uint fetch_size = 16;
-    bool shared_memory_soa = true;
+    bool shared_memory_soa = false;
     bool global_memory_ext = false;
 };
 

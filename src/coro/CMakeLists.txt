@@ -2,6 +2,7 @@ set(LUISA_COMPUTE_CORO_SOURCES
         coro_frame.cpp
         coro_frame_buffer.cpp
         coro_frame_desc.cpp
+        coro_frame_smem.cpp
         coro_func.cpp
         coro_graph.cpp
         schedulers/persistent_threads.cpp

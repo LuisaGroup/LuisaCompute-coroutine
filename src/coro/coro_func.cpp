@@ -23,7 +23,7 @@ void coroutine_chained_await_impl(CoroFrame &frame, uint node_count,
     };
 }
 
-inline void coroutine_generator_next_impl(
+void coroutine_generator_next_impl(
     CoroFrame &frame, uint node_count,
     const luisa::move_only_function<void(CoroFrame &, CoroToken)> &resume) noexcept {
     $switch (frame.target_token) {

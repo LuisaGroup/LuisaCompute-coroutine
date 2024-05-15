@@ -30,13 +30,9 @@ private:
     using Await = luisa::move_only_function<void()>;
     Await _await;
 
-private:
-    template<typename T>
-    friend class Coroutine;
+public:
     explicit CoroAwaiter(Await await) noexcept
         : _await{std::move(await)} {}
-
-public:
     void await() && noexcept { _await(); }
 };
 
@@ -165,11 +161,10 @@ private:
     using Resume = luisa::move_only_function<void(CoroFrame &, CoroToken)>;
     Resume _resume;
 
-private:
-    template<typename U>
-    friend class Generator;
+public:
     GeneratorIter(uint n, CoroFrame frame, Resume resume) noexcept
-        : _n{n}, _frame{std::move(frame)}, _resume{std::move(resume)} {}
+        : _n{n}, _frame{std::move(frame)},
+          _resume{std::move(resume)} {}
 
 public:
     auto &update() noexcept {

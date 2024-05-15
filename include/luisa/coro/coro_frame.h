@@ -14,14 +14,14 @@ class LC_CORO_API CoroFrame {
 
 private:
     luisa::shared_ptr<const CoroFrameDesc> _desc;
-    const RefExpr *_expression;
+    const Expression *_expression;
 
 public:
     Var<uint3> &coro_id;
     Var<uint> &target_token;
 
 public:
-    CoroFrame(luisa::shared_ptr<const CoroFrameDesc> desc, const RefExpr *expr) noexcept;
+    CoroFrame(luisa::shared_ptr<const CoroFrameDesc> desc, const Expression *expr) noexcept;
     CoroFrame(CoroFrame &&another) noexcept;
     CoroFrame(const CoroFrame &another) noexcept;
     CoroFrame &operator=(const CoroFrame &rhs) noexcept;

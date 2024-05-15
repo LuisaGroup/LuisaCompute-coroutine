@@ -29,7 +29,11 @@ void persistent_threads_coro_scheduler_main_kernel_impl(
     for (auto index : dsl::dynamic_range(q_fac)) {
         auto s = index * config.block_size + thread_x();
         all_token[s] = 0u;
-        // frames.write(s, coro.instantiate(), std::array{0u, 1u});
+        if (config.shared_memory_soa) {
+            frames.write(s, CoroFrame::create(graph->shared_frame()), std::array{1u});
+        } else {
+            frames[s].target_token = 0u;
+        }
     }
     for (auto index : dsl::dynamic_range(g_fac)) {
         auto s = index * config.block_size + thread_x();
@@ -120,23 +124,37 @@ void persistent_threads_coro_scheduler_main_kernel_impl(
                             auto frame_token = all_token[dst];
                             $if (coro_token != 0u) {
                                 $if (frame_token != 0u) {
-                                    auto g_state = global_frames->read(global_id);
-                                    global_frames->write(global_id, frames.read(dst));
-                                    frames.write(dst, g_state);
+                                    if (config.shared_memory_soa) {
+                                        auto g_state = global_frames->read(global_id);
+                                        global_frames->write(global_id, frames.read(dst));
+                                        frames.write(dst, g_state);
+                                    } else {
+                                        auto g_state = global_frames->read(global_id);
+                                        global_frames->write(global_id, frames[dst]);
+                                        frames[dst] = g_state;
+                                    }
                                     all_token[shared_queue_size + g_queue_id] = frame_token;
                                     all_token[dst] = coro_token;
                                 }
                                 $else {
-                                    auto g_state = global_frames->read(global_id);
-                                    frames.write(dst, g_state);
+                                    if (config.shared_memory_soa) {
+                                        auto g_state = global_frames->read(global_id);
+                                        frames.write(dst, g_state);
+                                    } else {
+                                        frames[dst] = global_frames->read(global_id);
+                                    }
                                     all_token[shared_queue_size + g_queue_id] = frame_token;
                                     all_token[dst] = coro_token;
                                 };
                             }
                             $else {
                                 $if (frame_token != 0u) {
-                                    auto frame = frames.read(dst);
-                                    global_frames->write(global_id, frame);
+                                    if (config.shared_memory_soa) {
+                                        auto frame = frames.read(dst);
+                                        global_frames->write(global_id, frame);
+                                    } else {
+                                        global_frames->write(global_id, frames[dst]);
+                                    }
                                     all_token[shared_queue_size + g_queue_id] = frame_token;
                                     all_token[dst] = coro_token;
                                 };
@@ -183,10 +201,16 @@ void persistent_threads_coro_scheduler_main_kernel_impl(
                 for (auto i = 1u; i < subroutine_count; i++) {
                     $case (i) {
                         work_counter.atomic(i).fetch_sub(1u);
-                        auto frame = frames.read(pid, graph->node(i).input_fields());
-                        call_subroutine(frame, i);
-                        auto next = frame.target_token & coro_token_valid_mask;
-                        frames.write(pid, frame, graph->node(i).output_fields());
+                        auto next = def(0u);
+                        if (config.shared_memory_soa) {
+                            auto frame = frames.read(pid, graph->node(i).input_fields());
+                            call_subroutine(frame, i);
+                            next = frame.target_token & coro_token_valid_mask;
+                            frames.write(pid, frame, graph->node(i).output_fields());
+                        } else {
+                            call_subroutine(frames[pid], i);
+                            next = frames[pid].target_token & coro_token_valid_mask;
+                        }
                         all_token[pid] = next;
                         work_counter.atomic(next).fetch_add(1u);
                     };

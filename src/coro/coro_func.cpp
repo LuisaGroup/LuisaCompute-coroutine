@@ -23,18 +23,15 @@ void coroutine_chained_await_impl(CoroFrame &frame, uint node_count,
     };
 }
 
-void coroutine_generator_step_impl(CoroFrame &frame, uint node_count, bool is_entry,
-                                   luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept {
-    if (is_entry) {
-        node(coro_token_entry, frame);
-    } else {
-        $switch (frame.target_token) {
-            for (auto i = 1u; i < node_count; i++) {
-                $case (i) { node(i, frame); };
-            }
-            $default { dsl::unreachable(); };
-        };
-    }
+inline void coroutine_generator_next_impl(
+    CoroFrame &frame, uint node_count,
+    const luisa::move_only_function<void(CoroFrame &, CoroToken)> &resume) noexcept {
+    $switch (frame.target_token) {
+        for (auto i = 0u; i < node_count; i++) {
+            $case (i) { resume(frame, i); };
+        }
+        $default { dsl::unreachable(); };
+    };
 }
 
-}// namespace luisa::compute::coro_v2::detail
+}// namespace luisa::compute::coroutine::detail

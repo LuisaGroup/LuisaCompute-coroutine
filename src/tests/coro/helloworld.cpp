@@ -25,10 +25,17 @@ int main(int argc, char *argv[]) {
                 x += 1u;
             };
         };
-        for (auto x : range(100u)) {
+        auto iter = range(10u);
+        $while (!iter.update().is_terminated()) {
+            auto x = iter.value();
+            device_log("x = {}", x);
+        };
+        for (auto x : range(10u)) {
             device_log("x = {}", x);
         }
     };
+    auto shader = device.compile(test);
+    stream << shader().dispatch(1) << synchronize();
 
     coroutine::Coroutine nested2 = [](UInt n) {
         $for (i, n) {

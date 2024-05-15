@@ -1,5 +1,6 @@
 use indexmap::{IndexMap, IndexSet};
 
+use bitflags::Flags;
 use core::panic;
 use half::f16;
 use std::ops::Deref;
@@ -26,6 +27,7 @@ use crate::{
 use crate::{CArc, Pooled};
 
 use super::Transform;
+
 // Simple backward autodiff
 // Loop is not supported since users would use path replay[https://rgl.epfl.ch/publications/Vicini2021PathReplay] anyway
 struct GradTypeRecord {
@@ -1786,6 +1788,15 @@ impl Backward {
             crate::ir::Instruction::Return(_) => {
                 panic!("should not have return in autodiff section")
             }
+            Instruction::CoroRegister { .. } | Instruction::CoroSplitMark { .. } => {
+                unimplemented!("Coroutine is not supported yet");
+            }
+            Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
+                unreachable!(
+                    "{:?} should not be defined as statement directly",
+                    instruction
+                );
+            }
         }
     }
     fn backward_block(&mut self, block: &BasicBlock, mut builder: IrBuilder) -> Pooled<BasicBlock> {
@@ -1872,6 +1883,7 @@ fn ad_transform_block(module: crate::ir::Module) -> (crate::ir::Module, HashMap<
         grads,
     )
 }
+
 fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) {
     let nodes = block.nodes();
     let mut i = 0;
@@ -1901,6 +1913,7 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
                 //         })
                 //     );
                 // }
+
                 {
                     let nodes = ad_block.collect_nodes();
                     for n in nodes {
@@ -1914,7 +1927,7 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
                         }
                     }
                 }
-                let ad_block = ToSSA.transform(ad_block);
+                let ad_block = ToSSA.transform_module(ad_block);
 
                 // {
                 //     println!(
@@ -2039,8 +2052,9 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
         i += 1;
     }
 }
+
 impl Transform for Autodiff {
-    fn transform(&self, mut module: crate::ir::Module) -> crate::ir::Module {
+    fn transform_module(&self, mut module: crate::ir::Module) -> crate::ir::Module {
         // log::debug!("Autodiff transform");
         // {
         //     println!("Before AD:");

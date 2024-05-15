@@ -1,0 +1,9 @@
+template<typename T>
+uint3 CoroId(in T frame){
+return frame.v0.v;
+}
+
+template<typename T>
+uint CoroToken(in T frame){
+return frame.v1;
+}

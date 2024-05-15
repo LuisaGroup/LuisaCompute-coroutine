@@ -1036,6 +1036,8 @@ void CUDACodegenAST::visit(const CallExpr *expr) {
         case CallOp::WARP_READ_LANE: _scratch << "lc_warp_read_lane"; break;
         case CallOp::WARP_READ_FIRST_ACTIVE_LANE: _scratch << "lc_warp_read_first_active_lane"; break;
         case CallOp::SHADER_EXECUTION_REORDER: _scratch << "lc_shader_execution_reorder"; break;
+        case CallOp::CORO_ID: _scratch << "lc_coro_id"; break;
+        case CallOp::CORO_TOKEN: _scratch << "lc_coro_token"; break;
     }
     _scratch << "(";
     if (auto op = expr->op(); is_atomic_operation(op)) {
@@ -1439,7 +1441,9 @@ void CUDACodegenAST::_emit_function(Function f) noexcept {
     _emit_variable_declarations(f);
     _indent = 0;
     _emit_statements(f.body()->statements());
-    _scratch << "}\n\n";
+    _scratch << "}\n"
+             << "/* end custom_" << hash_to_string(f.hash()) << " */"
+             << "\n\n";
 
     if (_allow_indirect_dispatch) {
         // generate meta-function that launches the kernel with dynamic parallelism
@@ -1524,6 +1528,8 @@ static void collect_types_in_function(Function f,
                 for (auto m : t->members()) {
                     self(self, m);
                 }
+            } else if (t->is_coroframe()) {
+                self(self, t->corotype());
             }
         }
     };
@@ -1755,6 +1761,10 @@ void CUDACodegenAST::_emit_type_name(const Type *type, bool hack_float_to_int) n
                     "Unsupported custom type: {}.",
                     type->description());
             }
+            break;
+        }
+        case Type::Tag::COROFRAME: {
+            _emit_type_name(type->corotype());
             break;
         }
         default: break;

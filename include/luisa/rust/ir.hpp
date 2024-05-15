@@ -7,7 +7,9 @@
 #include <ostream>
 #include <new>
 #include "ir_common.h"
-
+namespace luisa::compute::ir {
+struct CallableModuleRef;struct CallableModule;
+}
 
 namespace luisa::compute::ir {
 
@@ -288,6 +290,15 @@ struct Capture {
     Binding binding;
 };
 
+struct CallableModuleRef {
+    CArc<CallableModule> _0;
+};
+
+struct CoroFrameDesignatedField {
+    CBoxedSlice<uint8_t> name;
+    uint32_t index;
+};
+
 struct CpuCustomOp {
     uint8_t *data;
     /// func(data, args); func should modify args in place
@@ -301,6 +312,11 @@ struct CallableModule {
     CArc<Type> ret_type;
     CBoxedSlice<NodeRef> args;
     CBoxedSlice<Capture> captures;
+    CBoxedSlice<CallableModuleRef> subroutines;
+    CBoxedSlice<uint32_t> subroutine_ids;
+    CBoxedSlice<uint32_t> coro_frame_input_fields;
+    CBoxedSlice<uint32_t> coro_frame_output_fields;
+    CBoxedSlice<CoroFrameDesignatedField> coro_frame_designated_fields;
     CBoxedSlice<CArc<CpuCustomOp>> cpu_custom_ops;
     CArc<ModulePools> pools;
 };
@@ -315,10 +331,6 @@ struct KernelModule {
     CArc<ModulePools> pools;
 };
 
-struct CallableModuleRef {
-    CArc<CallableModule> _0;
-};
-
 struct Func {
     enum class Tag {
         ZeroInitializer,
@@ -331,6 +343,8 @@ struct Func {
         WarpLaneId,
         DispatchId,
         DispatchSize,
+        CoroId,
+        CoroToken,
         /// (input, grads, ...) -> ()
         PropagateGrad,
         /// (var, idx) -> dvar/dinput_{idx}
@@ -768,6 +782,10 @@ struct Instruction {
         Print,
         AdDetach,
         Comment,
+        CoroSplitMark,
+        CoroSuspend,
+        CoroResume,
+        CoroRegister,
     };
 
     struct Local_Body {
@@ -853,6 +871,23 @@ struct Instruction {
         CBoxedSlice<uint8_t> _0;
     };
 
+    struct CoroSplitMark_Body {
+        uint32_t token;
+    };
+
+    struct CoroSuspend_Body {
+        uint32_t token;
+    };
+
+    struct CoroResume_Body {
+        uint32_t token;
+    };
+
+    struct CoroRegister_Body {
+        NodeRef value;
+        CBoxedSlice<uint8_t> name;
+    };
+
     Tag tag;
     union {
         Local_Body local;
@@ -872,6 +907,10 @@ struct Instruction {
         Print_Body print;
         AdDetach_Body ad_detach;
         Comment_Body comment;
+        CoroSplitMark_Body coro_split_mark;
+        CoroSuspend_Body coro_suspend;
+        CoroResume_Body coro_resume;
+        CoroRegister_Body coro_register;
     };
 };
 
@@ -983,7 +1022,14 @@ void luisa_compute_ir_transform_pipeline_destroy(TransformPipeline *pipeline);
 
 TransformPipeline *luisa_compute_ir_transform_pipeline_new();
 
-Module luisa_compute_ir_transform_pipeline_transform(TransformPipeline *pipeline, Module module);
+CallableModule luisa_compute_ir_transform_pipeline_transform_callable(TransformPipeline *pipeline,
+                                                                      CallableModule module);
+
+KernelModule luisa_compute_ir_transform_pipeline_transform_kernel(TransformPipeline *pipeline,
+                                                                  KernelModule module);
+
+Module luisa_compute_ir_transform_pipeline_transform_module(TransformPipeline *pipeline,
+                                                            Module module);
 
 size_t luisa_compute_ir_type_alignment(const CArc<Type> *ty);
 

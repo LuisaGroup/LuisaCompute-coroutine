@@ -1,6 +1,8 @@
 #pragma once
+
 #include <luisa/dsl/ref.h>
 #include <luisa/dsl/arg.h>
+
 // X11 macro
 #ifdef Bool
 #undef Bool
@@ -22,6 +24,12 @@ void apply_default_initializer(Ref<T> var) noexcept {
     }
 }
 
+inline void apply_zero_initializer(const Expression *expr) noexcept {
+    auto b = FunctionBuilder::current();
+    auto zero = b->call(expr->type(), CallOp::ZERO, {});
+    b->assign(expr, zero);
+}
+
 }// namespace detail
 
 /// Class of variable
@@ -38,9 +46,8 @@ struct Var : public detail::Ref<T> {
     /// Construct a local variable of basic or array types
     Var() noexcept
         : detail::Ref<T>{detail::FunctionBuilder::current()->local(Type::of<T>())} {
-        // we have to apply the default initializer here so the variable
-        // is properly defined right after construction
-        detail::apply_default_initializer(detail::Ref{*this});
+        // Note: must apply the zero init here for a correct variable scope
+        detail::apply_zero_initializer(this->expression());
     }
 
     /// Assign members from args

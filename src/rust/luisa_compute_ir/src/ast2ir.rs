@@ -6,6 +6,7 @@ use half::f16;
 use json::{parse as parse_json, JsonValue as JSON};
 use log::warn;
 
+use bitflags::Flags;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::iter::zip;
@@ -101,7 +102,7 @@ impl<'a> AST2IRType<'a> {
             }
             "BINDLESS_ARRAY" => Type::void(),
             "ACCEL" => Type::void(),
-            "CUSTOM" => Type::opaque(j["id"].as_str().unwrap().into()),
+            "COROFRAME" | "CUSTOM" => Type::opaque(j["id"].as_str().unwrap().into()),
             _ => panic!("Invalid type tag: {}", tag),
         };
         self.types.insert(i, t.clone());
@@ -216,10 +217,10 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                     }
                     "REFERENCE" => {
                         let t = self._convert_type(v_type);
-                        assert_eq!(
+                        assert_ne!(
                             self._curr_ctx().j_tag,
-                            "CALLABLE",
-                            "Only callable can have reference variables."
+                            "KERNEL",
+                            "Kernels may not have reference variables."
                         );
                         let arg = Instruction::Argument { by_value: false };
                         let arg = new_node(&self.pools, Node::new(CArc::new(arg), t.clone()));
@@ -341,7 +342,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                     let node = Self::_cast(builder, &dst.element(), node);
                     builder.call(Func::Vec, &[node], dst.clone())
                 }
-                _ => panic!("Invalid cast."),
+                _ => panic!("Invalid cast: {:?} -> {:?}", src.as_ref(), dst.as_ref()),
             }
         }
     }
@@ -637,7 +638,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                     assert!(i < st.fields.len());
                     st.fields[i].clone()
                 }
-                _ => panic!("Invalid member access."),
+                _ => panic!("Invalid member access to {}.{}: {}.", t_v, i, j),
             };
             assert_eq!(t.as_ref(), t_elem.as_ref(), "Invalid member type.");
             if is_lval {
@@ -1016,6 +1017,8 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             "INDIRECT_SET_DISPATCH_KERNEL" => Func::IndirectDispatchSetKernel,
             "INDIRECT_SET_DISPATCH_COUNT" => Func::IndirectDispatchSetCount,
             "SHADER_EXECUTION_REORDER" => Func::ShaderExecutionReorder,
+            "CORO_ID" => Func::CoroId,
+            "CORO_TOKEN" => Func::CoroToken,
             _ => panic!("Invalid built-in function: {}.", f),
         };
 
@@ -1838,6 +1841,20 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 assert!(t.is_void());
                 args
             }
+
+            // coroutine related
+            "CORO_ID" => {
+                // (struct): uint3
+                let args = convert_args(&[]);
+                assert!(t.is_unsigned() && t.is_vector() && t.dimension() == 3);
+                args
+            }
+            "CORO_TOKEN" => {
+                // (struct): uint
+                let args = convert_args(&[]);
+                assert!(t.is_unsigned() && t.is_primitive());
+                args
+            }
             _ => panic!("Invalid built-in function: {}.", f),
         };
         let (builder, ..) = self.unwrap_ctx();
@@ -2154,6 +2171,17 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
                 let (builder, ..) = self.unwrap_ctx();
                 builder.ad_scope(body)
             }
+            "SUSPEND" => {
+                let token = j["coro_token"].as_u32().unwrap();
+                let (builder, ..) = self.unwrap_ctx();
+                builder.coro_split_mark(token)
+            }
+            "COROBIND" => {
+                let expr = self._convert_expression(&j["expression"], false);
+                let name = j["name"].as_str().unwrap();
+                let (builder, ..) = self.unwrap_ctx();
+                builder.coro_register(expr, CBoxedSlice::from(name.as_bytes()))
+            }
             "PRINT" => {
                 let fmt = j["format"].as_str().unwrap().to_string();
                 let args: Vec<_> = j["arguments"]
@@ -2292,6 +2320,11 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             ret_type,
             args: CBoxedSlice::new(args),
             captures: CBoxedSlice::new(Vec::new()),
+            subroutine_ids: CBoxedSlice::new(Vec::new()),
+            subroutines: CBoxedSlice::new(Vec::new()),
+            coro_frame_input_fields: CBoxedSlice::new(Vec::new()),
+            coro_frame_output_fields: CBoxedSlice::new(Vec::new()),
+            coro_frame_designated_fields: CBoxedSlice::new(Vec::new()),
             cpu_custom_ops: CBoxedSlice::new(std::mem::replace(
                 &mut self._curr_ctx_mut().cpu_custom_ops,
                 vec![],
@@ -2327,7 +2360,9 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
         let old_ctx = self.ctx.replace(ctx);
         let module = match tag {
             "KERNEL" => FunctionModule::Kernel(CArc::new(self._do_convert_kernel())),
-            "CALLABLE" => FunctionModule::Callable(CArc::new(self._do_convert_callable())),
+            "CALLABLE" | "COROUTINE" => {
+                FunctionModule::Callable(CArc::new(self._do_convert_callable()))
+            }
             _ => panic!("Unsupported function tag: {}", tag),
         };
         // pop current context

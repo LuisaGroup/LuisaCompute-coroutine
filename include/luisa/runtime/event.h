@@ -10,6 +10,7 @@
 namespace luisa::compute {
 
 class Device;
+class Stream;
 
 class LC_RUNTIME_API Event final : public Resource {
 
@@ -17,12 +18,12 @@ public:
     struct LC_RUNTIME_API Signal {
         uint64_t handle;
         uint64_t fence;
-        void operator()(DeviceInterface *device, uint64_t stream_handle) const && noexcept;
+        void operator()(Stream &stream) const && noexcept;
     };
     struct LC_RUNTIME_API Wait {
         uint64_t handle;
         uint64_t fence;
-        void operator()(DeviceInterface *device, uint64_t stream_handle) const && noexcept;
+        void operator()(Stream &stream) const && noexcept;
     };
 
 private:

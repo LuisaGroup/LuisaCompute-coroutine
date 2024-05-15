@@ -114,6 +114,51 @@ void FunctionBuilder::return_(const Expression *expr) noexcept {
     }
 }
 
+void FunctionBuilder::check_is_coroutine() noexcept {
+    LUISA_ASSERT(_tag == Tag::COROUTINE,
+                 "Coroutine intrinsics are only allowed in coroutines.");
+}
+uint FunctionBuilder::suspend_(luisa::string desc) noexcept {
+    check_is_coroutine();
+    uint token = _coro_tokens.size() + 1;
+    if (desc.empty()) { desc = luisa::format("__internal_suspend_{}", token); }
+    auto [_, success] = _coro_tokens.insert(std::make_pair(desc, token));
+    LUISA_ASSERT(success, "Duplicated suspend token '{}' description.", desc);
+    _create_and_append_statement<SuspendStmt>(token);
+    return token;
+}
+
+void FunctionBuilder::bind_promise_(const Expression *expr, luisa::string name) noexcept {
+    check_is_coroutine();
+    _create_and_append_statement<CoroBindStmt>(expr, std::move(name));
+}
+
+const MemberExpr *FunctionBuilder::read_promise_(const Type *type, const Expression *expr, luisa::string_view name) noexcept {
+    LUISA_ASSERT(expr->type()->is_coroframe(), "Promise reading is only allowed for CoroFrame type");
+    auto var = expr->type()->member(name);
+    if (var != -1) {
+        auto mem_type = expr->type()->corotype()->members()[var];
+        LUISA_ASSERT(*mem_type == *type,
+                     "Promise '{}' type mismatch: expected {}, got {}.",
+                     name, type->description(), mem_type->description());
+        return _create_expression<MemberExpr>(expr->type()->corotype()->members()[var], expr, var);
+    }
+    return nullptr;
+}
+void FunctionBuilder::initialize_coroframe(const luisa::compute::Expression *expr, const luisa::compute::Expression *coro_id) noexcept {
+    auto member_coro_id = member(Type::of<uint3>(), expr, 0u);
+    auto member_coro_token = member(Type::of<uint>(), expr, 1u);
+    assign(member_coro_id, coro_id);
+    assign(member_coro_token, literal(Type::of<uint>(), 0u));
+}
+const CallExpr *FunctionBuilder::coro_id() noexcept {
+    check_is_coroutine();
+    return call(Type::of<uint3>(), CallOp::CORO_ID, {});
+}
+const CallExpr *FunctionBuilder::coro_token() noexcept {
+    check_is_coroutine();
+    return call(Type::of<uint>(), CallOp::CORO_TOKEN, {});
+}
 RayQueryStmt *FunctionBuilder::ray_query_(const RefExpr *query) noexcept {
     LUISA_ASSERT(query->builder() == this,
                  "Ray query must be created by the same function builder.");
@@ -314,8 +359,7 @@ const RefExpr *FunctionBuilder::kernel_id() noexcept { return _builtin(Type::of<
 const RefExpr *FunctionBuilder::object_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::OBJECT_ID); }
 const RefExpr *FunctionBuilder::warp_lane_count() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_COUNT); }
 const RefExpr *FunctionBuilder::warp_lane_id() noexcept { return _builtin(Type::of<uint>(), Variable::Tag::WARP_LANE_ID); }
-
-inline const RefExpr *FunctionBuilder::_builtin(Type const *type, Variable::Tag tag) noexcept {
+inline const RefExpr *FunctionBuilder::_builtin(const Type *type, Variable::Tag tag) noexcept {
     if (auto iter = std::find_if(
             _builtin_variables.cbegin(), _builtin_variables.cend(),
             [tag](auto &&v) noexcept { return v.tag() == tag; });
@@ -705,6 +749,7 @@ const CallExpr *FunctionBuilder::call(const Type *type, Function custom, luisa::
     }
     auto f = custom.builder();
     CallExpr::ArgumentList call_args(f->_arguments.size(), nullptr);
+    // LUISA_INFO_WITH_LOCATION("Args count: {} ?= {}", args.size(), call_args.size());
     auto in_iter = args.begin();
     for (auto i = 0u; i < f->_arguments.size(); i++) {
         if (auto arg = f->_arguments[i]; arg.is_builtin()) {
@@ -817,15 +862,15 @@ void FunctionBuilder::set_block_size(uint3 size) noexcept {
     if (_tag == Tag::KERNEL) {
         auto kernel_size = size.x * size.y * size.z;
         if (kernel_size == 0 || kernel_size > 1024) [[unlikely]] {
-            LUISA_ERROR("Function block size must be in range [1, 1024], Current block size is: {}.",
+            LUISA_ERROR("Func block size must be in range [1, 1024], Current block size is: {}.",
                         kernel_size);
         }
         if (any(size == uint3(0))) [[unlikely]] {
-            LUISA_ERROR("Function block size must be larger than 0, Current block size is: [{}, {}, {}].",
+            LUISA_ERROR("Func block size must be larger than 0, Current block size is: [{}, {}, {}].",
                         size.x, size.y, size.z);
         }
         if (size.z > 64) [[unlikely]] {
-            LUISA_ERROR("Function block z-axis's size must be less or equal than 64, Current block size is: {}.",
+            LUISA_ERROR("Func block z-axis's size must be less or equal than 64, Current block size is: {}.",
                         size.z);
         }
         _block_size = size;
@@ -851,6 +896,11 @@ bool FunctionBuilder::requires_atomic_float() const noexcept {
 
 bool FunctionBuilder::requires_autodiff() const noexcept {
     return _propagated_builtin_callables.uses_autodiff();
+}
+
+void FunctionBuilder::coroframe_replace(const Type *type) noexcept {
+    LUISA_ASSERT(_arguments.size() > 0, "Lack of parameter for coroutine generated callables!");
+    _arguments[0]._type = type;
 }
 
 bool FunctionBuilder::requires_printing() const noexcept {

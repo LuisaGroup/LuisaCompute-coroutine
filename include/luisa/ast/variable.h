@@ -44,8 +44,8 @@ public:
 
 private:
     const Type *_type{nullptr};
-    uint32_t _uid{};
     Tag _tag{};
+    uint32_t _uid{};
 
 private:
     friend class detail::FunctionBuilder;

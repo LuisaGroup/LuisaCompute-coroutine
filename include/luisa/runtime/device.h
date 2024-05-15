@@ -5,6 +5,7 @@
 #endif
 #include <luisa/ast/type_registry.h>
 #include <luisa/runtime/rhi/device_interface.h>
+#include <luisa/core/thread_pool.h>
 
 namespace luisa {
 class BinaryIO;
@@ -227,12 +228,13 @@ public:
     }
 
     template<typename T>
-        requires(!is_custom_struct_v<T>)
+        requires(!is_custom_struct_v<T>)//backend-specific type not allowed
     [[nodiscard]] auto import_external_buffer(void *external_memory, size_t elem_count) noexcept {
         return _create<Buffer<T>>(impl()->create_buffer(Type::of<T>(), elem_count, external_memory));
     }
 
     template<typename T>
+        requires(!is_custom_struct_v<T>)//backend-specific type not allowed
     [[nodiscard]] auto create_soa(size_t size) noexcept {
         return SOA<T>{*this, size};
     }
@@ -273,6 +275,24 @@ public:
         } else {
             return compile(Kernel3D{std::forward<Func>(f)}, option);
         }
+    }
+
+    template<uint dim, typename Func>
+    [[nodiscard]] auto compile_async(Func &&f) noexcept {
+        auto kernel = [&] {
+            if constexpr (dim == 1u) {
+                return Kernel1D{f};
+            } else if constexpr (dim == 2u) {
+                return Kernel2D{f};
+            } else if constexpr (dim == 3u) {
+                return Kernel3D{f};
+            } else {
+                static_assert(always_false_v<Func>, "Invalid dimension.");
+            }
+        }();
+        return global_thread_pool().async([&] {
+            return compile(kernel);
+        });
     }
 
     template<size_t N, typename Kernel>

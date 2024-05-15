@@ -34,7 +34,9 @@ public:
         COMMENT,
         RAY_QUERY,
         AUTO_DIFF,
-        PRINT
+        COROBIND,
+        SUSPEND,
+        PRINT,
     };
 
 private:
@@ -73,7 +75,8 @@ class ForStmt;
 class CommentStmt;
 class RayQueryStmt;
 class AutoDiffStmt;
-
+class SuspendStmt;
+class CoroBindStmt;
 class PrintStmt;
 
 struct LC_AST_API StmtVisitor {
@@ -92,12 +95,14 @@ struct LC_AST_API StmtVisitor {
     virtual void visit(const CommentStmt *) = 0;
     virtual void visit(const RayQueryStmt *) = 0;
     virtual void visit(const AutoDiffStmt *stmt);
+    virtual void visit(const SuspendStmt *stmt);
+    virtual void visit(const CoroBindStmt *stmt);
     virtual void visit(const PrintStmt *stmt);
     virtual ~StmtVisitor() noexcept = default;
 };
 
 #define LUISA_STATEMENT_COMMON() \
-    void accept(StmtVisitor &visitor) const override { visitor.visit(this); }
+  void accept(StmtVisitor &visitor) const override { visitor.visit(this); }
 
 /// Break statement
 class LC_AST_API BreakStmt final : public Statement {
@@ -493,18 +498,51 @@ public:
     LUISA_STATEMENT_COMMON()
 };
 
+/// Suspend statement
+class LC_AST_API SuspendStmt : public Statement {
+
+private:
+    const uint _token;
+
+private:
+    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+
+public:
+    explicit SuspendStmt(const uint token) noexcept
+        : Statement{Tag::SUSPEND}, _token{token} {
+    }
+    [[nodiscard]] auto token() const noexcept { return _token; }
+    LUISA_STATEMENT_COMMON()
+};
+
+/// Bind Promise statement
+class LC_AST_API CoroBindStmt : public Statement {
+
+private:
+    const Expression *_expr;
+    luisa::string _name;
+
+private:
+    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
+
+public:
+    explicit CoroBindStmt(const Expression *expr, luisa::string name) noexcept
+        : Statement{Tag::COROBIND}, _expr{expr}, _name{std::move(name)} {
+    }
+    [[nodiscard]] auto name() const noexcept { return luisa::string_view{_name}; }
+    [[nodiscard]] auto expression() const noexcept { return _expr; }
+    LUISA_STATEMENT_COMMON()
+};
+
 class LC_AST_API PrintStmt : public Statement {
     friend class CallableLibrary;
 
 private:
     luisa::string _format;
     luisa::vector<const Expression *> _args;
-
-private:
-    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
-
 private:
     PrintStmt() noexcept = default;// for Maxwell's dear CallableLibrary
+    [[nodiscard]] uint64_t _compute_hash() const noexcept override;
 
 public:
     PrintStmt(luisa::string fmt, luisa::vector<const Expression *> args) noexcept;
@@ -620,9 +658,17 @@ void traverse_expressions(
                 ad_stmt->body(), visit, enter_stmt, exit_stmt);
             break;
         }
+        case Statement::Tag::SUSPEND: {
+            break;
+        }
         case Statement::Tag::PRINT: {
             auto print_stmt = static_cast<const PrintStmt *>(stmt);
             for (auto arg : print_stmt->arguments()) { do_visit(arg); }
+            break;
+        }
+        case Statement::Tag::COROBIND: {
+            auto coro_stmt = static_cast<const CoroBindStmt *>(stmt);
+            do_visit(coro_stmt->expression());
             break;
         }
     }

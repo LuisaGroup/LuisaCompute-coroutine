@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{Func, Module, NodeRef};
+use crate::ir::{Func, Instruction, Module, NodeRef};
 
 pub struct UseDef {
     pub uses: HashMap<NodeRef, HashSet<NodeRef>>,
@@ -168,6 +168,10 @@ impl UseDef {
                 crate::ir::Instruction::Comment(_) => {
                     self.root.insert(*node);
                 }
+                Instruction::CoroSplitMark { .. } => {}
+                Instruction::CoroSuspend { .. } => {}
+                Instruction::CoroResume { .. } => {}
+                Instruction::CoroRegister { .. } => {}
             }
         }
     }

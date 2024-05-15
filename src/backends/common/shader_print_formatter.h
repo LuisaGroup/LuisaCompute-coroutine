@@ -117,7 +117,8 @@ public:
                             }
                             s.push_back('>');
                             commit_s();
-                        } else if (arg->is_structure()) {
+                        } else if (arg->is_structure() || arg->is_coroframe()) {
+                            if (arg->is_coroframe()) { arg = arg->corotype(); }
                             s.push_back('{');
                             commit_s();
                             for (auto i = 0u; i < arg->members().size(); i++) {
@@ -232,7 +233,9 @@ public:
                             case Type::Tag::FLOAT16: print_primitive(half{}); break;
                             case Type::Tag::FLOAT32: print_primitive(float{}); break;
                             case Type::Tag::FLOAT64: print_primitive(double{}); break;
-                            default: LUISA_ERROR_WITH_LOCATION("Unsupported type for shader printer.");
+                            default: LUISA_ERROR_WITH_LOCATION(
+                                "Unsupported type '{}' for shader printer.",
+                                luisa::to_string(p));
                         }
                     } else {
                         static_assert(std::is_same_v<T, luisa::string>);

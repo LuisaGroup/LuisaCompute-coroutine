@@ -1,9 +1,10 @@
+use crate::ir::{collect_nodes, CallableModule, KernelModule};
 use crate::{
     context::is_type_equal,
     ir::{BasicBlock, Func, Instruction, Module, NodeRef, PhiIncoming, SwitchCase, Type},
     Pooled,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 
 pub struct DisplayIR {
@@ -27,26 +28,121 @@ impl DisplayIR {
         }
     }
 
-    pub fn display_ir(&mut self, module: &Module) -> String {
+    pub fn clear(&mut self) {
+        self.output.clear();
         self.map.clear();
         self.cnt = 0;
+        self.block_labels.clear();
+        self.block_cnt = 0;
         self.defs.clear();
-        self.defs = module.collect_nodes().into_iter().collect();
-        for node in module.entry.nodes().iter() {
-            self.display(*node, 0, false);
+    }
+
+    pub fn var_str(&mut self, node: &NodeRef) -> String {
+        format!("${}", self.get(node))
+    }
+    pub fn vars_str(&mut self, nodes: &HashSet<NodeRef>) -> String {
+        let nodes = BTreeSet::from_iter(nodes.iter().map(|node| self.get(node)));
+        let nodes: Vec<_> = nodes.iter().map(|node| format!("${}", node)).collect();
+        format!("{{{}}}", nodes.join(", "))
+    }
+
+    pub fn var_str_or_insert(&mut self, node: &NodeRef) -> String {
+        format!("${}", self.get_or_insert(node))
+    }
+
+    pub fn display_ir(&mut self, module: &Module) -> String {
+        self.clear();
+        self.display_ir_bb(&module.entry, 0, false)
+    }
+
+    pub fn display_ir_kernel(&mut self, kernel: &KernelModule) -> String {
+        self.clear();
+        self.defs.extend(kernel.args.iter().clone());
+        self.defs.extend(kernel.shared.iter().clone());
+        self.defs.extend(kernel.captures.iter().map(|arg| arg.node));
+        self.output += &format!("\n{:-^40}\n", " Args ");
+        for arg in kernel.args.as_ref() {
+            self.display(*arg, 0, false);
+        }
+        self.output += &format!("\n{:-^40}\n", " Shared ");
+        for arg in kernel.shared.as_ref() {
+            self.display(*arg, 0, false);
+        }
+        self.output += &format!("\n{:-^40}\n", " Captures ");
+        for arg in kernel.captures.as_ref() {
+            self.display(arg.node, 0, false);
+        }
+        self.output += &format!("\n{:-^40}\n", " Module ");
+        self.display_ir_bb(&kernel.module.entry, 0, false)
+    }
+
+    pub fn display_ir_callable(&mut self, callable: &CallableModule) -> String {
+        self.clear();
+        self.defs.extend(callable.args.iter().clone());
+        self.defs
+            .extend(callable.captures.iter().map(|arg| arg.node));
+        self.output += &format!("\n{:-^40}\n", " Args ");
+        for arg in callable.args.as_ref() {
+            self.display(*arg, 0, false);
+        }
+        self.output += &format!("\n{:-^40}\n", " Captures ");
+        for arg in callable.captures.as_ref() {
+            self.display(arg.node, 0, false);
+        }
+        self.output += &format!("\n{:-^40}\n", " Module ");
+        self.display_ir_bb(&callable.module.entry, 0, false)
+    }
+
+    pub fn display_ir_bb(
+        &mut self,
+        bb: &Pooled<BasicBlock>,
+        ident: usize,
+        no_new_line: bool,
+    ) -> String {
+        self.defs.extend(collect_nodes(bb.clone()).into_iter());
+        self.add_ident(ident);
+        let block_label = self.block_label(bb.clone());
+        writeln!(self.output, "{}:", block_label).unwrap();
+        for node in bb.nodes().iter() {
+            self.display(*node, ident, no_new_line);
         }
         self.output.clone()
     }
 
-    fn get(&mut self, node: &NodeRef) -> usize {
-        self.map
-            .get(&node.0)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                self.map.insert(node.0, self.cnt);
-                self.cnt += 1;
-                self.cnt - 1
-            })
+    pub fn display_existent_nodes(&self, nodes: &HashSet<NodeRef>) -> String {
+        let mut node_cnts: Vec<_> = nodes.iter().map(|node| self.get(node)).collect();
+        node_cnts.sort_unstable();
+        let mut node_cnts: Vec<_> = node_cnts.iter().map(|node| format!("${}", node)).collect();
+        format!("{{{}}}", node_cnts.join(", "))
+    }
+
+    fn get_or_insert(&mut self, node: &NodeRef) -> usize {
+        if node.valid() {
+            self.map
+                .get(&node.0)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    self.map.insert(node.0, self.cnt);
+                    self.cnt += 1;
+                    self.cnt - 1
+                })
+        } else {
+            usize::MAX
+        }
+    }
+
+    pub fn get(&self, node: &NodeRef) -> usize {
+        if node.valid() {
+            self.map
+                .get(&node.0)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    println!("{}", self.output);
+                    panic!("{:?} not found in map", node)
+                })
+        } else {
+            usize::MAX
+        }
     }
 
     fn add_ident(&mut self, ident: usize) {
@@ -79,7 +175,7 @@ impl DisplayIR {
     fn display(&mut self, node: NodeRef, ident: usize, no_new_line: bool) {
         if !self.defs.contains(&node) {
             self.add_ident(ident);
-            let v = self.get(&node);
+            let v = self.get_or_insert(&node);
             writeln!(self.output, "Detached node: ${}", v).unwrap();
         }
         let instruction = &node.get().instruction;
@@ -87,63 +183,83 @@ impl DisplayIR {
         self.add_ident(ident);
         match instruction.as_ref() {
             Instruction::Buffer => {
-                let temp = format!("${}: Buffer<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Buffer<{}> [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Bindless => {
-                let temp = format!("${}: Bindless<{}> [param]", self.get(&node), type_,);
+                let temp = format!(
+                    "${}: Bindless<{}> [param]",
+                    self.get_or_insert(&node),
+                    type_,
+                );
                 self.output += temp.as_str();
             }
             Instruction::Texture2D => {
-                let temp = format!("${}: Texture2D<{}> [param]", self.get(&node), type_,);
+                let temp = format!(
+                    "${}: Texture2D<{}> [param]",
+                    self.get_or_insert(&node),
+                    type_,
+                );
                 self.output += temp.as_str();
             }
             Instruction::Texture3D => {
-                let temp = format!("${}: Texture3D<{}> [param]", self.get(&node), type_,);
+                let temp = format!(
+                    "${}: Texture3D<{}> [param]",
+                    self.get_or_insert(&node),
+                    type_,
+                );
                 self.output += temp.as_str();
             }
             Instruction::Accel => {
-                let temp = format!("${}: Accel<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Accel<{}> [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Shared => {
-                let temp = format!("${}: Shared<{}> [param]", self.get(&node), type_,);
+                let temp = format!("${}: Shared<{}> [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Uniform => {
-                let temp = format!("${}: {} [param]", self.get(&node), type_,);
+                let temp = format!("${}: {} [param]", self.get_or_insert(&node), type_,);
                 self.output += temp.as_str();
             }
             Instruction::Local { init } => {
                 let temp = format!(
-                    "${}: {} = ${} [init]",
-                    self.get(&node),
+                    "${}: {} = Local [init = ${}]",
+                    self.get_or_insert(&node),
                     type_,
-                    self.get(init)
+                    self.get_or_insert(init)
                 );
                 self.output += temp.as_str();
             }
-            Instruction::Argument { .. } => todo!(),
+            Instruction::Argument { by_value } => {
+                let by_value_prefix = if *by_value { "" } else { "&" };
+                let var = format!("${}", self.get_or_insert(&node));
+                self.output += &format!("{}: {}{} [Argument]", var, by_value_prefix, type_);
+            }
             Instruction::UserData(_) => self.output += "Userdata",
             Instruction::Invalid => self.output += "INVALID",
             Instruction::Const(c) => {
-                let temp = format!("${}: {} = Const {}", self.get(&node), type_, c,);
+                let temp = format!("${}: {} = Const {}", self.get_or_insert(&node), type_, c,);
                 self.output += temp.as_str();
             }
             Instruction::Update { var, value } => {
-                let temp = format!("${} = ${}", self.get(var), self.get(value),);
+                let temp = format!(
+                    "${} = ${}",
+                    self.get_or_insert(var),
+                    self.get_or_insert(value),
+                );
                 self.output += temp.as_str();
             }
             Instruction::Call(func, args) => {
                 if !is_type_equal(type_, &Type::void()) {
-                    let tmp = format!("${}: {} = ", self.get(&node), type_,);
+                    let tmp = format!("${}: {} = ", self.get_or_insert(&node), type_,);
                     self.output += tmp.as_str();
                 }
 
                 let args = args
                     .as_ref()
                     .iter()
-                    .map(|arg| format!("${}", self.get(arg)))
+                    .map(|arg| format!("${}", self.get_or_insert(arg)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 if let Func::Assert(_) = func {
@@ -153,12 +269,12 @@ impl DisplayIR {
                 }
             }
             Instruction::Phi(incomings) => {
-                let n = self.get(&node);
+                let n = self.get_or_insert(&node);
                 self.output += &format!("${}: Phi", n);
                 for PhiIncoming { block, value } in incomings.iter() {
                     let label = self.block_label(*block);
-                    let v = self.get(value);
-                    self.output += &format!(" block_{} -> ${}, ", label, v);
+                    let v = self.get_or_insert(value);
+                    self.output += &format!(" {} -> ${}, ", label, v);
                 }
             }
             Instruction::Break => self.output += "break",
@@ -168,7 +284,7 @@ impl DisplayIR {
                 true_branch,
                 false_branch,
             } => {
-                let temp = format!("if ${} {{\n", self.get(cond));
+                let temp = format!("if ${} {{\n", self.get_or_insert(cond));
                 self.output += temp.as_str();
                 self.add_ident(ident);
                 let true_label = self.block_label(*true_branch);
@@ -194,15 +310,15 @@ impl DisplayIR {
                 default,
                 cases,
             } => {
-                let temp = format!("switch ${} {{\n", self.get(value));
+                let temp = format!("switch ${} {{\n", self.get_or_insert(value));
                 self.output += temp.as_str();
                 for SwitchCase { value, block } in cases.as_ref() {
                     self.add_ident(ident + 1);
                     let temp = format!("{} => {{\n", value);
-                    self.add_ident(ident);
+                    self.output += temp.as_str();
+                    self.add_ident(ident + 1);
                     let case_label = self.block_label(*block);
                     writeln!(self.output, "{}:", case_label).unwrap();
-                    self.output += temp.as_str();
                     for node in block.nodes().iter() {
                         self.display(*node, ident + 2, false);
                     }
@@ -211,7 +327,7 @@ impl DisplayIR {
                 }
                 self.add_ident(ident + 1);
                 self.output += "default => {\n";
-                self.add_ident(ident);
+                self.add_ident(ident + 1);
                 let default_label = self.block_label(*default);
                 writeln!(self.output, "{}:", default_label).unwrap();
                 for node in default.nodes().iter() {
@@ -219,6 +335,7 @@ impl DisplayIR {
                 }
                 self.add_ident(ident + 1);
                 self.output += "}\n";
+                self.add_ident(ident);
                 self.output += "}";
             }
             Instruction::RayQuery {
@@ -226,7 +343,7 @@ impl DisplayIR {
                 on_procedural_hit,
                 on_triangle_hit,
             } => {
-                let temp = format!("$RayQuery({}) {{", self.get(ray_query));
+                let temp = format!("$RayQuery({}) {{", self.get_or_insert(ray_query));
                 self.output += temp.as_str();
                 self.add_ident(ident + 1);
                 self.output += "on_procedural_hit {\n";
@@ -244,13 +361,17 @@ impl DisplayIR {
                 self.output += "}\n";
             }
             Instruction::Loop { body, cond } => {
-                let temp = format!("while ${} {{\n", self.get(cond));
+                let temp = format!("Loop {{\n");
                 self.output += temp.as_str();
+                self.add_ident(ident);
+                let default_label = self.block_label(*body);
+                writeln!(self.output, "{}:", default_label).unwrap();
                 for node in body.nodes().iter() {
                     self.display(*node, ident + 1, false);
                 }
                 self.add_ident(ident);
-                self.output += "}";
+                let temp = format!("}} (${})", self.get_or_insert(cond));
+                self.output += &temp;
             }
             Instruction::GenericLoop {
                 prepare,
@@ -300,12 +421,42 @@ impl DisplayIR {
                 self.add_ident(ident);
                 self.output += "}";
             }
-            Instruction::Comment(_) => {}
+            Instruction::Comment(msg) => {
+                for (i, line) in msg.to_string().lines().enumerate() {
+                    if i != 0 {
+                        self.output += "\n";
+                    }
+                    self.output += format!("// {}", line).as_str();
+                }
+                // self.output += "Comment: ...";
+            }
+            Instruction::CoroSplitMark { token } => {
+                self.output += format!("CoroSplitMark({})", token).as_str();
+            }
+            Instruction::CoroSuspend { token } => {
+                self.output += format!("CoroSuspend({})", token).as_str();
+            }
+            Instruction::CoroRegister { value, name } => {
+                let temp = format!(
+                    "CoroRegister(${} to {})\n",
+                    self.get(value),
+                    name.to_string()
+                );
+                self.output += temp.as_str();
+            }
+            Instruction::CoroResume { token } => {
+                self.output += format!("CoroResume({})", token).as_str();
+            }
             Instruction::Return(v) => {
-                let temp = if v.valid() {
-                    format!("return ${}", self.get(v))
+                let v_type = if v.valid() {
+                    v.type_().clone()
                 } else {
-                    "return void".to_string()
+                    Type::void()
+                };
+                let temp = if is_type_equal(&v_type, &Type::void()) {
+                    String::from("return")
+                } else {
+                    format!("return ${}", self.get(v))
                 };
                 self.output += temp.as_str();
             }

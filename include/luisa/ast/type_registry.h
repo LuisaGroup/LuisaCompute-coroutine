@@ -4,6 +4,7 @@
 #include <luisa/core/stl/memory.h>
 #include <luisa/core/macro.h>
 #include <luisa/ast/type.h>
+#include <type_traits>
 
 namespace luisa::compute {
 
@@ -255,6 +256,9 @@ const Type *Type::of() noexcept {
         if constexpr (is_custom_struct_v<T>) {
             static thread_local auto t = Type::custom(desc);
             return t;
+        } else if constexpr (is_coroframe_struct_v<T>) {
+            static thread_local auto t = Type::coroframe(desc);
+            return t;
         } else {
             static thread_local auto t = Type::from(desc);
             return t;
@@ -271,6 +275,8 @@ template<typename S, typename... M, typename O, O... os>
 struct is_valid_reflection<S, std::tuple<M...>, std::integer_sequence<O, os...>> {
 
     static_assert(alignof(S) >= 4u, "Structs must be aligned to at least 4 bytes.");
+    static_assert(std::negation_v<std::disjunction<is_coroframe_struct<M>...>>,
+                  "Structs cannot contain CoroFrame Type");
 
 private:
     [[nodiscard]] constexpr static auto _check() noexcept {
@@ -362,4 +368,18 @@ constexpr auto is_valid_reflection_v = is_valid_reflection<S, M, O>::value;
         static constexpr luisa::string_view description() noexcept { \
             return name;                                             \
         }                                                            \
+    };
+
+#define LUISA_COROFRAME_STRUCT_REFLECT(S, name)                        \
+    template<>                                                         \
+    struct canonical_layout<S> {                                       \
+        using type = std::tuple<S>;                                    \
+    };                                                                 \
+    template<>                                                         \
+    struct luisa::compute::is_coroframe_struct<S> : std::true_type {}; \
+    template<>                                                         \
+    struct luisa::compute::detail::TypeDesc<S> {                       \
+        static constexpr luisa::string_view description() noexcept {   \
+            return name;                                               \
+        }                                                              \
     };

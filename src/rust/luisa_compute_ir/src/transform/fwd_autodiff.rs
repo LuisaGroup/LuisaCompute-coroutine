@@ -1,3 +1,4 @@
+use bitflags::Flags;
 use std::{collections::HashSet, ops::Deref};
 
 use indexmap::IndexMap;
@@ -12,6 +13,7 @@ use crate::{
 };
 
 use super::Transform;
+
 type NodeVec = SmallVec<[NodeRef; 4]>;
 
 #[derive(Clone, Debug)]
@@ -29,6 +31,7 @@ struct ForwardAdTransform {
     pools: CArc<ModulePools>,
     locally_defined_nodes: HashSet<NodeRef>,
 }
+
 impl ForwardAdTransform {
     fn new(
         n_grads: usize,
@@ -542,8 +545,8 @@ impl ForwardAdTransform {
             ir::Instruction::Invalid => todo!(),
             ir::Instruction::Const(_) => {
                 self.zero_grad(node, builder);
-            },
-            ir::Instruction::Update { .. } => todo!(),
+            }
+            ir::Instruction::Update { var, value } => todo!(),
             ir::Instruction::Call(f, args) => {
                 self.transform_call(node, &f, args, builder);
             }
@@ -561,15 +564,15 @@ impl ForwardAdTransform {
                     let mut grad_incomings = vec![];
                     for j in 0..incomings.len() {
                         grad_incomings.push(PhiIncoming {
-                            value:incoming_grads[j][i],
-                            block:incomings[j].block,
+                            value: incoming_grads[j][i],
+                            block: incomings[j].block,
                         });
                     }
                     let phi_grad = builder.phi(&grad_incomings, node.type_().clone());
                     phi_grads.push(phi_grad);
                 }
                 self.create_grad(node, &phi_grads, builder);
-            },
+            }
             ir::Instruction::Return(_) => todo!(),
             ir::Instruction::Loop { body, cond } => {
                 self.transform_block(body, builder);
@@ -577,16 +580,16 @@ impl ForwardAdTransform {
             }
             ir::Instruction::GenericLoop {
                 prepare,
-                cond:_,
+                cond: _,
                 body,
                 update,
             } => {
                 self.transform_block(prepare, builder);
                 self.transform_block(body, builder);
                 self.transform_block(update, builder);
-            },
-            ir::Instruction::Break => {},
-            ir::Instruction::Continue => {},
+            }
+            ir::Instruction::Break => {}
+            ir::Instruction::Continue => {}
             ir::Instruction::If {
                 cond:_ ,
                 true_branch,
@@ -601,21 +604,25 @@ impl ForwardAdTransform {
                 cases,
             } => {
                 self.transform_block(default, builder);
-                for SwitchCase { value:_, block } in cases.iter() {
+                for SwitchCase { value: _, block } in cases.iter() {
                     self.transform_block(block, builder);
                 }
-            },
+            }
             ir::Instruction::AdScope { .. } => {
                 todo!("Nested AD scope is not supported");
-            },
+            }
             ir::Instruction::RayQuery {
                 ..
             } => panic!("RayQuery not supported in AD. Please recompute ray intersection after the RayQuery result is obtained"),
             ir::Instruction::AdDetach(_) => {
                 todo!()
-            },
+            }
             ir::Instruction::Comment(_) => {}
-            ir::Instruction::Print{..}=>{}
+            ir::Instruction::Print { .. } => {}
+            Instruction::CoroSplitMark { .. } => {todo!()}
+            Instruction::CoroSuspend { .. } => {todo!()}
+            Instruction::CoroResume { .. } => {todo!()}
+            Instruction::CoroRegister { .. } => {todo!()}
         }
     }
     fn transform_block(&mut self, block: &Pooled<BasicBlock>, builder: &mut IrBuilder) {
@@ -625,6 +632,7 @@ impl ForwardAdTransform {
         }
     }
 }
+
 pub(crate) struct FwdAutodiff;
 
 fn ad_transform_block(module: crate::ir::Module, n_grads: usize) {
@@ -632,6 +640,7 @@ fn ad_transform_block(module: crate::ir::Module, n_grads: usize) {
     let mut transform = ForwardAdTransform::new(n_grads, &module.pools, nodes);
     transform.transform_block(&module.entry, &mut IrBuilder::new(transform.pools.clone()));
 }
+
 fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) {
     let nodes = block.nodes();
     let mut i = 0;
@@ -709,8 +718,8 @@ fn ad_transform_recursive(block: Pooled<BasicBlock>, pools: &CArc<ModulePools>) 
 }
 
 impl Transform for FwdAutodiff {
-    fn transform(&self, mut module: crate::ir::Module) -> crate::ir::Module {
-        // log::debug!("FwdAutodiff transform");
+    fn transform_module(&self, mut module: Module) -> Module {
+        log::debug!("FwdAutodiff transform");
         // {
         //     println!("Before AD:");
         //     let debug = crate::ir::debug::luisa_compute_ir_dump_human_readable(&module);

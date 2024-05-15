@@ -588,6 +588,9 @@ private:
 
 private:
     [[nodiscard]] uint _type_index(const Type *type) noexcept {
+        if (type != nullptr && type->is_materialized_coroframe()) {
+            return _type_index(type->corotype());
+        }
         if (auto iter = _type_to_index.find(type);
             iter != _type_to_index.end()) {
             return iter->second;
@@ -629,6 +632,7 @@ private:
                     t["element"] = _type_index(type->element());
                     break;
                 }
+                case Type::Tag::COROFRAME: [[fallthrough]];
                 case Type::Tag::CUSTOM: {
                     t["id"] = type->description();
                     break;
@@ -817,7 +821,7 @@ private:
         }();
         // pop the context and check the stack
         auto popped_ctx = std::exchange(_func_ctx, old_ctx);
-        LUISA_ASSERT(popped_ctx == &ctx, "Function context stack corrupted.");
+        LUISA_ASSERT(popped_ctx == &ctx, "Func context stack corrupted.");
         // insert into the root table
         auto &funcs = _root["functions"].as_array();
         auto index = static_cast<uint>(funcs.size());
@@ -939,6 +943,8 @@ private:
             case Statement::Tag::COMMENT: _convert_comment_stmt(j, static_cast<const CommentStmt *>(stmt)); break;
             case Statement::Tag::RAY_QUERY: _convert_ray_query_stmt(j, static_cast<const RayQueryStmt *>(stmt)); break;
             case Statement::Tag::AUTO_DIFF: _convert_autodiff_stmt(j, static_cast<const AutoDiffStmt *>(stmt)); break;
+            case Statement::Tag::SUSPEND: _convert_suspend_stmt(j, static_cast<const SuspendStmt *>(stmt)); break;
+            case Statement::Tag::COROBIND: _convert_corobind_stmt(j, static_cast<const CoroBindStmt *>(stmt)); break;
             case Statement::Tag::PRINT: _convert_print_stmt(j, static_cast<const PrintStmt *>(stmt)); break;
         }
         return j;
@@ -1016,6 +1022,13 @@ private:
     void _convert_autodiff_stmt(JSON &j, const AutoDiffStmt *stmt) noexcept {
         j["body"] = _convert_stmt(stmt->body());
     }
+    void _convert_suspend_stmt(JSON &j, const SuspendStmt *stmt) noexcept {
+        j["coro_token"] = stmt->token();
+    }
+    void _convert_corobind_stmt(JSON &j, const CoroBindStmt *stmt) noexcept {
+        j["name"] = stmt->name();
+        j["expression"] = _convert_expr(stmt->expression());
+    }
     void _convert_print_stmt(JSON &j, const PrintStmt *stmt) noexcept {
         j["format"] = stmt->format();
         j["arguments"] = [&] {
@@ -1033,7 +1046,7 @@ public:
         AST2JSON converter;
         auto entry = converter._function_index(f);
         LUISA_ASSERT(converter._func_ctx == nullptr,
-                     "Function context stack corrupted.");
+                     "Func context stack corrupted.");
         auto j = std::move(converter._root);
         j["entry"] = entry;
         return j;

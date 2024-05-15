@@ -15,10 +15,14 @@ class FunctionBuilder;
 }// namespace detail
 
 class LC_IR_API AST2IR {
-    
+
+private:
+    AST2IR() noexcept = default;
+
 public:
     [[nodiscard]] static luisa::shared_ptr<ir::CArc<ir::KernelModule>> build_kernel(Function function) noexcept;
     [[nodiscard]] static luisa::shared_ptr<ir::CArc<ir::CallableModule>> build_callable(Function function) noexcept;
+    [[nodiscard]] static luisa::shared_ptr<ir::CArc<ir::CallableModule>> build_coroutine(Function function) noexcept;
     [[nodiscard]] static ir::CArc<ir::Type> build_type(const Type *type) noexcept;
 };
 

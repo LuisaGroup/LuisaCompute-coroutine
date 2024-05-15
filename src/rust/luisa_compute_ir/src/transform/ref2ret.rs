@@ -232,7 +232,15 @@ impl Ref2RetImpl {
                 }
                 Instruction::AdDetach(body) => self.transform_block(body),
                 Instruction::Comment(_) => {}
-                Instruction::Print { .. } => {todo!()}
+                Instruction::CoroSplitMark { .. }
+                | Instruction::CoroSuspend { .. }
+                | Instruction::CoroRegister { .. }
+                | Instruction::CoroResume { .. } => {
+                    todo!()
+                }
+                Instruction::Print { .. } => {
+                    todo!()
+                }
             }
         }
     }
@@ -329,7 +337,7 @@ impl Ref2RetImpl {
 }
 
 impl Transform for Ref2Ret {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut transform = Ref2RetImpl::new();
         transform.transform_block(&module.entry);
         module

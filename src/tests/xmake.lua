@@ -110,8 +110,9 @@ end
 
 -- FIXME: @Maxwell please use the doctest framework
 if get_config("enable_ir") then
-    test_proj('test_autodiff')
-    test_proj('test_autodiff_full')
+	test_proj('test_autodiff')
+	test_proj('test_coroutine')
+	test_proj('test_autodiff_full')
 end
 test_proj("test_ast")
 test_proj("test_atomic")

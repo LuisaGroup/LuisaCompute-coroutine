@@ -102,6 +102,12 @@
 #define LC_BACKEND_API __declspec(dllimport)
 #endif
 
+#ifdef LC_CORO_EXPORT_DLL
+#define LC_CORO_API __declspec(dllexport)
+#else
+#define LC_CORO_API __declspec(dllimport)
+#endif
+
 #ifdef LC_CLANGCXX_EXPORT_DLL
 #define LC_CLANGCXX_API __declspec(dllexport)
 #else
@@ -121,6 +127,6 @@
 #define LC_REMOTE_API
 #define LC_GUI_API
 #define LC_BACKEND_API
+#define LC_CORO_API
 #define LC_CLANGCXX_API
 #endif
-

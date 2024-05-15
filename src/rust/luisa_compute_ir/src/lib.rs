@@ -4,13 +4,14 @@ pub use ffi::*;
 use half::f16;
 use serde::Serialize;
 use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc};
-pub mod analysis;
+use std::hash::Hasher;
+
 mod ast2ir;
 pub mod context;
 mod display;
 pub mod serialize;
 pub mod transform;
-mod usage_detect;
+pub mod analysis;
 
 use ir::{ArrayType, Primitive, Type};
 
@@ -213,6 +214,18 @@ impl<T> Clone for Pooled<T> {
         *self
     }
 }
+impl<T> Hash for Pooled<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ptr.hash(state);
+    }
+}
+impl<T> PartialEq for Pooled<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr
+    }
+}
+
+impl<T> Eq for Pooled<T> {}
 impl<T> Pooled<T> {
     pub fn null() -> Self {
         Self {

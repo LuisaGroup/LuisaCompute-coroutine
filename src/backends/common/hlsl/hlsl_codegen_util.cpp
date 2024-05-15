@@ -117,6 +117,10 @@ static size_t AddHeader(CallOpSet const &ops, vstd::StringBuilder &builder, bool
         ops.test(CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION)) {
         builder << CodegenUtility::ReadInternalHLSLFile("reduce");
     }
+    if (ops.test(CallOp::CORO_ID) ||
+        ops.test(CallOp::CORO_TOKEN)) {
+        builder << CodegenUtility::ReadInternalHLSLFile("coroutine");
+    }
     return immutable_size;
 }
 }// namespace detail
@@ -332,7 +336,7 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
             return;
         case Type::Tag::BUFFER: {
             if ((static_cast<uint>(usage) & static_cast<uint>(Usage::WRITE)) != 0)
-                str << "RW"sv;
+                str << "globallycoherent RW"sv;
             auto ele = type.element();
             // StructuredBuffer
             if (ele != nullptr) {
@@ -376,6 +380,10 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
         } break;
         case Type::Tag::CUSTOM: {
             str << '_' << type.description();
+        } break;
+        case Type::Tag::COROFRAME: {
+            auto customType = opt->CreateStruct(type.corotype());
+            str << customType;
         } break;
         default:
             LUISA_ERROR_WITH_LOCATION("Bad.");
@@ -1231,6 +1239,12 @@ void CodegenUtility::GetFunctionName(CallExpr const *expr, vstd::StringBuilder &
         case CallOp::WARP_FIRST_ACTIVE_LANE: LUISA_NOT_IMPLEMENTED();
         case CallOp::SHADER_EXECUTION_REORDER:
             str << "(void)";
+            break;
+        case CallOp::CORO_ID:
+            str << "CoroId"sv;
+            break;
+        case CallOp::CORO_TOKEN:
+            str << "CoroToken"sv;
             break;
         default:
             LUISA_ERROR("Bad op.");

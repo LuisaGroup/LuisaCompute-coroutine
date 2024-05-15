@@ -107,9 +107,11 @@ impl Reg2MemImpl {
                     self.transform_recursive(body);
                 }
                 Instruction::Comment(_) => {}
-                Instruction::Print { .. } => {
-                    todo!()
-                }
+                Instruction::CoroSplitMark { .. }
+                | Instruction::CoroSuspend { .. }
+                | Instruction::CoroRegister { .. }
+                | Instruction::CoroResume { .. } => {}
+                Instruction::Print { .. } => {}
             }
         }
     }
@@ -185,9 +187,11 @@ impl Reg2MemImpl {
                     self.collect_phi_and_local_nodes(body);
                 }
                 Instruction::Comment(_) => {}
-                Instruction::Print { .. } => {
-                    todo!()
-                }
+                Instruction::CoroSplitMark { .. }
+                | Instruction::CoroSuspend { .. }
+                | Instruction::CoroRegister { .. }
+                | Instruction::CoroResume { .. } => {}
+                Instruction::Print { .. } => {}
             }
         }
     }
@@ -232,7 +236,10 @@ impl Reg2MemImpl {
                     // move to the beginning of the function
                     if builder.insert_point != node_ref.clone() {
                         node_ref.remove();
+                        builder.append(zero);
                         builder.append(node_ref.clone());
+                    } else {
+                        node_ref.insert_before_self(zero);
                     }
                 }
                 _ => unreachable!(),
@@ -287,7 +294,7 @@ impl Reg2MemImpl {
 pub struct Reg2Mem;
 
 impl Transform for Reg2Mem {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut reg2mem = Reg2MemImpl::new();
         reg2mem.transform_module(&module);
         module

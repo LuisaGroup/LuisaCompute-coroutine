@@ -269,6 +269,9 @@ enum struct CallOp : uint32_t {
     BACKWARD,           // (expr) -> void
     DETACH,             // (expr) -> expr
 
+    // coroutine op
+    CORO_ID,             // (struct)
+    CORO_TOKEN,          // (struct)
     // ray tracing
     RAY_TRACING_INSTANCE_TRANSFORM,      // (Accel, uint)
     RAY_TRACING_INSTANCE_USER_ID,        // (Accel, uint)
@@ -356,12 +359,12 @@ static constexpr size_t call_op_count = to_underlying(CallOp::SHADER_EXECUTION_R
            op == CallOp::MAKE_FLOAT4X4;
 }
 
+class CallableLibrary;
+
 /**
  * @brief Set of call operations.
  * 
  */
-class CallableLibrary;
-
 class LC_AST_API CallOpSet {
 
     friend class CallableLibrary;

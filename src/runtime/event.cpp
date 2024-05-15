@@ -1,16 +1,15 @@
 #include <luisa/runtime/device.h>
+#include <luisa/runtime/stream.h>
 #include <luisa/runtime/event.h>
 
 namespace luisa::compute {
 
-void Event::Signal::operator()(DeviceInterface *device,
-                               uint64_t stream_handle) const && noexcept {
-    device->signal_event(handle, stream_handle, fence);
+void Event::Signal::operator()(Stream &stream) const && noexcept {
+    stream.device()->signal_event(handle, stream.handle(), fence);
 }
 
-void Event::Wait::operator()(DeviceInterface *device,
-                             uint64_t stream_handle) const && noexcept {
-    device->wait_event(handle, stream_handle, fence);
+void Event::Wait::operator()(Stream &stream) const && noexcept {
+    stream.device()->wait_event(handle, stream.handle(), fence);
 }
 
 // counting event

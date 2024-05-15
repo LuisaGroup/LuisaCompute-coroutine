@@ -404,6 +404,15 @@ impl ToSSAImpl {
             Instruction::Return(_) => {
                 panic!("call LowerControlFlow before ToSSA");
             }
+            Instruction::CoroRegister { .. } | Instruction::CoroSplitMark { .. } => {
+                unimplemented!("Coroutine is not supported yet");
+            }
+            Instruction::CoroSuspend { .. } | Instruction::CoroResume { .. } => {
+                unreachable!(
+                    "{:?} should not be defined as statement directly",
+                    instruction
+                );
+            }
             Instruction::Print { fmt, args } => {
                 let args = args
                     .iter()
@@ -430,7 +439,7 @@ impl ToSSAImpl {
 }
 
 impl Transform for ToSSA {
-    fn transform(&self, module: Module) -> Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut imp = ToSSAImpl::new(&module);
         let new_bb = imp.promote_bb(
             module.entry,

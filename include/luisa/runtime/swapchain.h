@@ -11,13 +11,15 @@
 
 namespace luisa::compute {
 
+class Stream;
+
 class LC_RUNTIME_API Swapchain final : public Resource {
 
 public:
     struct LC_RUNTIME_API Present {
         const Swapchain *chain{nullptr};
         ImageView<float> frame;
-        void operator()(DeviceInterface *device, uint64_t stream_handle) && noexcept;
+        void operator()(Stream &stream) && noexcept;
     };
 
 private:

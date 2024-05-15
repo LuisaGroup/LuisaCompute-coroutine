@@ -41,6 +41,7 @@ add_subdirectory(ast)
 add_subdirectory(rust)
 add_subdirectory(runtime)
 add_subdirectory(ir)
+add_subdirectory(coro)
 add_subdirectory(dsl)
 add_subdirectory(tensor)
 add_subdirectory(osl)
@@ -63,6 +64,7 @@ target_link_libraries(compute INTERFACE
         luisa-compute-api
         luisa-compute-backends
         luisa-compute-ir
+        luisa-compute-coro
         luisa-compute-ir-v2
         luisa-compute-clangcxx)
 

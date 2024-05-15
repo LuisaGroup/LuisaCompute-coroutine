@@ -106,6 +106,7 @@ private:
     luisa::vector<Variable> _shared_variables;
     luisa::vector<Usage> _variable_usages;
     luisa::vector<std::pair<std::byte *, size_t /* alignment */>> _temporary_data;
+    luisa::unordered_map<luisa::string, uint> _coro_tokens;
     CallOpSet _direct_builtin_callables;
     CallOpSet _propagated_builtin_callables;
     uint64_t _hash;
@@ -238,7 +239,10 @@ public:
     [[nodiscard]] bool requires_autodiff() const noexcept;
     /// Return if uses printing.
     [[nodiscard]] bool requires_printing() const noexcept;
+    /// Return suspend id to token map
+    [[nodiscard]] const luisa::unordered_map<luisa::string, uint> &coro_tokens() const noexcept { return _coro_tokens; }
 
+    void coroframe_replace(const Type *type) noexcept;
     // build primitives
     /// Define a kernel function with given definition
     template<typename Def>
@@ -259,6 +263,11 @@ public:
         return _define(Function::Tag::RASTER_STAGE, std::forward<Def>(def));
     }
 
+    /// Define a coroutine function with given definition
+    template<typename Def>
+    static auto define_coroutine(Def &&def) {
+        return _define(Function::Tag::COROUTINE, std::forward<Def>(def));
+    }
     // config
     /// Set block size
     void set_block_size(uint3 size) noexcept;
@@ -280,7 +289,6 @@ public:
     [[nodiscard]] const RefExpr *warp_lane_count() noexcept;
     /// Return warp lane count
     [[nodiscard]] const RefExpr *warp_lane_id() noexcept;
-
     // variables
     /// Add local variable of type
     [[nodiscard]] const RefExpr *local(const Type *type) noexcept;
@@ -377,7 +385,6 @@ public:
     void comment_(luisa::string comment) noexcept;
     /// Add assign statement
     void assign(const Expression *lhs, const Expression *rhs) noexcept;
-
     /// Add if statement
     [[nodiscard]] IfStmt *if_(const Expression *cond) noexcept;
     /// Add loop statement
@@ -394,6 +401,23 @@ public:
     [[nodiscard]] RayQueryStmt *ray_query_(const RefExpr *query) noexcept;
     /// Add auto diff statement
     [[nodiscard]] AutoDiffStmt *autodiff_() noexcept;
+    /// Add suspend statement
+    [[nodiscard]] uint suspend_(luisa::string desc) noexcept;
+
+    // For coroutine use only
+    /// check if function is coroutine
+    void check_is_coroutine() noexcept;
+    /// initialize coroframe
+    void initialize_coroframe(const Expression *expr, const Expression *coro_id) noexcept;
+    /// bind local to promise
+    void bind_promise_(const Expression *var, luisa::string name) noexcept;
+    /// read local from promise
+    const MemberExpr *read_promise_(const Type *type, const Expression *expr, luisa::string_view name) noexcept;
+    /// Return coroutine id in coroframe
+    [[nodiscard]] const CallExpr *coro_id() noexcept;
+    /// Return coroutine token in coroframe
+    [[nodiscard]] const CallExpr *coro_token() noexcept;
+
     /// Add print statement
     void print_(luisa::string format, luisa::span<const Expression *const> args) noexcept;
 

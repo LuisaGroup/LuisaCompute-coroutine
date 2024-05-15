@@ -1,16 +1,17 @@
+use crate::analysis::usage_detect::detect_usage;
+use crate::ast2ir;
+use crate::*;
+use bitflags::bitflags;
 use half::f16;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
-
-use crate::ast2ir;
-use crate::usage_detect::detect_usage;
-use crate::*;
-use bitflags::bitflags;
 use std::any::{Any, TypeId};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
 use std::ops::Deref;
+use std::ptr::null;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
@@ -229,11 +230,15 @@ impl Primitive {
             Primitive::Float64 => 8,
         }
     }
+
+    pub fn to_type(&self) -> CArc<Type> {
+        context::register_type(Type::Primitive(*self))
+    }
 }
 
 impl VectorType {
     pub fn size(&self) -> usize {
-        let el_sz = self.element.size();
+        let el_sz: usize = self.element.size();
         let aligned_len = {
             let four = self.length / 4;
             let rem = self.length % 4;
@@ -616,6 +621,10 @@ pub enum Func {
     DispatchId,
     DispatchSize,
 
+    // Coroutine
+    CoroId,
+    CoroToken,
+
     // Forward AD
     /// (input, grads, ...) -> ()
     PropagateGrad,
@@ -947,11 +956,13 @@ pub enum Func {
     Unknown0,
     Unknown1,
 }
+
 impl Func {
     pub fn discriminant(&self) -> u32 {
         unsafe { *<*const _>::from(self).cast::<u32>() }
     }
 }
+
 #[derive(Clone, Debug, Serialize)]
 #[repr(C)]
 pub enum Const {
@@ -995,77 +1006,84 @@ impl std::fmt::Display for Const {
 }
 
 impl Const {
-    pub fn get_i32(&self) -> i32 {
+    pub fn try_get_i32(&self) -> Option<i32> {
         match self {
-            Const::Int8(v) => *v as i32,
-            Const::Uint8(v) => *v as i32,
-            Const::Int16(v) => *v as i32,
-            Const::Uint16(v) => *v as i32,
-            Const::Int32(v) => *v,
-            Const::Uint32(v) => *v as i32,
-            Const::Int64(v) => *v as i32,
-            Const::Uint64(v) => *v as i32,
+            Const::Int8(v) => Some(*v as i32),
+            Const::Uint8(v) => Some(*v as i32),
+            Const::Int16(v) => Some(*v as i32),
+            Const::Uint16(v) => Some(*v as i32),
+            Const::Int32(v) => Some(*v as i32),
+            Const::Uint32(v) => Some(*v as i32),
+            Const::Int64(v) => Some(*v as i32),
+            Const::Uint64(v) => Some(*v as i32),
             Const::One(t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                1
+                if t.is_primitive() && t.is_int() {
+                    Some(1)
+                } else {
+                    None
+                }
             }
             Const::Zero(t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                0
+                if t.is_primitive() && t.is_int() {
+                    Some(0)
+                } else {
+                    None
+                }
             }
             Const::Generic(slice, t) => {
-                assert!(
-                    t.is_primitive() && t.is_int(),
-                    "cannot convert {:?} to i32",
-                    t
-                );
-                assert_eq!(slice.len(), 4, "invalid slice length for i32");
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(slice);
-                i32::from_le_bytes(buf)
+                if t.is_primitive() && t.is_int() {
+                    let slice = slice.as_ref();
+                    match slice.len() {
+                        1 => Some(slice[0] as i32),
+                        2 => Some(i16::from_le_bytes(slice.try_into().unwrap()) as i32),
+                        4 => Some(i32::from_le_bytes(slice.try_into().unwrap())),
+                        8 => Some(i64::from_le_bytes(slice.try_into().unwrap()) as i32),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
             }
             _ => panic!("cannot convert to i32"),
         }
     }
-    pub fn get_bool(&self) -> bool {
+
+    pub fn get_i32(&self) -> i32 {
+        self.try_get_i32().unwrap()
+    }
+
+    pub fn try_get_bool(&self) -> Option<bool> {
         match self {
-            Const::Bool(v) => *v,
+            Const::Bool(v) => Some(*v),
             Const::One(t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                true
+                if t.is_primitive() && t.is_bool() {
+                    Some(true)
+                } else {
+                    None
+                }
             }
             Const::Zero(t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                false
+                if t.is_primitive() && t.is_bool() {
+                    Some(false)
+                } else {
+                    None
+                }
             }
             Const::Generic(slice, t) => {
-                assert!(
-                    t.is_primitive() && t.is_bool(),
-                    "cannot convert {:?} to bool",
-                    t
-                );
-                assert_eq!(slice.len(), 1, "invalid slice length for bool");
-                slice[0] != 0
+                if t.is_primitive() && t.is_bool() {
+                    Some(slice[0] != 0)
+                } else {
+                    None
+                }
             }
             _ => panic!("cannot convert to bool"),
         }
     }
+
+    pub fn get_bool(&self) -> bool {
+        self.try_get_bool().unwrap()
+    }
+
     pub fn type_(&self) -> CArc<Type> {
         match self {
             Const::Zero(ty) => ty.clone(),
@@ -1091,6 +1109,12 @@ impl Const {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, PartialOrd, Ord)]
 #[repr(C)]
 pub struct NodeRef(pub usize);
+
+impl Default for NodeRef {
+    fn default() -> Self {
+        INVALID_REF
+    }
+}
 
 impl Debug for NodeRef {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -1126,11 +1150,34 @@ impl Serialize for UserData {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Serialize, Hash, PartialEq, Eq)]
 pub struct PhiIncoming {
     pub value: NodeRef,
     pub block: Pooled<BasicBlock>,
+}
+
+impl Ord for PhiIncoming {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        let ans = self.block.as_ptr().cmp(&other.block.as_ptr());
+        if ans == Ordering::Equal {
+            self.value.cmp(&other.value)
+        } else {
+            ans
+        }
+    }
+}
+impl PartialOrd for PhiIncoming {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let ans = self.block.as_ptr().partial_cmp(&other.block.as_ptr());
+        if ans == Some(Ordering::Equal) {
+            self.value.partial_cmp(&other.value)
+        } else {
+            ans
+        }
+    }
 }
 
 #[repr(C)]
@@ -1164,7 +1211,7 @@ pub struct SwitchCase {
 }
 
 #[repr(C)]
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub enum Instruction {
     Buffer,
     Bindless,
@@ -1196,6 +1243,7 @@ pub enum Instruction {
     Call(Func, CBoxedSlice<NodeRef>),
 
     Phi(CBoxedSlice<PhiIncoming>),
+    Return(NodeRef),
     /* represent a loop in the form of
     loop {
         body();
@@ -1204,7 +1252,6 @@ pub enum Instruction {
         }
     }
     */
-    Return(NodeRef),
     Loop {
         body: Pooled<BasicBlock>,
         cond: NodeRef,
@@ -1259,6 +1306,195 @@ pub enum Instruction {
     },
     AdDetach(Pooled<BasicBlock>),
     Comment(CBoxedSlice<u8>),
+    CoroSplitMark {
+        token: u32,
+    },
+    CoroSuspend {
+        token: u32,
+    },
+    CoroResume {
+        token: u32,
+    },
+    CoroRegister {
+        value: NodeRef,
+        name: CBoxedSlice<u8>,
+    },
+}
+
+impl Debug for Instruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::Buffer => {
+                write!(f, "Buffer")
+            }
+            Instruction::Bindless => {
+                write!(f, "Bindless")
+            }
+            Instruction::Texture2D => {
+                write!(f, "Texture2D")
+            }
+            Instruction::Texture3D => {
+                write!(f, "Texture3D")
+            }
+            Instruction::Accel => {
+                write!(f, "Accel")
+            }
+            Instruction::Shared => {
+                write!(f, "Shared")
+            }
+            Instruction::Uniform => {
+                write!(f, "Uniform")
+            }
+            Instruction::Local { init } => {
+                write!(f, "Local({:?})", init)
+            }
+            Instruction::Argument { by_value } => {
+                write!(f, "{}Argument", if *by_value { "" } else { "&" })
+            }
+            Instruction::UserData(_) => {
+                write!(f, "UserData")
+            }
+            Instruction::Invalid => {
+                write!(f, "Invalid")
+            }
+            Instruction::Const(c) => {
+                write!(f, "Const({})", c)
+            }
+            Instruction::Update { var, value } => {
+                write!(f, "Update {} = {}", var.0, value.0)
+            }
+            Instruction::Call(func, args) => {
+                let args = args
+                    .iter()
+                    .map(|node| format!("{}", node.0))
+                    .collect::<Vec<_>>();
+                // use ", " to join args
+                let args = args.join(", ");
+                write!(f, "Call {:?}({})", func, args)
+            }
+            Instruction::Phi(incomings) => {
+                let incomings = incomings
+                    .iter()
+                    .map(|i| format!("{:?}", i))
+                    .collect::<Vec<_>>();
+                let incomings = incomings.join(", ");
+                write!(f, "Phi({})", incomings)
+            }
+            Instruction::Return(value) => {
+                if value.valid() {
+                    write!(f, "Return {:?}", value)
+                } else {
+                    write!(f, "Return")
+                }
+            }
+            Instruction::Loop { body, cond } => {
+                write!(f, "Loop {{ {:?} }} Cond({:?})", body.as_ptr(), cond)
+            }
+            Instruction::GenericLoop {
+                prepare,
+                cond,
+                body,
+                update,
+            } => {
+                write!(
+                    f,
+                    "GenericLoop Prepare({:?}) Cond({}) Body({:?}) Update({:?})",
+                    prepare.as_ptr(),
+                    cond.0,
+                    body.as_ptr(),
+                    update.as_ptr()
+                )
+            }
+            Instruction::Break => {
+                write!(f, "Break")
+            }
+            Instruction::Continue => {
+                write!(f, "Continue")
+            }
+            Instruction::If {
+                cond,
+                true_branch,
+                false_branch,
+            } => {
+                write!(
+                    f,
+                    "If Cond({}) True({:?}) False({:?})",
+                    cond.0,
+                    true_branch.as_ptr(),
+                    false_branch.as_ptr()
+                )
+            }
+            Instruction::Switch {
+                value,
+                default,
+                cases,
+            } => {
+                let cases = cases.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>();
+                let cases = cases.join(", ");
+                write!(
+                    f,
+                    "Switch Value({}) Default({:?}) Cases({})",
+                    value.0,
+                    default.as_ptr(),
+                    cases
+                )
+            }
+            Instruction::AdScope {
+                body,
+                forward,
+                n_forward_grads,
+            } => {
+                write!(
+                    f,
+                    "AdScope Body({:?}) Forward({}) n_forward_grads({})",
+                    body.as_ptr(),
+                    forward,
+                    n_forward_grads
+                )
+            }
+            Instruction::RayQuery {
+                ray_query,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                write!(
+                    f,
+                    "RayQuery RayQuery({}) OnTriangleHit({:?}) OnProceduralHit({:?})",
+                    ray_query.0,
+                    on_triangle_hit.as_ptr(),
+                    on_procedural_hit.as_ptr()
+                )
+            }
+            Instruction::Print { fmt, args } => {
+                let args = args.iter().map(|a| format!("{:?}", a)).collect::<Vec<_>>();
+                let args = args.join(", ");
+                write!(f, "Print Fmt({}) Args({})", fmt.to_string(), args)
+            }
+            Instruction::AdDetach(body) => {
+                write!(f, "AdDetach Body({:?})", body.as_ptr())
+            }
+            Instruction::Comment(comment) => {
+                write!(f, "Comment: {:?}", comment.to_string())
+            }
+            Instruction::CoroSplitMark { token } => {
+                write!(f, "CoroSplitMark({})", token)
+            }
+            Instruction::CoroSuspend { token } => {
+                write!(f, "CoroSuspend({})", token)
+            }
+            Instruction::CoroResume { token } => {
+                write!(f, "CoroResume({})", token)
+            }
+            Instruction::CoroRegister { value, name } => {
+                write!(
+                    f,
+                    "CoroRegister(name: {}, value: {})",
+                    name.to_string(),
+                    value.0,
+                )
+            }
+        }
+    }
 }
 
 extern "C" fn eq_impl<T: UserNodeData>(a: *const u8, b: *const u8) -> bool {
@@ -1584,6 +1820,23 @@ impl NodeRef {
             _ => false,
         }
     }
+
+    pub fn is_primitive(&self) -> bool {
+        match self.type_().as_ref() {
+            Type::Primitive(..) => true,
+            _ => false,
+        }
+    }
+    pub fn is_vector(&self) -> bool {
+        match self.type_().as_ref() {
+            Type::Vector(..) => true,
+            _ => false,
+        }
+    }
+    pub fn is_local_primitive(&self) -> bool {
+        self.is_primitive() && self.is_local()
+    }
+
     pub fn is_reference_argument(&self) -> bool {
         match self.get().instruction.as_ref() {
             Instruction::Argument { by_value } => !*by_value,
@@ -1599,7 +1852,7 @@ impl NodeRef {
     pub fn is_phi(&self) -> bool {
         self.get().instruction.is_phi()
     }
-    pub fn get<'a>(&'a self) -> &'a Node {
+    pub fn get(&self) -> &Node {
         assert!(self.valid());
         unsafe { &*(self.0 as *const Node) }
     }
@@ -1737,6 +1990,19 @@ pub struct Module {
 #[derive(Debug, Serialize, Clone)]
 pub struct CallableModuleRef(pub CArc<CallableModule>);
 
+impl CallableModuleRef {
+    pub fn as_ref(&self) -> &CallableModule {
+        self.0.as_ref()
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Serialize, Clone)]
+pub struct CoroFrameDesignatedField {
+    pub name: CBoxedSlice<u8>,
+    pub index: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Serialize)]
 pub struct CallableModule {
@@ -1744,12 +2010,18 @@ pub struct CallableModule {
     pub ret_type: CArc<Type>,
     pub args: CBoxedSlice<NodeRef>,
     pub captures: CBoxedSlice<Capture>,
+    pub subroutines: CBoxedSlice<CallableModuleRef>,
+    pub subroutine_ids: CBoxedSlice<u32>,
+    pub coro_frame_input_fields: CBoxedSlice<u32>,
+    pub coro_frame_output_fields: CBoxedSlice<u32>,
+    pub coro_frame_designated_fields: CBoxedSlice<CoroFrameDesignatedField>,
     pub cpu_custom_ops: CBoxedSlice<CArc<CpuCustomOp>>,
     #[serde(skip)]
     pub pools: CArc<ModulePools>,
 }
 
 impl PartialEq for CallableModuleRef {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.0.as_ptr() == other.0.as_ptr()
     }
@@ -1758,6 +2030,7 @@ impl PartialEq for CallableModuleRef {
 impl Eq for CallableModuleRef {}
 
 impl Hash for CallableModuleRef {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.as_ptr().hash(state);
     }
@@ -1851,6 +2124,7 @@ unsafe impl Send for BlockModule {}
 struct NodeCollector {
     nodes: Vec<NodeRef>,
     unique: HashSet<NodeRef>,
+    node2block: HashMap<NodeRef, Pooled<BasicBlock>>,
 }
 
 impl NodeCollector {
@@ -1858,19 +2132,21 @@ impl NodeCollector {
         Self {
             nodes: Vec::new(),
             unique: HashSet::new(),
+            node2block: HashMap::new(),
         }
     }
     fn visit_block(&mut self, block: Pooled<BasicBlock>) {
         for node in block.iter() {
-            self.visit_node(node);
+            self.visit_node(block, node);
         }
     }
-    fn visit_node(&mut self, node_ref: NodeRef) {
+    fn visit_node(&mut self, block: Pooled<BasicBlock>, node_ref: NodeRef) {
         if self.unique.contains(&node_ref) {
             return;
         }
         self.unique.insert(node_ref);
         self.nodes.push(node_ref);
+        self.node2block.insert(node_ref, block);
         let inst = node_ref.get().instruction.as_ref();
         match inst {
             Instruction::AdScope { body, .. } => {
@@ -1907,16 +2183,42 @@ impl NodeCollector {
                     self.visit_block(*block);
                 }
             }
+            Instruction::AdDetach(body) => {
+                self.visit_block(*body);
+            }
+            Instruction::RayQuery {
+                ray_query: _,
+                on_triangle_hit,
+                on_procedural_hit,
+            } => {
+                self.visit_block(*on_triangle_hit);
+                self.visit_block(*on_procedural_hit);
+            }
             _ => {}
         }
     }
 }
 
+pub fn collect_nodes(block: Pooled<BasicBlock>) -> Vec<NodeRef> {
+    let mut collector = NodeCollector::new();
+    collector.visit_block(block);
+    collector.nodes
+}
+
+pub fn collect_nodes_with_block(
+    block: Pooled<BasicBlock>,
+) -> (Vec<NodeRef>, HashMap<NodeRef, Pooled<BasicBlock>>) {
+    let mut collector = NodeCollector::new();
+    collector.visit_block(block);
+    (collector.nodes, collector.node2block)
+}
+
 impl Module {
     pub fn collect_nodes(&self) -> Vec<NodeRef> {
-        let mut collector = NodeCollector::new();
-        collector.visit_block(self.entry);
-        collector.nodes
+        collect_nodes(self.entry)
+    }
+    pub fn collect_nodes_with_block(&self) -> (Vec<NodeRef>, HashMap<NodeRef, Pooled<BasicBlock>>) {
+        collect_nodes_with_block(self.entry)
     }
 }
 
@@ -1962,6 +2264,11 @@ impl ModuleDuplicator {
                 ret_type: callable.ret_type.clone(),
                 args: dup_args,
                 captures: dup_captures,
+                subroutines: callable.subroutines.clone(),
+                subroutine_ids: callable.subroutine_ids.clone(),
+                coro_frame_input_fields: callable.coro_frame_input_fields.clone(),
+                coro_frame_output_fields: callable.coro_frame_output_fields.clone(),
+                coro_frame_designated_fields: callable.coro_frame_designated_fields.clone(),
                 cpu_custom_ops: callable.cpu_custom_ops.clone(),
                 pools: callable.pools.clone(),
             }
@@ -2183,6 +2490,14 @@ impl ModuleDuplicator {
                 builder.ad_detach(dup_body)
             }
             Instruction::Comment(msg) => builder.comment(msg.clone()),
+            Instruction::CoroSplitMark { token } => builder.coro_split_mark(*token),
+            Instruction::CoroSuspend { .. }
+            | Instruction::CoroRegister { .. }
+            | Instruction::CoroResume { .. } => {
+                unreachable!(
+                    "Unexpected coroutine instruction in ModuleDuplicator::duplicate_node"
+                );
+            }
             Instruction::Print { fmt, args } => {
                 let args = args
                     .iter()
@@ -2293,6 +2608,11 @@ impl IrBuilder {
     pub fn pools(&self) -> &CArc<ModulePools> {
         &self.pools
     }
+
+    fn _check_insert_point(&self) {
+        assert_ne!(self.insert_point, INVALID_REF);
+    }
+
     pub fn new_without_bb(pools: CArc<ModulePools>) -> Self {
         Self {
             bb: Pooled::null(),
@@ -2310,6 +2630,7 @@ impl IrBuilder {
         }
     }
     pub fn bb(&self) -> Pooled<BasicBlock> {
+        assert_ne!(self.bb.as_ptr(), null());
         self.bb
     }
     pub fn set_insert_point(&mut self, node: NodeRef) {
@@ -2323,9 +2644,11 @@ impl IrBuilder {
         }
     }
     pub fn get_insert_point(&self) -> NodeRef {
+        self._check_insert_point();
         self.insert_point
     }
     pub fn append(&mut self, node: NodeRef) {
+        self._check_insert_point();
         self.insert_point.insert_after_self(node);
         self.insert_point = node;
     }
@@ -2547,7 +2870,7 @@ impl IrBuilder {
             Instruction::Shared { .. } => {}
             Instruction::Call(func, _) => match func {
                 Func::GetElementPtr => {}
-                _ => panic!("not local or getelementptr"),
+                _ => panic!("not local or getelementptr: {:?}", var),
             },
             _ => panic!("not a var"),
         }
@@ -2703,7 +3026,44 @@ impl IrBuilder {
         self.append(node);
         node
     }
+    pub fn coro_split_mark(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(
+                CArc::new(Instruction::CoroSplitMark { token }),
+                Type::void(),
+            ),
+        );
+        self.append(new_node);
+        new_node
+    }
+    pub fn coro_suspend(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroSuspend { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
+    pub fn coro_register(&mut self, value: NodeRef, name: CBoxedSlice<u8>) -> NodeRef {
+        let node = Node::new(
+            CArc::new(Instruction::CoroRegister { value, name }),
+            Type::void(),
+        );
+        let node = new_node(&self.pools, node);
+        self.append(node);
+        node
+    }
+    pub fn coro_resume(&mut self, token: u32) -> NodeRef {
+        let new_node = new_node(
+            &self.pools,
+            Node::new(CArc::new(Instruction::CoroResume { token }), Type::void()),
+        );
+        self.append(new_node);
+        new_node
+    }
     pub fn finish(self) -> Pooled<BasicBlock> {
+        assert_ne!(self.bb.as_ptr(), null());
         self.bb
     }
 }

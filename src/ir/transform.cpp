@@ -10,7 +10,7 @@ void perform_ir_transform(M *m, luisa::span<const luisa::string> transforms) noe
     for (auto &&transform : transforms) {
         ir::luisa_compute_ir_transform_pipeline_add_transform(pipeline, transform.c_str());
     }
-    auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform(pipeline, m->module);
+    auto converted_module = ir::luisa_compute_ir_transform_pipeline_transform_module(pipeline, m->module);
     ir::luisa_compute_ir_transform_pipeline_destroy(pipeline);
     m->module = converted_module;
 }

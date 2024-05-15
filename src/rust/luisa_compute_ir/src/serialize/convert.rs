@@ -266,6 +266,22 @@ impl KernelSerializer {
                 let s = s.as_ref().to_vec();
                 SerializedInstruction::Comment(s)
             }
+            Instruction::CoroSplitMark { token } => {
+                SerializedInstruction::CoroSplitMark { token: *token }
+            }
+            Instruction::CoroSuspend { token } => {
+                SerializedInstruction::CoroSuspend { token: *token }
+            }
+            Instruction::CoroResume { token } => {
+                SerializedInstruction::CoroResume { token: *token }
+            }
+            Instruction::CoroRegister { value, name } => {
+                let value = self.serialize_noderef(*value);
+                SerializedInstruction::CoroRegister {
+                    value,
+                    name: name.to_vec(),
+                }
+            }
             _ => todo!(),
         }
     }

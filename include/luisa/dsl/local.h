@@ -1,6 +1,6 @@
 #pragma once
 
-#include <luisa/dsl/expr.h>
+#include <luisa/dsl/var.h>
 #include <luisa/dsl/operators.h>
 
 namespace luisa::compute {
@@ -31,7 +31,9 @@ public:
     explicit Local(size_t n) noexcept
         : _expression{detail::FunctionBuilder::current()->local(
               detail::local_array_choose_type<T>(n))},
-          _size{n} {}
+          _size{n} {
+        detail::apply_zero_initializer(_expression);
+    }
 
     Local(Local &&) noexcept = default;
     Local(const Local &another) noexcept

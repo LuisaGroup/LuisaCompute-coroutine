@@ -137,6 +137,8 @@ static void collect_types_in_function(Function f,
                 for (auto m : t->members()) {
                     self(self, m);
                 }
+            } else if (t->is_coroframe()) {
+                self(self, t->corotype());
             }
         }
     };
@@ -231,6 +233,7 @@ void MetalCodegenAST::_emit_type_decls(Function kernel) noexcept {
     // process types in topological order
     types.clear();
     auto emit = [&](auto &&self, auto type) noexcept -> void {
+        if (!type) { return; }
         if (types.emplace(type).second) {
             if (type->is_array() || type->is_buffer()) {
                 self(self, type->element());
@@ -344,6 +347,9 @@ void MetalCodegenAST::_emit_type_name(const Type *type, Usage usage) noexcept {
             }
             break;
         }
+        case Type::Tag::COROFRAME:
+            _emit_type_name(type->corotype());
+            break;
     }
 }
 
@@ -424,12 +430,12 @@ void MetalCodegenAST::_emit_function() noexcept {
             _scratch << "  auto print_buffer = args.print_buffer;\n";
         }
     } else {
-        auto texture_count = std::count_if(
+        auto template_count = std::count_if(
             _function.arguments().cbegin(), _function.arguments().cend(),
-            [](auto arg) { return arg.type()->is_texture(); });
-        if (texture_count > 0) {
+            [](auto arg) { return arg.is_reference() || arg.type()->is_texture(); });
+        if (template_count > 0) {
             _scratch << "template<";
-            for (auto i = 0u; i < texture_count; i++) {
+            for (auto i = 0u; i < template_count; i++) {
                 _scratch << "typename T" << i << ", ";
             }
             _scratch.pop_back();
@@ -438,20 +444,15 @@ void MetalCodegenAST::_emit_function() noexcept {
         }
         _emit_type_name(_function.return_type());
         _scratch << " callable_" << hash_to_string(_function.hash()) << "(";
-        auto emitted_texture_count = 0u;
+        auto emitted_template_count = 0u;
         if (!_function.arguments().empty() || _uses_printing) {
             for (auto arg : _function.arguments()) {
-                auto is_mut_ref = arg.is_reference() &&
-                                  (to_underlying(_function.variable_usage(arg.uid())) &
-                                   to_underlying(Usage::WRITE));
-                if (is_mut_ref) { _scratch << "thread "; }
-                if (arg.type()->is_texture()) {
-                    _scratch << "T" << emitted_texture_count++;
+                if (arg.is_reference() || arg.type()->is_texture()) {
+                    _scratch << "T" << emitted_template_count++;
                 } else {
                     _emit_type_name(arg.type(), _function.variable_usage(arg.uid()));
                 }
                 _scratch << " ";
-                if (is_mut_ref) { _scratch << "&"; }
                 _emit_variable_name(arg);
                 _scratch << ", ";
             }
@@ -814,7 +815,9 @@ void MetalCodegenAST::visit(const LiteralExpr *expr) noexcept {
 }
 
 void MetalCodegenAST::visit(const RefExpr *expr) noexcept {
+    if (expr->variable().is_reference()) { _scratch << "(*"; }
     _emit_variable_name(expr->variable());
+    if (expr->variable().is_reference()) { _scratch << ")"; }
 }
 
 void MetalCodegenAST::_emit_access_chain(luisa::span<const Expression *const> chain) noexcept {
@@ -950,7 +953,12 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::BUFFER_READ: _scratch << "buffer_read"; break;
         case CallOp::BUFFER_WRITE: _scratch << "buffer_write"; break;
         case CallOp::BUFFER_SIZE: _scratch << "buffer_size"; break;
-        case CallOp::BYTE_BUFFER_READ: _scratch << "byte_buffer_read"; break;
+        case CallOp::BYTE_BUFFER_READ: {
+            _scratch << "byte_buffer_read<";
+            _emit_type_name(expr->type());
+            _scratch << ">";
+            break;
+        }
         case CallOp::BYTE_BUFFER_WRITE: _scratch << "byte_buffer_write"; break;
         case CallOp::BYTE_BUFFER_SIZE: _scratch << "byte_buffer_size"; break;
         case CallOp::TEXTURE_READ: _scratch << "texture_read"; break;
@@ -1103,6 +1111,8 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
         case CallOp::WARP_READ_LANE: _scratch << "lc_warp_read_lane"; break;
         case CallOp::WARP_READ_FIRST_ACTIVE_LANE: _scratch << "lc_warp_read_first_active_lane"; break;
         case CallOp::SHADER_EXECUTION_REORDER: _scratch << "lc_shader_execution_reorder"; break;
+        case CallOp::CORO_ID: _scratch << "lc_coro_id"; break;
+        case CallOp::CORO_TOKEN: _scratch << "lc_coro_token"; break;
         case CallOp::ADDRESS_OF: LUISA_NOT_IMPLEMENTED();
         case CallOp::BUFFER_ADDRESS: LUISA_NOT_IMPLEMENTED();
         case CallOp::BINDLESS_BUFFER_ADDRESS: LUISA_NOT_IMPLEMENTED();
@@ -1126,9 +1136,12 @@ void MetalCodegenAST::visit(const CallExpr *expr) noexcept {
     } else {
         auto trailing_comma = false;
         for (auto i = 0u; i < expr->arguments().size(); i++) {
+            auto is_ref_arg = expr->is_custom() && expr->custom().arguments()[i].is_reference();
             auto arg = expr->arguments()[i];
             trailing_comma = true;
+            if (is_ref_arg) { _scratch << "&("; }
             arg->accept(*this);
+            if (is_ref_arg) { _scratch << ")"; }
             _scratch << ", ";
         }
         if (expr->is_custom() && _uses_printing) {

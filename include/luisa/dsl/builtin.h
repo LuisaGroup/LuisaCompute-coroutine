@@ -1771,6 +1771,40 @@ template<typename T>
             {LUISA_EXPR(x)}));
 }
 
+/// Coroutines
+/// coroutine initialization
+template<typename F, typename V>
+    requires is_coroframe_struct_v<expr_value_t<F>> &&
+             is_dsl_v<V> &&
+             is_same_expr_v<V, uint3>
+inline void initialize_coroframe(F &&frame, V &&coro_id) noexcept {
+    detail::FunctionBuilder::current()->initialize_coroframe(LUISA_EXPR(frame), LUISA_EXPR(coro_id));
+}
+
+template<typename T>
+    requires is_coroframe_struct_v<expr_value_t<T>>
+[[nodiscard]] inline auto make_coroframe(Expr<uint3> coro_id) noexcept {
+    Var<T> f;
+    initialize_coroframe(f, coro_id);
+    return f;
+}
+
+[[nodiscard]] inline auto coro_id() noexcept {
+    return def<uint3>(detail::FunctionBuilder::current()->coro_id());
+}
+
+[[nodiscard]] inline auto coro_token() noexcept {
+    return def<uint>(detail::FunctionBuilder::current()->coro_token());
+}
+
+template<typename Ret, typename T, typename S>
+inline auto read_promise(T &&t, S &&name) noexcept {
+    return def<Ret>(detail::FunctionBuilder::current()->read_promise_(
+        Type::of<Ret>(),
+        detail::extract_expression(std::forward<T>(t)),
+        std::forward<S>(name)));
+}
+
 template<typename T>
 [[nodiscard]] inline auto grad(const Local<T> &x) noexcept {
     auto b = detail::FunctionBuilder::current();

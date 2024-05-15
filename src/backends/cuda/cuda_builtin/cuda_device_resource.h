@@ -1294,14 +1294,6 @@ struct LCCommittedHit {
 static_assert(sizeof(LCCommittedHit) == 24u, "LCCommittedHit size mismatch");
 static_assert(alignof(LCCommittedHit) == 8u, "LCCommittedHit align mismatch");
 
-enum LCInstanceFlags : lc_uint {
-    LC_INSTANCE_FLAG_NONE = 0u,
-    LC_INSTANCE_FLAG_DISABLE_TRIANGLE_FACE_CULLING = 1u << 0u,
-    LC_INSTANCE_FLAG_FLIP_TRIANGLE_FACING = 1u << 1u,
-    LC_INSTANCE_FLAG_DISABLE_ANYHIT = 1u << 2u,
-    LC_INSTANCE_FLAG_ENFORCE_ANYHIT = 1u << 3u,
-};
-
 struct alignas(16) LCAccelInstance {
     lc_array<lc_float4, 3> m;
     lc_uint user_id;
@@ -1314,6 +1306,25 @@ struct alignas(16) LCAccelInstance {
 struct alignas(16u) LCAccel {
     unsigned long long handle;
     LCAccelInstance *instances;
+};
+
+struct LCRayQuery {
+    LCAccel accel;
+    LCRay ray;
+    lc_uint mask;
+    lc_uint flags;
+    LCCommittedHit hit;
+};
+
+using LCRayQueryAll = LCRayQuery;
+using LCRayQueryAny = LCRayQuery;
+
+enum LCInstanceFlags : lc_uint {
+    LC_INSTANCE_FLAG_NONE = 0u,
+    LC_INSTANCE_FLAG_DISABLE_TRIANGLE_FACE_CULLING = 1u << 0u,
+    LC_INSTANCE_FLAG_FLIP_TRIANGLE_FACING = 1u << 1u,
+    LC_INSTANCE_FLAG_DISABLE_ANYHIT = 1u << 2u,
+    LC_INSTANCE_FLAG_ENFORCE_ANYHIT = 1u << 3u,
 };
 
 [[nodiscard]] __device__ inline auto lc_accel_instance_transform(LCAccel accel, lc_uint instance_id) noexcept {
@@ -1743,17 +1754,6 @@ enum LCHitTypePrefix : lc_uint {
     LC_HIT_TYPE_PREFIX_PROCEDURAL = 0x1u << 28u,
     LC_HIT_TYPE_PREFIX_MASK = 0xfu << 28u,
 };
-
-struct LCRayQuery {
-    LCAccel accel;
-    LCRay ray;
-    lc_uint mask;
-    lc_uint flags;
-    LCCommittedHit hit;
-};
-
-using LCRayQueryAll = LCRayQuery;
-using LCRayQueryAny = LCRayQuery;
 
 [[nodiscard]] inline auto lc_ray_query_decode_hit() noexcept {
     auto hit = [] {// found closest hit
@@ -2871,3 +2871,13 @@ __device__ inline void lc_print_impl(LCPrintBuffer buffer, T value) noexcept {
 }
 
 #define LC_DECODE_STRING_FROM_ID(str_id) ((const char *)&(lc_string_data[lc_string_offsets[str_id]]))
+
+template<typename T>
+__device__ inline lc_uint3 lc_coro_id(const T &frame) noexcept {
+    return frame.m0;
+}
+
+template<typename T>
+__device__ inline lc_uint lc_coro_token(const T &frame) noexcept {
+    return frame.m1;
+}

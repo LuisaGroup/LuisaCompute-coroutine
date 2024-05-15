@@ -36,6 +36,21 @@ namespace luisa::compute {
             }};
 }
 
+[[nodiscard]] luisa::shared_ptr<ir::CArc<ir::CallableModule>> AST2IR::build_coroutine(Function function) noexcept {
+    auto j = to_json(function);
+    auto slice = ir::CBoxedSlice<uint8_t>{
+        .ptr = reinterpret_cast<uint8_t *>(j.data()),
+        .len = j.size(),
+        .destructor = nullptr,
+    };
+    auto f = ir::luisa_compute_ir_ast_json_to_ir_callable(slice);
+    return {luisa::new_with_allocator<ir::CArc<ir::CallableModule>>(f),
+            [](ir::CArc<ir::CallableModule> *p) noexcept {
+                p->release();
+                luisa::delete_with_allocator(p);
+            }};
+}
+
 ir::CArc<ir::Type> AST2IR::build_type(const Type *type) noexcept {
     static luisa::spin_mutex mutex;
     static luisa::unordered_map<const Type *, ir::CArc<ir::Type>> cache;

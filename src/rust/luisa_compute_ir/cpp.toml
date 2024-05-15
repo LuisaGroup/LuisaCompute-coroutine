@@ -24,7 +24,7 @@ using_namespaces = []
 sys_includes = []
 includes = ["ir_common.h"]
 no_includes = false
-after_includes = ""
+after_includes = "namespace luisa::compute::ir {\nstruct CallableModuleRef;struct CallableModule;\n}"
 
 
 
@@ -57,7 +57,7 @@ usize_is_size_t = true
 
 
 [export]
-include = ["Node", "CBox", "CSlice", "CBoxedSlice", "Instruction", "BasicBlock","CallableModuleRef", "CallableModule", "KernelModule", "ModuleFlags"]
+include = ["Node", "CBox", "CSlice", "CBoxedSlice", "Instruction", "BasicBlock", "CallableModuleRef", "CallableModule", "KernelModule", "NamedCallable", "ModuleFlags"]
 exclude = ["CArc", "CArcSharedBlock", "Pooled"]
 # prefix = "CAPI_"
 item_types = []

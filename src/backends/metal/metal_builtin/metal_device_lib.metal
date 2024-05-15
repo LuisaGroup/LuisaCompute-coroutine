@@ -95,6 +95,31 @@ inline void buffer_write(LCBuffer<T> buffer, I index, T value) {
     buffer.data[index] = value;
 }
 
+namespace lc_detail {
+template<typename T>
+struct remove_const {
+    using type = T;
+};
+template<typename T>
+struct remove_const<const T> {
+    using type = T;
+};
+template<typename T>
+using remove_const_t = typename remove_const<T>::type;
+}// namespace lc_detail
+
+template<typename T, typename I>
+[[nodiscard]] inline auto buffer_read_coherent(LCBuffer<T> buffer, I index) {
+    auto p = reinterpret_cast<device const volatile atomic<lc_detail::remove_const_t<T>> *>(&buffer.data[index]);
+    return atomic_load_explicit(p, memory_order_relaxed);
+}
+
+template<typename T, typename I>
+inline void buffer_write_coherent(LCBuffer<T> buffer, I index, T value) {
+    auto p = reinterpret_cast<device volatile atomic<T> *>(&buffer.data[index]);
+    atomic_store_explicit(p, value, memory_order_relaxed);
+}
+
 template<typename T>
 inline auto buffer_size(LCBuffer<T> buffer) {
     return buffer.size / sizeof(T);
@@ -1562,4 +1587,14 @@ inline void lc_print_impl(LCPrinterBuffer buffer, T value) {
     auto dst = reinterpret_cast<device A *>((&buffer.content->data[0]) + offset);
     auto src = reinterpret_cast<thread const A *>(&value);
     *dst = *src;
+}
+
+template<typename T>
+[[nodiscard]] inline auto lc_coro_id(thread const T &frame) {
+    return frame.m0;
+}
+
+template<typename T>
+[[nodiscard]] inline auto lc_coro_token(thread const T &frame) {
+    return frame.m1;
 }

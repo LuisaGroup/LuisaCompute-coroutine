@@ -452,9 +452,7 @@ impl<'a> FunctionEmitter<'a> {
                             write!(&mut param, "{}* {}", ty, var).unwrap();
                         }
                     }
-                    _ => {
-                        unreachable!("{:?}", arg.get().instruction.as_ref());
-                    }
+                    _ => unreachable!("{:?}", arg.get().instruction.as_ref()),
                 }
                 callable_emitter
                     .node_to_var
@@ -1470,6 +1468,14 @@ impl<'a> FunctionEmitter<'a> {
                 writeln!(self.body, "lc_ray_query_terminate(cvt_rq({0}));", args_v[0]).unwrap();
                 true
             }
+            Func::CoroId => {
+                writeln!(self.body, "const {} {} = lc_coro_id({})", node_ty_s, var, args_v[0]).unwrap();
+                true
+            }
+            Func::CoroToken => {
+                writeln!(self.body, "const {} {} = lc_coro_token({})", node_ty_s, var, args_v[0]).unwrap();
+                true
+            }
             _ => false,
         }
     }
@@ -1832,9 +1838,16 @@ impl<'a> FunctionEmitter<'a> {
                 self.write_ident();
                 writeln!(&mut self.body, "/* {} */", comment.to_string()).unwrap();
             }
+            Instruction::CoroSuspend { .. }
+            | Instruction::CoroResume { .. }
+            | Instruction::CoroRegister { .. }
+            | Instruction::CoroSplitMark { .. } => {
+                panic!("Coroutine intrinsics should be lowered before codegen")
+            }
             Instruction::Print { fmt, args } => {
                 self.print_impl(fmt.to_string(), args.as_ref());
             }
+            default => panic!("unimplemented: {:?}", default),
         }
     }
     fn print_impl(&mut self, fmt_s: String, args: &[NodeRef]) {

@@ -3,23 +3,49 @@ pub mod canonicalize_control_flow;
 pub mod ssa;
 // pub mod validate;
 pub mod vectorize;
+
 // pub mod eval;
 pub mod fwd_autodiff;
+pub mod mem2reg;
 pub mod ref2ret;
 pub mod reg2mem;
-pub mod dce;
+
+use bitflags::Flags;
+
+pub mod extract_loop_cond;
+
+pub mod demote_locals;
+
+pub mod copy_propagation;
+pub mod defer_load;
 pub mod inliner;
+pub mod materialize_coro;
+pub mod remove_phi;
 
-use crate::ir::{self, ModuleFlags};
-
+use crate::ir::{self, CallableModule, KernelModule, Module, ModuleFlags};
 
 pub trait Transform {
-    fn transform(&self, module: ir::Module) -> ir::Module;
+    fn transform_module(&self, module: Module) -> Module {
+        panic!("transform module not implemented")
+    }
+    fn transform_callable(&self, module: CallableModule) -> CallableModule {
+        CallableModule {
+            module: self.transform_module(module.module),
+            ..module
+        }
+    }
+    fn transform_kernel(&self, kernel: KernelModule) -> KernelModule {
+        KernelModule {
+            module: self.transform_module(kernel.module),
+            ..kernel
+        }
+    }
 }
 
 pub struct TransformPipeline {
     transforms: Vec<Box<dyn Transform>>,
 }
+
 impl TransformPipeline {
     pub fn new() -> Self {
         Self {
@@ -30,11 +56,26 @@ impl TransformPipeline {
         self.transforms.push(transform);
     }
 }
+
 impl Transform for TransformPipeline {
-    fn transform(&self, module: ir::Module) -> ir::Module {
+    fn transform_module(&self, module: Module) -> Module {
         let mut module = module;
         for transform in &self.transforms {
-            module = transform.transform(module);
+            module = transform.transform_module(module);
+        }
+        module
+    }
+    fn transform_callable(&self, module: CallableModule) -> CallableModule {
+        let mut module = module;
+        for transform in &self.transforms {
+            module = transform.transform_callable(module);
+        }
+        module
+    }
+    fn transform_kernel(&self, module: KernelModule) -> KernelModule {
+        let mut module = module;
+        for transform in &self.transforms {
+            module = transform.transform_kernel(module);
         }
         module
     }
@@ -79,17 +120,58 @@ pub extern "C" fn luisa_compute_ir_transform_pipeline_add_transform(
             let transform = reg2mem::Reg2Mem;
             unsafe { (*pipeline).add_transform(Box::new(transform)) };
         }
+        "extract_loop_cond" => {
+            let transform = extract_loop_cond::ExtractLoopCond;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "demote_locals" => {
+            let transform = demote_locals::DemoteLocals;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "defer_load" => {
+            let transform = defer_load::DeferLoad;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "materialize_coro" => {
+            let transform = materialize_coro::MaterializeCoro;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "mem2reg" => {
+            let transform = mem2reg::Mem2Reg;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
+        "remove_phi" => {
+            let transform = remove_phi::RemovePhi;
+            unsafe { (*pipeline).add_transform(Box::new(transform)) };
+        }
         _ => panic!("unknown transform {}", name),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn luisa_compute_ir_transform_pipeline_transform(
+pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_module(
     pipeline: *mut TransformPipeline,
-    module: ir::Module,
-) -> ir::Module {
-    unsafe { (*pipeline).transform(module) }
+    module: Module,
+) -> Module {
+    unsafe { (*pipeline).transform_module(module) }
 }
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_callable(
+    pipeline: *mut TransformPipeline,
+    module: CallableModule,
+) -> CallableModule {
+    unsafe { (*pipeline).transform_callable(module) }
+}
+
+#[no_mangle]
+pub extern "C" fn luisa_compute_ir_transform_pipeline_transform_kernel(
+    pipeline: *mut TransformPipeline,
+    module: KernelModule,
+) -> KernelModule {
+    unsafe { (*pipeline).transform_kernel(module) }
+}
+
 #[no_mangle]
 pub extern "C" fn luisa_compute_ir_transform_pipeline_destroy(pipeline: *mut TransformPipeline) {
     unsafe {
@@ -108,5 +190,5 @@ pub extern "C" fn luisa_compute_ir_transform_auto(module: ir::Module) -> ir::Mod
     if flags.contains(ModuleFlags::REQUIRES_FWD_AD_TRANSFORM) {
         pipeline.add_transform(Box::new(fwd_autodiff::FwdAutodiff));
     }
-    pipeline.transform(module)
+    pipeline.transform_module(module)
 }

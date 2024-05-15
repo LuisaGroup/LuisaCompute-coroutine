@@ -112,6 +112,14 @@ namespace luisa::compute::dsl_detail {
 #define $elif(...) \
     *([&] { return __VA_ARGS__; }) % [&]() noexcept -> void
 
+#define $suspend(...)                                             \
+    ([&] {                                                        \
+        ::luisa::compute::detail::comment(                        \
+            ::luisa::compute::dsl_detail::format_source_location( \
+                __FILE__, __LINE__));                             \
+        return ::luisa::compute::suspend(__VA_ARGS__);            \
+    }())
+
 #define $loop                                                                       \
     ::luisa::compute::detail::LoopStmtBuilder::create_with_comment(                 \
         ::luisa::compute::dsl_detail::format_source_location(__FILE__, __LINE__)) % \
@@ -151,7 +159,7 @@ namespace luisa::compute::dsl_detail {
     ::luisa::compute::detail::StmtBodyInvoke{} % [&]() noexcept -> void
 
 #define $comment(...) \
-    ::luisa::compute::comment(__VA_ARGS__)
+    ::luisa::compute::detail::comment(__VA_ARGS__)
 #define $comment_with_location(...)                                                                \
     $comment(luisa::string{__VA_ARGS__}                                                            \
                  .append(" [")                                                                     \

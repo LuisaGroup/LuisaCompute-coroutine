@@ -43,6 +43,7 @@ if (LUISA_COMPUTE_ENABLE_RUST)
     luisa_compute_add_executable(test_ast2ir_ir2ast test_ast2ir_ir2ast.cpp)
 
     if (LUISA_COMPUTE_ENABLE_GUI)
+        luisa_compute_add_executable(test_skyline test_skyline.cpp)
         luisa_compute_add_executable(test_kernel_ir test_kernel_ir.cpp)
         luisa_compute_add_executable(test_sdf_renderer_ir test_sdf_renderer_ir.cpp)
         luisa_compute_add_executable(test_path_tracing_ir test_path_tracing_ir.cpp)
@@ -91,6 +92,7 @@ luisa_compute_add_executable(test_raytracing_weekend test_raytracing_weekend/mai
 luisa_compute_add_executable(test_dml test_dml.cpp)
 luisa_compute_add_executable(test_oso_parser test_oso_parser.cpp)
 luisa_compute_add_executable(test_cuda_dx_interop test_cuda_dx_interop.cpp)
+luisa_compute_add_executable(test_sort test_sort.cpp)
 luisa_compute_add_executable(test_pinned_mem test_pinned_mem.cpp)
 
 if (LUISA_COMPUTE_ENABLE_CLANG_CXX)
@@ -193,3 +195,10 @@ if (LUISA_COMPUTE_TEST_QT_INTEROP)
         endif ()
     endif ()
 endif ()
+
+# coroutine tests
+luisa_compute_add_executable(test_coro_sdf_renderer coro/sdf_renderer.cpp)
+luisa_compute_add_executable(test_coro_sdf_renderer_wo_dispatcher coro/sdf_renderer_wo_dispatcher.cpp)
+luisa_compute_add_executable(test_coro_path_tracing coro/path_tracing.cpp)
+luisa_compute_add_executable(test_coro_helloworld coro/helloworld.cpp)
+luisa_compute_add_executable(test_coro_playground coro/playground.cpp)

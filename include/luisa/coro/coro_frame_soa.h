@@ -104,7 +104,7 @@ public:
         }
         size_bytes = (size_bytes + 3u) & ~3u;
         auto info = device->create_buffer(
-            Type::of<ByteBuffer>(),
+            Type::of<void>(),
             size_bytes,
             nullptr);
         _buffer = std::move(ByteBuffer{device, info});

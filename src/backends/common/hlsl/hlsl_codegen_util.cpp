@@ -117,10 +117,6 @@ static size_t AddHeader(CallOpSet const &ops, vstd::StringBuilder &builder, bool
         ops.test(CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION)) {
         builder << CodegenUtility::ReadInternalHLSLFile("reduce");
     }
-    if (ops.test(CallOp::CORO_ID) ||
-        ops.test(CallOp::CORO_TOKEN)) {
-        builder << CodegenUtility::ReadInternalHLSLFile("coroutine");
-    }
     return immutable_size;
 }
 }// namespace detail

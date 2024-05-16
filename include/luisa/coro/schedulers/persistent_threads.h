@@ -14,7 +14,7 @@ namespace luisa::compute::coroutine {
 struct PersistentThreadsCoroSchedulerConfig {
     uint thread_count = 64_k;
     uint block_size = 128;
-    uint fetch_size = 16;
+    uint fetch_size = 4;
     bool shared_memory_soa = false;
     bool global_memory_ext = false;
 };
@@ -23,7 +23,7 @@ namespace detail {
 LC_CORO_API void persistent_threads_coro_scheduler_main_kernel_impl(
     const PersistentThreadsCoroSchedulerConfig &config,
     uint q_fac, uint g_fac, uint shared_queue_size, uint global_queue_size,
-    const CoroGraph *graph, Shared<CoroFrame> &frames, Expr<uint3> dispatch_shape,
+    const CoroGraph *graph, Shared<CoroFrame> &frames, Expr<uint3> dispatch_size_prefix_product,
     Expr<Buffer<uint>> global, const Buffer<CoroFrame> &global_frames,
     luisa::move_only_function<void(CoroFrame &, CoroToken)> call_subroutine) noexcept;
 }// namespace detail
@@ -52,7 +52,7 @@ private:
             auto global_ext_size = _config.thread_count * g_fac;
             _global_frames = device.create_buffer<CoroFrame>(coro.shared_frame(), global_ext_size);
         }
-        Kernel1D main_kernel = [this, q_fac, g_fac, &coro, graph = coro.graph()](BufferUInt global, UInt3 dispatch_shape, Var<Args>... args) noexcept {
+        Kernel1D main_kernel = [this, q_fac, g_fac, &coro, graph = coro.graph()](BufferUInt global, UInt3 dispatch_size_prefix_product, Var<Args>... args) noexcept {
             set_block_size(_config.block_size, 1u, 1u);
             auto global_queue_size = _config.block_size * g_fac;
             auto shared_queue_size = _config.block_size * q_fac;
@@ -60,7 +60,7 @@ private:
             Shared<CoroFrame> frames{graph->shared_frame(), shared_queue_size, _config.shared_memory_soa};
             detail::persistent_threads_coro_scheduler_main_kernel_impl(
                 _config, q_fac, g_fac, shared_queue_size, global_queue_size, graph,
-                frames, dispatch_shape, global, _global_frames, call_subroutine);
+                frames, dispatch_size_prefix_product, global, _global_frames, call_subroutine);
         };
         _pt_shader = device.compile(main_kernel);
         _clear_shader = device.compile<1>([](BufferUInt global) {
@@ -78,12 +78,19 @@ private:
 
     void _dispatch(Stream &stream, uint3 dispatch_size,
                    compute::detail::prototype_to_shader_invocation_t<Args>... args) noexcept override {
-        stream << _clear_shader(_global).dispatch(1u);
+        auto dispatch_size_prefix_product = make_uint3(
+            dispatch_size.x,
+            dispatch_size.x * dispatch_size.y,
+            dispatch_size.x * dispatch_size.y * dispatch_size.z);
         if (_config.global_memory_ext) {
             auto n = static_cast<uint>(_global_frames.size());
-            stream << _initialize_shader(n).dispatch(n);
+            stream << _clear_shader(_global).dispatch(1u)
+                   << _initialize_shader(n).dispatch(n)
+                   << _pt_shader(_global, dispatch_size_prefix_product, args...).dispatch(_config.thread_count);
+        } else {
+            stream << _clear_shader(_global).dispatch(1u)
+                   << _pt_shader(_global, dispatch_size_prefix_product, args...).dispatch(_config.thread_count);
         }
-        stream << _pt_shader(_global, dispatch_size, args...).dispatch(_config.thread_count);
     }
 
 public:

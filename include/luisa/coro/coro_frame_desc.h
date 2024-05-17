@@ -26,6 +26,7 @@ private:
 public:
     [[nodiscard]] static luisa::shared_ptr<CoroFrameDesc> create(const Type *type, DesignatedFieldDict m) noexcept;
     [[nodiscard]] auto type() const noexcept { return _type; }
+    [[nodiscard]] const Type *field(uint index) const noexcept;
     [[nodiscard]] auto &designated_fields() const noexcept { return _designated_fields; }
     [[nodiscard]] uint designated_field(luisa::string_view name) const noexcept;
     [[nodiscard]] luisa::string dump() const noexcept;

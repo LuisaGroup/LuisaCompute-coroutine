@@ -122,10 +122,10 @@ namespace luisa::compute::dsl_detail {
 
 #define $promise(...) ::luisa::compute::dsl::promise(__VA_ARGS__)
 
-#define $yield(...)                                                 \
-    do {                                                            \
-        ::luisa::compute::dsl::promise("yield_value", __VA_ARGS__); \
-        ::luisa::compute::dsl::suspend();                           \
+#define $yield(...)                                                     \
+    do {                                                                \
+        ::luisa::compute::dsl::promise("__yielded_value", __VA_ARGS__); \
+        ::luisa::compute::dsl::suspend();                               \
     } while (false)
 
 #define $await ::luisa::compute::coroutine::detail::CoroAwaitInvoker{} %

@@ -4,10 +4,15 @@
 
 #pragma once
 
+#include <luisa/core/stl/optional.h>
 #include <luisa/dsl/shared.h>
 #include <luisa/coro/coro_frame.h>
 
 namespace luisa::compute {
+
+namespace detail {
+[[noreturn]] LC_CORO_API void error_coro_frame_smem_subscript_on_soa() noexcept;
+}// namespace detail
 
 template<>
 class Shared<coroutine::CoroFrame> {
@@ -15,6 +20,8 @@ class Shared<coroutine::CoroFrame> {
 private:
     luisa::shared_ptr<const coroutine::CoroFrameDesc> _desc;
     luisa::vector<const RefExpr *> _expressions;
+    // we need to return a `CoroFrame &` for operator[] with proper lifetime
+    luisa::vector<luisa::unique_ptr<coroutine::CoroFrame>> _temp_frames;
     size_t _size;
 
 private:
@@ -39,8 +46,9 @@ private:
     }
 
 public:
-    Shared(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc, size_t n,
-           bool soa = true, luisa::span<const uint> soa_excluded_fields = {}) noexcept
+    Shared(luisa::shared_ptr<const coroutine::CoroFrameDesc> desc,
+           size_t n, bool soa = false,
+           luisa::span<const uint> soa_excluded_fields = {}) noexcept
         : _desc{std::move(desc)}, _size{n} { _create(soa, soa_excluded_fields); }
 
     Shared(Shared &&) noexcept = default;
@@ -52,10 +60,11 @@ public:
     [[nodiscard]] auto is_soa() const noexcept { return _expressions.size() > 1; }
     [[nodiscard]] auto size() const noexcept { return _size; }
 
-public:
+private:
     /// Read index with active fields
     template<typename I>
-    [[nodiscard]] auto read(I &&index, luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
+        requires is_integral_expr_v<I>
+    [[nodiscard]] auto _read(I &&index, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
         auto i = def(std::forward<I>(index));
         auto fb = detail::FunctionBuilder::current();
         auto frame = fb->local(_desc->type());
@@ -71,7 +80,7 @@ public:
                 if (m == 0u) {
                     auto t = Type::of<uint>();
                     auto s = fb->access(Type::array(t, 3u), _expressions[m], i.expression());
-                    std::array<const Expression *, 3u> elems;
+                    std::array<const Expression *, 3u> elems{};
                     elems[0] = fb->access(t, s, fb->literal(t, 0u));
                     elems[1] = fb->access(t, s, fb->literal(t, 1u));
                     elems[2] = fb->access(t, s, fb->literal(t, 2u));
@@ -88,7 +97,8 @@ public:
 
     /// Write index with active fields
     template<typename I>
-    void write(I &&index, const coroutine::CoroFrame &frame, luisa::optional<luisa::span<const uint>> active_fields = luisa::nullopt) const noexcept {
+        requires is_integral_expr_v<I>
+    void _write(I &&index, const coroutine::CoroFrame &frame, luisa::optional<luisa::span<const uint>> active_fields) const noexcept {
         auto i = def(std::forward<I>(index));
         auto fb = detail::FunctionBuilder::current();
         if (!is_soa()) {
@@ -114,6 +124,41 @@ public:
                 }
             }
         }
+    }
+
+public:
+    /// Reference to the i-th element
+    template<typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] coroutine::CoroFrame &operator[](I &&index) noexcept {
+        if (is_soa()) { detail::error_coro_frame_smem_subscript_on_soa(); }
+        auto fb = detail::FunctionBuilder::current();
+        auto ref = fb->access(
+            _desc->type(), _expressions[0],
+            detail::extract_expression(std::forward<I>(index)));
+        auto temp_frame = luisa::make_unique<coroutine::CoroFrame>(_desc, ref);
+        return *_temp_frames.emplace_back(std::move(temp_frame));
+    }
+
+    template<typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] coroutine::CoroFrame read(I &&index) const noexcept {
+        return _read(std::forward<I>(index), luisa::nullopt);
+    }
+    template<typename I>
+        requires is_integral_expr_v<I>
+    [[nodiscard]] coroutine::CoroFrame read(I &&index, luisa::span<const uint> active_fields) const noexcept {
+        return _read(std::forward<I>(index), luisa::make_optional(active_fields));
+    }
+    template<typename I>
+        requires is_integral_expr_v<I>
+    void write(I &&index, const coroutine::CoroFrame &frame) const noexcept {
+        _write(std::forward<I>(index), frame, luisa::nullopt);
+    }
+    template<typename I>
+        requires is_integral_expr_v<I>
+    void write(I &&index, const coroutine::CoroFrame &frame, luisa::span<const uint> active_fields) const noexcept {
+        _write(std::forward<I>(index), frame, luisa::make_optional(active_fields));
     }
 };
 

@@ -15,15 +15,28 @@ namespace detail {
 LC_CORO_API void coroutine_chained_await_impl(
     CoroFrame &frame, uint node_count,
     luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept;
-LC_CORO_API void coroutine_generator_step_impl(
-    CoroFrame &frame, uint node_count, bool is_entry,
-    luisa::move_only_function<void(CoroToken, CoroFrame &)> node) noexcept;
 }// namespace detail
 
 template<typename T>
 class Coroutine {
     static_assert(luisa::always_false_v<T>);
 };
+
+namespace detail {
+
+class LC_CORO_API CoroAwaiter : public concepts::Noncopyable {
+
+private:
+    using Await = luisa::move_only_function<void()>;
+    Await _await;
+
+public:
+    explicit CoroAwaiter(Await await) noexcept
+        : _await{std::move(await)} {}
+    void await() && noexcept { _await(); }
+};
+
+}// namespace detail
 
 template<typename Ret, typename... Args>
 class Coroutine<Ret(Args...)> {
@@ -98,41 +111,29 @@ public:
     [[nodiscard]] auto subroutine(luisa::string_view name) const noexcept { return (*this)[name]; }
 
 private:
-    template<typename U>
-    class Awaiter : public concepts::Noncopyable {
-    private:
-        U _f;
-        luisa::optional<Expr<uint3>> _coro_id;
-
-    private:
-        friend class Coroutine;
-        explicit Awaiter(U f) noexcept : _f{std::move(f)} {}
-
-    public:
-        [[nodiscard]] auto set_id(Expr<uint3> coro_id) && noexcept {
-            _coro_id.emplace(coro_id);
-            return std::move(*this);
-        }
-        void await() && noexcept { return _f(std::move(_coro_id)); }
-    };
-
-public:
-    [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
-        auto f = [=, this](luisa::optional<Expr<uint3>> coro_id) noexcept {
+    [[nodiscard]] auto _await(luisa::optional<Expr<uint3>> coro_id,
+                              compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+        return detail::CoroAwaiter{[=, coro_id = std::move(coro_id), this]() noexcept {
             auto frame = coro_id ? instantiate(*coro_id) : instantiate();
             detail::coroutine_chained_await_impl(frame, subroutine_count(), [&](CoroToken token, CoroFrame &f) noexcept {
                 subroutine(token)(f, args...);
             });
-        };
-        return Awaiter<decltype(f)>{std::move(f)};
+        }};
+    }
+
+public:
+    [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+        return _await(luisa::nullopt, args...);
+    }
+    [[nodiscard]] auto operator()(Expr<uint3> coro_id, compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+        return _await(luisa::make_optional(coro_id), args...);
     }
 };
 
 namespace detail {
 struct CoroAwaitInvoker {
-    template<typename A>
-    void operator%(A &&awaiter) && noexcept {
-        std::forward<A>(awaiter).await();
+    void operator%(CoroAwaiter &&awaiter) const && noexcept {
+        std::move(awaiter).await();
     }
 };
 }// namespace detail
@@ -144,6 +145,69 @@ template<typename T>
 class Generator {
     static_assert(luisa::always_false_v<T>);
 };
+
+namespace detail {
+
+LC_CORO_API void coroutine_generator_next_impl(
+    CoroFrame &frame, uint node_count,
+    const luisa::move_only_function<void(CoroFrame &, CoroToken)> &resume) noexcept;
+
+template<typename T>
+class GeneratorIter : public concepts::Noncopyable {
+
+private:
+    uint _n;
+    CoroFrame _frame;
+    using Resume = luisa::move_only_function<void(CoroFrame &, CoroToken)>;
+    Resume _resume;
+
+public:
+    GeneratorIter(uint n, CoroFrame frame, Resume resume) noexcept
+        : _n{n}, _frame{std::move(frame)},
+          _resume{std::move(resume)} {}
+
+public:
+    auto &update() noexcept {
+        coroutine_generator_next_impl(_frame, _n, _resume);
+        return *this;
+    }
+    [[nodiscard]] Bool is_terminated() const noexcept { return _frame.is_terminated(); }
+    [[nodiscard]] Var<T> value() noexcept { return _frame.get<T>("__yielded_value"); }
+
+private:
+    class RangeForIterator {
+    private:
+        GeneratorIter &_g;
+        bool _invoked{false};
+        LoopStmt *_loop{nullptr};
+
+    private:
+        friend class GeneratorIter;
+        explicit RangeForIterator(GeneratorIter &g) noexcept : _g{g} {}
+
+    public:
+        RangeForIterator &operator++() noexcept {
+            _invoked = true;
+            compute::detail::FunctionBuilder::current()->pop_scope(_loop->body());
+            return *this;
+        }
+        [[nodiscard]] bool operator==(luisa::default_sentinel_t) const noexcept { return _invoked; }
+        [[nodiscard]] Var<T> operator*() noexcept {
+            auto fb = compute::detail::FunctionBuilder::current();
+            _loop = fb->loop_();
+            fb->push_scope(_loop->body());
+            _g.update();
+            dsl::if_(_g.is_terminated(), [] { dsl::break_(); });
+            return _g.value();
+        }
+    };
+
+public:
+    [[nodiscard]] auto begin() noexcept { return RangeForIterator{*this}; }
+    [[nodiscard]] auto end() const noexcept { return luisa::default_sentinel; }
+};
+
+}// namespace detail
 
 template<typename Ret, typename... Args>
 class Generator<Ret(Args...)> {
@@ -164,75 +228,23 @@ public:
     [[nodiscard]] auto coroutine() const noexcept { return _coro; }
 
 private:
-    template<typename U>
-    class Iterator {
-    private:
-        luisa::unique_ptr<CoroFrame> _frame;
-        U _f;
-        bool _invoked{false};
-        LoopStmt *_loop{nullptr};
-
-    private:
-        friend class Generator;
-        Iterator(luisa::unique_ptr<CoroFrame> frame, U f) noexcept
-            : _frame{std::move(frame)}, _f{std::move(f)} {}
-
-    public:
-        Iterator &operator++() noexcept {
-            _invoked = true;
-            _f(*_frame, false);
-            compute::detail::FunctionBuilder::current()->pop_scope(_loop->body());
-            return *this;
-        }
-        [[nodiscard]] bool operator==(luisa::default_sentinel_t) const noexcept { return _invoked; }
-        [[nodiscard]] Var<expr_value_t<Ret>> operator*() noexcept {
-            _f(*_frame, true);
-            auto fb = compute::detail::FunctionBuilder::current();
-            _loop = fb->loop_();
-            fb->push_scope(_loop->body());
-            dsl::if_(_frame->is_terminated(), [] { dsl::break_(); });
-            return _frame->get<Ret>("yield_value");
-        }
-    };
-
-private:
-    template<typename U>
-    [[nodiscard]] auto _make_iterator(U u, luisa::optional<Expr<uint3>> coro_id) const noexcept {
-        auto frame = luisa::make_unique<CoroFrame>(coro_id ? _coro.instantiate(*coro_id) : _coro.instantiate());
-        return Iterator<U>{std::move(frame), std::move(u)};
+    [[nodiscard]] auto _iter(luisa::optional<Expr<uint3>> coro_id,
+                             compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+        return detail::GeneratorIter<Ret>{
+            _coro.subroutine_count(),
+            coro_id ? _coro.instantiate(*coro_id) : _coro.instantiate(),
+            [=, this](CoroFrame &f, CoroToken token) noexcept {
+                _coro[token](f, args...);
+            },
+        };
     }
-
-private:
-    template<typename U>
-    class Stepper : public concepts::Noncopyable {
-    private:
-        luisa::optional<Expr<uint3>> _coro_id;
-        const Generator &_g;
-        U _f;
-
-    private:
-        friend class Generator;
-        Stepper(const Generator &g, U f) noexcept : _g{g}, _f{std::move(f)} {}
-
-    public:
-        [[nodiscard]] auto set_id(Expr<uint3> coro_id) && noexcept {
-            _coro_id.emplace(coro_id);
-            return std::move(*this);
-        }
-        [[nodiscard]] auto begin() noexcept { return _g._make_iterator(std::move(_f), std::move(_coro_id)); }
-        [[nodiscard]] auto end() const noexcept { return luisa::default_sentinel; }
-    };
 
 public:
     [[nodiscard]] auto operator()(compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
-        auto f = [=, this](CoroFrame &frame, bool is_entry) noexcept {
-            detail::coroutine_generator_step_impl(
-                frame, _coro.subroutine_count(), is_entry,
-                [&](CoroToken token, CoroFrame &ff) noexcept {
-                    _coro.subroutine(token)(ff, args...);
-                });
-        };
-        return Stepper<decltype(f)>{*this, std::move(f)};
+        return _iter(luisa::nullopt, args...);
+    }
+    [[nodiscard]] auto operator()(Expr<uint3> coro_id, compute::detail::prototype_to_callable_invocation_t<Args>... args) const noexcept {
+        return _iter(luisa::make_optional(coro_id), args...);
     }
 };
 

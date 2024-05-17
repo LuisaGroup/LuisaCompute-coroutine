@@ -9,7 +9,7 @@
 
 namespace luisa::compute::coroutine {
 
-CoroFrame::CoroFrame(luisa::shared_ptr<const CoroFrameDesc> desc, const RefExpr *expr) noexcept
+CoroFrame::CoroFrame(luisa::shared_ptr<const CoroFrameDesc> desc, const Expression *expr) noexcept
     : _desc{std::move(desc)},
       _expression{expr},
       coro_id{this->get<uint3>(0u)},

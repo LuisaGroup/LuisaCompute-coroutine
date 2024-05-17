@@ -28,6 +28,12 @@ luisa::shared_ptr<CoroFrameDesc> CoroFrameDesc::create(const Type *type, Designa
     return luisa::make_shared<CoroFrameDesc>(CoroFrameDesc{type, std::move(m)});
 }
 
+const Type *CoroFrameDesc::field(uint index) const noexcept {
+    auto fields = _type->members();
+    LUISA_ASSERT(index < fields.size(), "CoroFrame field index out of range.");
+    return fields[index];
+}
+
 uint CoroFrameDesc::designated_field(luisa::string_view name) const noexcept {
     if (name == "coro_id") { return 0u; }
     if (name == "target_token") { return 1u; }

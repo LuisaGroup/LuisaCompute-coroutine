@@ -37,4 +37,4 @@ void coroutine_generator_step_impl(CoroFrame &frame, uint node_count, bool is_en
     }
 }
 
-}// namespace luisa::compute::coro_v2::detail
+}// namespace luisa::compute::coroutine::detail

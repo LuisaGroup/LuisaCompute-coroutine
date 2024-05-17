@@ -61,4 +61,4 @@ public:
     [[nodiscard]] Var<bool> is_terminated() const noexcept;
 };
 
-}// namespace luisa::compute::coro_v2
+}// namespace luisa::compute::coroutine

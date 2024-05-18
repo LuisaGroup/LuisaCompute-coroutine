@@ -88,7 +88,7 @@ public:
     ///@param high_bit: highest bit of radix sort
     instance(Device device, uint maxn, temp_storage &temp,
              Callable<uint(uint, Args...)> *get_key, Callable<uint(uint, Args...)> *get_val,
-             Callable<uint(uint,Args...)> *get_key_set = nullptr,
+             Callable<uint(uint, Args...)> *get_key_set = nullptr,
              uint mode = 0, uint digit = 128, uint low_bit = 0, uint high_bit = 31) : DIGIT{digit}, low_bit{low_bit}, high_bit{high_bit}, MAXN{maxn}, _temp{temp} {
         LUISA_ASSERT(mode == 0 || mode == 1, "mode should be 0 for radix sort and 1 for bucket sort!");
         BIT = 0;
@@ -361,4 +361,4 @@ public:
     }
 };
 }
-}
+}// namespace luisa::compute::radix_sort

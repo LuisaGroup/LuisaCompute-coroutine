@@ -56,4 +56,4 @@ luisa::string CoroFrameDesc::dump() const noexcept {
     return s;
 }
 
-}// namespace luisa::compute::co
+}// namespace luisa::compute::coroutine

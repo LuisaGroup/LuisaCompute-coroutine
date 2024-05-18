@@ -113,7 +113,7 @@ void persistent_threads_coro_scheduler_main_kernel_impl(
             }
             sync_block();
             $if (shared_queue_size - work_offset[0] < config.block_size) {//no enough work
-                $for (index, 0u, g_fac) {                            //swap frames
+                $for (index, 0u, g_fac) {                                 //swap frames
                     auto global_id = block_x() * global_queue_size + index * config.block_size + thread_x();
                     auto g_queue_id = index * config.block_size + thread_x();
                     auto coro_token = all_token[shared_queue_size + g_queue_id];

@@ -69,4 +69,4 @@ public:
     [[nodiscard]] luisa::string dump() const noexcept;
 };
 
-}// namespace luisa::compute::co
+}// namespace luisa::compute::coroutine

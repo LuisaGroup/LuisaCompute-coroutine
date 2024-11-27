@@ -1,14 +1,9 @@
 #include <luisa/luisa-compute.h>
 #include <luisa/dsl/sugar.h>
 #include <stb/stb_image_write.h>
-#include <luisa/coro/coro_dispatcher.h>
 
 using namespace luisa;
 using namespace luisa::compute;
-
-struct alignas(4) CoroFrame {};
-
-LUISA_COROFRAME_STRUCT(CoroFrame) {};
 
 int main(int argc, char *argv[]) {
 
@@ -124,9 +119,9 @@ int main(int argc, char *argv[]) {
         };
     };
 
-    Coroutine coro = [&](Var<CoroFrame> &, ImageUInt seed_image, ImageFloat accum_image, UInt frame_index) noexcept {
+    coroutine::Coroutine coro = [&](ImageUInt seed_image, ImageFloat accum_image, UInt frame_index) noexcept {
         Float2 resolution = make_float2(width, height);
-        UInt2 coord = make_uint2(coro_id().x / height, coro_id().x % height);
+        UInt2 coord = dispatch_id().xy();
 
         $if (frame_index == 0u) {
             seed_image.write(coord, make_uint4(tea(coord.x, coord.y)));
@@ -184,26 +179,14 @@ int main(int argc, char *argv[]) {
     Image<uint> seed_image = device.create_image<uint>(PixelStorage::INT1, width, height);
     Image<float> accum_image = device.create_image<float>(PixelStorage::FLOAT4, width, height);
 
-    Kernel2D mega_kernel = [&](ImageUInt seed_image, ImageFloat accum_image, UInt frame_index) {
-        Var<CoroFrame> frame;
-        initialize_coroframe(frame, dispatch_id());
-        coro(frame, seed_image, accum_image, frame_index);
-        $loop {
-            auto token = read_promise<uint>(frame, "coro_token");
-            $switch (token) {
-                for (auto i = 1u; i <= coro.suspend_count(); i++) {
-                    $case (i) {
-                        coro[i](frame, seed_image, accum_image, frame_index);
-                    };
-                }
-                $default {
-                    $return();
-                };
-            };
-        };
-    };
+    coroutine::PersistentThreadsCoroSchedulerConfig config{
+        .thread_count = 64_k,
+        .block_size = 64u,
+        .fetch_size = 3u,
+        .shared_memory_soa = false,
+        .global_memory_ext = false};
+    coroutine::PersistentThreadsCoroScheduler scheduler{device, coro, config};
 
-    auto shader = device.compile(mega_kernel);
     auto clear_shader = device.compile<2>([&] {
         auto coord = dispatch_id().xy();
         accum_image->write(coord, make_float4(make_float3(0.0f), 1.0f));
@@ -211,37 +194,13 @@ int main(int argc, char *argv[]) {
     });
 
     luisa::vector<std::byte> host_image(accum_image.view().size_bytes());
-    //coro::SimpleCoroDispatcher Wdispatcher{&coro, device, resolution.x * resolution.y};
-    // coro::WavefrontCoroDispatcherConfig wf_config{
-    //     .max_instance_count = resolution.x * resolution.y,
-    //     .debug = false,
-    // };
-    // coro::WavefrontCoroDispatcher Wdispatcher{&coro, device, stream, wf_config};
-    coro::PersistentCoroDispatcherConfig config{
-        .max_thread_count = 256u * 256u,
-        .block_size = 128u,
-        .fetch_size = 3u,
-        .debug = false,
-    };
-    coro::PersistentCoroDispatcher Wdispatcher{&coro, device, stream, config};
-    stream << clear_shader().dispatch(resolution)
-           << synchronize();
-    /*for (auto i = 0u; i < 100u; i++) {
-        stream << shader(seed_image, accum_image, i).dispatch(resolution);
-    }*/
+    stream << clear_shader().dispatch(resolution) << synchronize();
     Clock clk;
-    auto samples = 1000;
-    //Wdispatcher(seed_image, accum_image, 0u, resolution.x * resolution.y);
-    //stream << Wdispatcher.await_step();
-    //stream << Wdispatcher.await_step();
-    //stream << Wdispatcher.await_step();
-    //stream << Wdispatcher.await_step();
-    //return 0;
+    auto samples = 1024;
     for (auto i = 0u; i < samples; ++i) {
         LUISA_INFO("spp {}", i);
-        Wdispatcher(seed_image, accum_image, i, resolution.x * resolution.y);
-        stream << Wdispatcher.await_all();
-        // << synchronize();
+        stream << scheduler(seed_image, accum_image, i).dispatch(width, height)
+               << synchronize();
     }
     stream << synchronize();
     auto dt = clk.toc();

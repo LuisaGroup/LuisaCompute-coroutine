@@ -102,7 +102,7 @@ impl<'a> AST2IRType<'a> {
             }
             "BINDLESS_ARRAY" => Type::void(),
             "ACCEL" => Type::void(),
-            "COROFRAME" | "CUSTOM" => Type::opaque(j["id"].as_str().unwrap().into()),
+            "CUSTOM" => Type::opaque(j["id"].as_str().unwrap().into()),
             _ => panic!("Invalid type tag: {}", tag),
         };
         self.types.insert(i, t.clone());
@@ -2322,6 +2322,7 @@ impl<'a: 'b, 'b> AST2IR<'a, 'b> {
             captures: CBoxedSlice::new(Vec::new()),
             subroutine_ids: CBoxedSlice::new(Vec::new()),
             subroutines: CBoxedSlice::new(Vec::new()),
+            coro_target_tokens: CBoxedSlice::new(Vec::new()),
             coro_frame_input_fields: CBoxedSlice::new(Vec::new()),
             coro_frame_output_fields: CBoxedSlice::new(Vec::new()),
             coro_frame_designated_fields: CBoxedSlice::new(Vec::new()),

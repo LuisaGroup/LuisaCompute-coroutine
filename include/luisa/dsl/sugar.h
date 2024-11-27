@@ -117,8 +117,18 @@ namespace luisa::compute::dsl_detail {
         ::luisa::compute::detail::comment(                        \
             ::luisa::compute::dsl_detail::format_source_location( \
                 __FILE__, __LINE__));                             \
-        return ::luisa::compute::suspend(__VA_ARGS__);            \
+        return ::luisa::compute::dsl::suspend(__VA_ARGS__);       \
     }())
+
+#define $promise(...) ::luisa::compute::dsl::promise(__VA_ARGS__)
+
+#define $yield(...)                                                     \
+    do {                                                                \
+        ::luisa::compute::dsl::promise("__yielded_value", __VA_ARGS__); \
+        ::luisa::compute::dsl::suspend();                               \
+    } while (false)
+
+#define $await ::luisa::compute::coroutine::detail::CoroAwaitInvoker{} %
 
 #define $loop                                                                       \
     ::luisa::compute::detail::LoopStmtBuilder::create_with_comment(                 \

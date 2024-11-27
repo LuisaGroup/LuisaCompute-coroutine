@@ -73,35 +73,33 @@ impl<'a> CoroScopeMaterializer<'a> {
 
     fn create_args(&self) -> Vec<NodeRef> {
         let mut args = Vec::new();
-        for (i, arg) in self.coro.args.iter().enumerate() {
-            if i == 0 {
-                // the coro frame
-                let node = new_node(
-                    &self.coro.pools,
-                    Node::new(
-                        CArc::new(Instruction::Argument { by_value: false }),
-                        self.frame.interface_type.clone(),
-                    ),
-                );
-                args.push(node);
-            } else {
-                // normal args
-                let instr = &arg.get().instruction;
-                match instr.as_ref() {
-                    Instruction::Buffer
-                    | Instruction::Bindless
-                    | Instruction::Texture2D
-                    | Instruction::Texture3D
-                    | Instruction::Accel
-                    | Instruction::Argument { .. } => {
-                        let node = new_node(
-                            &self.coro.pools,
-                            Node::new(instr.clone(), arg.type_().clone()),
-                        );
-                        args.push(node);
-                    }
-                    _ => unreachable!("Invalid argument type"),
+        args.reserve(1 /* frame */+ self.coro.args.len());
+        // the coro frame
+        let node = new_node(
+            &self.coro.pools,
+            Node::new(
+                CArc::new(Instruction::Argument { by_value: false }),
+                self.frame.interface_type.clone(),
+            ),
+        );
+        args.push(node);
+        for arg in self.coro.args.iter() {
+            // normal args
+            let instr = &arg.get().instruction;
+            match instr.as_ref() {
+                Instruction::Buffer
+                | Instruction::Bindless
+                | Instruction::Texture2D
+                | Instruction::Texture3D
+                | Instruction::Accel
+                | Instruction::Argument { .. } => {
+                    let node = new_node(
+                        &self.coro.pools,
+                        Node::new(instr.clone(), arg.type_().clone()),
+                    );
+                    args.push(node);
                 }
+                _ => unreachable!("Invalid argument type"),
             }
         }
         args
@@ -455,9 +453,11 @@ impl<'a> CoroScopeMaterializer<'a> {
                     .iter()
                     .map(|&a| self.value_or_load(a, ctx, state))
                     .collect();
-                let call = state
-                    .builder
-                    .call(Func::External(c.clone()), args.as_slice(), ret.type_().clone());
+                let call = state.builder.call(
+                    Func::External(c.clone()),
+                    args.as_slice(),
+                    ret.type_().clone(),
+                );
                 process_return!(call)
             }
             // replayable but need special handling
@@ -990,13 +990,18 @@ impl<'a> CoroScopeMaterializer<'a> {
         }
     }
 
+    fn collect_target_tokens(&self, scope: CoroScopeRef) -> Vec<u32> {
+        let node = self.frame.transition_graph.nodes.get(&scope).unwrap();
+        node.outlets.keys().cloned().collect::<_>()
+    }
+
     fn materialize(&self) -> CallableModule {
         let mappings: HashMap<_, _> = self
             .coro
             .args
             .iter()
             .cloned()
-            .zip(self.args.iter().cloned())
+            .zip(self.args.iter().skip(1).cloned())
             .collect();
         let mut entry_builder = IrBuilder::new(self.coro.pools.clone());
         let mut ctx = CoroScopeMaterializerCtx {
@@ -1044,6 +1049,7 @@ impl<'a> CoroScopeMaterializer<'a> {
                 index: i as u32 + designated_filed_offset,
             })
             .collect();
+        let target_tokens = self.collect_target_tokens(self.scope);
         // create the callable module
         CallableModule {
             module,
@@ -1052,6 +1058,7 @@ impl<'a> CoroScopeMaterializer<'a> {
             captures: CBoxedSlice::new(Vec::new()),
             subroutines: CBoxedSlice::new(Vec::new()),
             subroutine_ids: CBoxedSlice::new(Vec::new()),
+            coro_target_tokens: CBoxedSlice::new(target_tokens),
             coro_frame_input_fields: CBoxedSlice::new(in_fields),
             coro_frame_output_fields: CBoxedSlice::new(out_fields),
             coro_frame_designated_fields: CBoxedSlice::new(designated_fields),

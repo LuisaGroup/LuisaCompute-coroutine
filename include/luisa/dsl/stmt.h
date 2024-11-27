@@ -494,6 +494,13 @@ inline auto suspend(S &&first, Args &&...args) noexcept {
     return compute::dsl::suspend(""sv, std::forward<S>(first), std::forward<Args>(args)...);
 }
 
+template<typename T>
+inline void promise(luisa::string name, T &&value) noexcept {
+    detail::FunctionBuilder::current()->bind_promise_(
+        detail::extract_expression(std::forward<T>(value)),
+        std::move(name));
+}
+
 inline void return_() noexcept {
     detail::FunctionBuilder::current()->return_();
 }

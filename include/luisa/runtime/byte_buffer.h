@@ -5,8 +5,19 @@
 namespace luisa::compute {
 
 namespace detail {
+LC_RUNTIME_API void error_buffer_size_not_aligned(size_t align) noexcept;
+template<typename BufferOrExpr>
 class ByteBufferExprProxy;
 }// namespace detail
+
+template<typename T>
+class SOA;
+
+namespace coroutine {
+class CoroFrame;
+}// namespace coroutine
+
+class ByteBufferView;
 
 class LC_RUNTIME_API ByteBuffer final : public Resource {
 
@@ -16,6 +27,7 @@ private:
 private:
     friend class Device;
     friend class ResourceGenerator;
+    friend class SOA<coroutine::CoroFrame>;
     ByteBuffer(DeviceInterface *device, const BufferCreationInfo &info) noexcept;
     ByteBuffer(DeviceInterface *device, size_t size_bytes) noexcept;
 
@@ -30,6 +42,7 @@ public:
         return *this;
     }
     ByteBuffer &operator=(ByteBuffer const &) noexcept = delete;
+    [[nodiscard]] ByteBufferView view() const noexcept;
     using Resource::operator bool;
     [[nodiscard]] auto copy_to(void *data) const noexcept {
         _check_is_valid();
@@ -70,14 +83,71 @@ public:
     // DSL interface
     [[nodiscard]] auto operator->() const noexcept {
         _check_is_valid();
-        return reinterpret_cast<const detail::ByteBufferExprProxy *>(this);
+        return reinterpret_cast<const detail::ByteBufferExprProxy<ByteBuffer> *>(this);
+    }
+};
+
+class ByteBufferView {
+
+private:
+    void *_native_handle;
+    uint64_t _handle;
+    size_t _offset_bytes;
+    size_t _size;
+    size_t _total_size;
+
+private:
+    friend class ByteBuffer;
+
+public:
+    ByteBufferView(void *native_handle, uint64_t handle,
+                   size_t offset_bytes,
+                   size_t size, size_t total_size) noexcept
+        : _native_handle{native_handle}, _handle{handle}, _offset_bytes{offset_bytes},
+          _size{size}, _total_size{total_size} {}
+
+    ByteBufferView(const ByteBuffer &buffer) noexcept : ByteBufferView{buffer.view()} {}
+    ByteBufferView(const ByteBufferView &) noexcept = default;
+    ByteBufferView(ByteBufferView &&) noexcept = default;
+    ByteBufferView() noexcept : ByteBufferView{nullptr, invalid_resource_handle, 0u, 0u, 0u} {}
+    [[nodiscard]] explicit operator bool() const noexcept { return _handle != invalid_resource_handle; }
+
+    [[nodiscard]] auto handle() const noexcept { return _handle; }
+    [[nodiscard]] auto native_handle() const noexcept { return _native_handle; }
+    [[nodiscard]] auto offset() const noexcept { return _offset_bytes; }
+    [[nodiscard]] auto size_bytes() const noexcept { return _size; }
+    [[nodiscard]] auto total_size() const noexcept { return _total_size; }
+    [[nodiscard]] auto original() const noexcept {
+        return ByteBufferView{_native_handle, _handle, 0u, _total_size, _total_size};
+    }
+    [[nodiscard]] auto subview(size_t offset_elements, size_t size_elements) const noexcept {
+        if (size_elements + offset_elements > _size) [[unlikely]] {
+            detail::error_buffer_subview_overflow(offset_elements, size_elements, _size);
+        }
+        return ByteBufferView{_native_handle, _handle, _offset_bytes + offset_elements, size_elements, _total_size};
+    }
+    // reinterpret cast buffer to another type U
+    template<typename U>
+        requires(!is_custom_struct_v<U>)
+    [[nodiscard]] auto as() const noexcept {
+        if (this->size_bytes() < sizeof(U)) [[unlikely]] {
+            detail::error_buffer_reinterpret_size_too_small(sizeof(U), this->size_bytes());
+        }
+        auto total_size_bytes = _total_size;
+        return BufferView<U>{_native_handle, _handle, sizeof(U), _offset_bytes,
+                             this->size_bytes() / sizeof(U), total_size_bytes / sizeof(U)};
+    }
+    // DSL interface
+    [[nodiscard]] auto operator->() const noexcept {
+        return reinterpret_cast<const detail::ByteBufferExprProxy<ByteBufferView> *>(this);
     }
 };
 
 namespace detail {
-LC_RUNTIME_API void error_buffer_size_not_aligned(size_t align) noexcept;
+
 template<>
 struct is_buffer_impl<ByteBuffer> : std::true_type {};
+
 }// namespace detail
 
 }// namespace luisa::compute

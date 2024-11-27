@@ -1,11 +1,20 @@
 set(LUISA_COMPUTE_CORO_SOURCES
-        shader_scheduler.cpp
-        coro_dispatcher.cpp
+        coro_frame.cpp
+        coro_frame_buffer.cpp
+        coro_frame_desc.cpp
+        coro_frame_smem.cpp
+        coro_func.cpp
         coro_graph.cpp
-        coro_node.cpp)
+        schedulers/persistent_threads.cpp
+        schedulers/state_machine.cpp
+        schedulers/wavefront.cpp)
 
 add_library(luisa-compute-coro SHARED ${LUISA_COMPUTE_CORO_SOURCES})
-target_link_libraries(luisa-compute-coro PUBLIC luisa-compute-ast luisa-compute-ir)
+target_link_libraries(luisa-compute-coro PUBLIC
+        luisa-compute-ast
+        luisa-compute-ir
+        luisa-compute-dsl
+        luisa-compute-runtime)
 target_precompile_headers(luisa-compute-coro PRIVATE pch.h)
 
 target_compile_definitions(luisa-compute-coro PRIVATE LC_CORO_EXPORT_DLL=1)

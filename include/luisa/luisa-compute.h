@@ -46,7 +46,22 @@
 #include <luisa/core/spin_mutex.h>
 #include <luisa/core/stl.h>
 #include <luisa/core/string_scratch.h>
+#include <luisa/core/thread_pool.h>
 #include <luisa/core/thread_safety.h>
+
+#include <luisa/coro/coro_frame.h>
+#include <luisa/coro/coro_frame_buffer.h>
+#include <luisa/coro/coro_frame_desc.h>
+#include <luisa/coro/coro_frame_smem.h>
+#include <luisa/coro/coro_frame_soa.h>
+#include <luisa/coro/coro_func.h>
+#include <luisa/coro/coro_graph.h>
+#include <luisa/coro/coro_scheduler.h>
+#include <luisa/coro/coro_token.h>
+#include <luisa/coro/radix_sort.h>
+#include <luisa/coro/schedulers/persistent_threads.h>
+#include <luisa/coro/schedulers/state_machine.h>
+#include <luisa/coro/schedulers/wavefront.h>
 
 #ifdef LUISA_ENABLE_DSL
 #include <luisa/dsl/arg.h>
@@ -108,6 +123,7 @@
 #include <luisa/runtime/buffer.h>
 #include <luisa/runtime/buffer_arena.h>
 #include <luisa/runtime/byte_buffer.h>
+#include <luisa/runtime/command_buffer.h>
 #include <luisa/runtime/command_list.h>
 #include <luisa/runtime/context.h>
 #include <luisa/runtime/depth_format.h>

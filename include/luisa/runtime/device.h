@@ -7,6 +7,8 @@
 #include <luisa/runtime/rhi/device_interface.h>
 #include <luisa/core/thread_pool.h>
 
+#include <utility>
+
 namespace luisa {
 class BinaryIO;
 }// namespace luisa
@@ -28,6 +30,11 @@ class IndirectDispatchBuffer;
 class SparseBufferHeap;
 class SparseTextureHeap;
 class ByteBuffer;
+
+namespace coroutine {
+class CoroFrameDesc;
+class CoroFrame;
+}// namespace coroutine
 
 template<typename T>
 class SOA;
@@ -222,9 +229,23 @@ public:
     [[nodiscard]] ByteBuffer import_external_byte_buffer(void *external_memory, size_t byte_size) noexcept;
 
     template<typename T>
-        requires(!is_custom_struct_v<T>)//backend-specific type not allowed
+        requires(!is_custom_struct_v<T>) /* backend-specific types not allowed */ &&
+                (!std::same_as<std::remove_cvref_t<T>, coroutine::CoroFrame>)
     [[nodiscard]] auto create_buffer(size_t size) noexcept {
         return _create<Buffer<T>>(size);
+    }
+
+    template<typename Desc>
+        requires std::same_as<std::remove_cvref_t<Desc>, luisa::shared_ptr<const coroutine::CoroFrameDesc>> ||
+                 std::same_as<std::remove_cvref_t<Desc>, const coroutine::CoroFrameDesc *>
+    [[nodiscard]] auto create_coro_frame_buffer(Desc &&desc, size_t size) noexcept {
+        return _create<Buffer<coroutine::CoroFrame>>(std::forward<Desc>(desc), size);
+    }
+
+    template<typename T, typename Desc>
+        requires std::same_as<std::remove_cvref_t<T>, coroutine::CoroFrame>
+    [[nodiscard]] auto create_buffer(Desc &&desc, size_t size) noexcept {
+        return create_coro_frame_buffer(std::forward<Desc>(desc), size);
     }
 
     template<typename T>
@@ -237,6 +258,14 @@ public:
         requires(!is_custom_struct_v<T>)//backend-specific type not allowed
     [[nodiscard]] auto create_soa(size_t size) noexcept {
         return SOA<T>{*this, size};
+    }
+
+    template<typename T, typename Desc>
+        requires(std::same_as<std::remove_cvref_t<Desc>, luisa::shared_ptr<const coroutine::CoroFrameDesc>> ||
+                 std::same_as<std::remove_cvref_t<Desc>, const coroutine::CoroFrameDesc *>) &&
+                std::same_as<T, coroutine::CoroFrame>
+    [[nodiscard]] auto create_soa(Desc &&desc, size_t size) noexcept {
+        return SOA<T>{impl(), std::forward<Desc>(desc), size};
     }
 
     template<typename T>

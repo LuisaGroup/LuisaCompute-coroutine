@@ -39,7 +39,6 @@ struct TypeImpl final : public Type {
     uint index{};
     luisa::string description;
     luisa::vector<const Type *> members;
-    luisa::unordered_map<luisa::string, size_t> member_names;
     luisa::vector<Attribute> member_attributes;
 };
 
@@ -107,7 +106,6 @@ public:
     [[nodiscard]] const Type *decode_type(luisa::string_view desc) noexcept;
     /// Construct custom type
     [[nodiscard]] const Type *custom_type(luisa::string_view desc) noexcept;
-    [[nodiscard]] const Type *coroframe_type(luisa::string_view desc) noexcept;
     /// Return type count
     [[nodiscard]] size_t type_count() const noexcept;
     /// Traverse all types using visitor
@@ -163,85 +161,6 @@ const Type *TypeRegistry::custom_type(luisa::string_view name) noexcept {
     t->dimension = 1u;
     t->description = name;
     return _register(t);
-}
-
-const Type *TypeRegistry::coroframe_type(luisa::string_view name) noexcept {
-    // validate name
-    LUISA_ASSERT(!name.empty() &&
-                     name != "void" &&
-                     name != "int" &&
-                     name != "uint" &&
-                     name != "short" &&
-                     name != "ushort" &&
-                     name != "long" &&
-                     name != "ulong" &&
-                     name != "float" &&
-                     name != "half" &&
-                     name != "double" &&
-                     name != "bool" &&
-                     !name.starts_with("vector<") &&
-                     !name.starts_with("matrix<") &&
-                     !name.starts_with("array<") &&
-                     !name.starts_with("struct<") &&
-                     !name.starts_with("buffer<") &&
-                     !name.starts_with("texture<") &&
-                     name != "accel" &&
-                     name != "bindless_array" &&
-                     !isdigit(name.front() /* already checked not empty */),
-                 "Invalid custom type name: {}", name);
-    LUISA_ASSERT(std::all_of(name.cbegin(), name.cend(),
-                             [](char c) { return isalnum(c) || c == '_'; }),
-                 "Invalid custom type name: {}", name);
-    std::lock_guard lock{_mutex};
-    auto h = _compute_hash(name);
-    if (auto iter = _type_set.find(TypeDescAndHash{name, h});
-        iter != _type_set.end()) { return *iter; }
-
-    auto t = _type_pool.create();
-    t->hash = h;
-    t->tag = Type::Tag::COROFRAME;
-    t->size = Type::custom_struct_size;
-    t->alignment = Type::custom_struct_alignment;
-    t->dimension = 1u;
-    t->description = name;
-    return _register(t);
-}
-
-void _update(Type *dst, const Type *src) {
-    std::scoped_lock lock{TypeRegistry::instance().mutex()};
-    auto dst_inst = static_cast<TypeImpl *>(dst);
-    auto src_inst = static_cast<const TypeImpl *>(src);
-    dst_inst->alignment = src_inst->alignment;
-    dst_inst->size = src_inst->size;
-    LUISA_ASSERT(dst_inst->members.empty(), "{} used as coroframe type "
-                                            "for second time!",
-                 dst_inst->description);
-    dst_inst->members.push_back(src);
-    //dst_inst->description = src_inst->description;
-}
-
-size_t _add_member(Type *type, const luisa::string &name) {
-    std::scoped_lock lock{TypeRegistry::instance().mutex()};
-    auto inst = static_cast<TypeImpl *>(type);
-    size_t id = inst->member_names.size();
-    auto ret = inst->member_names.insert(std::make_pair(name, id));
-    return ret.second ? id : -1;
-}
-
-void _set_member_name(Type *type, size_t index, luisa::string name) {
-    std::scoped_lock lock{TypeRegistry::instance().mutex()};
-    auto inst = static_cast<TypeImpl *>(type);
-    auto old_iter = inst->member_names.find(name);
-    if (old_iter != inst->member_names.end() &&
-        old_iter->second != index) [[unlikely]] {
-        LUISA_ERROR_WITH_LOCATION(
-            "Duplicate member name at index {}: {}.",
-            index, name);
-    }
-    LUISA_ASSERT(index < inst->members.size() || index < inst->corotype()->members().size(),
-                 "Invalid member index: {} (total = {}).",
-                 index, std::max(inst->members.size(), inst->corotype()->members().size()));
-    inst->member_names.insert_or_assign(std::move(name), index);
 }
 
 size_t TypeRegistry::type_count() const noexcept {
@@ -533,7 +452,7 @@ const TypeImpl *TypeRegistry::_decode(luisa::string_view desc) noexcept {
 }// namespace detail
 
 luisa::span<const Type *const> Type::members() const noexcept {
-    LUISA_ASSERT(is_structure() || (is_coroframe()),
+    LUISA_ASSERT(is_structure(),
                  "Calling members() on a non-structure type {}.",
                  description());
     return static_cast<const detail::TypeImpl *>(this)->members;
@@ -551,16 +470,6 @@ const Type *Type::element() const noexcept {
     LUISA_ASSERT(is_array() || is_vector() || is_matrix() || is_buffer() || is_texture(),
                  "Calling element() on a non-array/vector/matrix/buffer/image type {}.",
                  description());
-    return static_cast<const detail::TypeImpl *>(this)->members.front();
-}
-
-const Type *Type::corotype() const noexcept {
-    LUISA_ASSERT(is_coroframe(),
-                 "Calling corotype() on a non-coroframe type {}.",
-                 description());
-    LUISA_ASSERT(!static_cast<const detail::TypeImpl *>(this)->members.empty(),
-                 "Calling corotype() on a coroframe before analyze.\n"
-                 "Define Coroutine with this coroframe to specify the backend type!");
     return static_cast<const detail::TypeImpl *>(this)->members.front();
 }
 
@@ -610,10 +519,8 @@ uint64_t Type::hash() const noexcept {
 }
 
 size_t Type::size() const noexcept {
-    LUISA_ASSERT(!(is_coroframe() && members().empty()),
-                 "Cannot find size of {}. "
-                 "Usages of CoroFrame types should be "
-                 "after the coroutine definition!",
+    LUISA_ASSERT(!is_custom(),
+                 "Unknown size for custom type {}.",
                  description());
     return static_cast<const detail::TypeImpl *>(this)->size;
 }
@@ -689,11 +596,6 @@ bool Type::is_texture() const noexcept { return tag() == Tag::TEXTURE; }
 bool Type::is_bindless_array() const noexcept { return tag() == Tag::BINDLESS_ARRAY; }
 bool Type::is_accel() const noexcept { return tag() == Tag::ACCEL; }
 bool Type::is_custom() const noexcept { return tag() == Tag::CUSTOM; }
-bool Type::is_coroframe() const noexcept { return tag() == Tag::COROFRAME; }
-bool Type::is_materialized_coroframe() const noexcept {
-    return tag() == Tag::COROFRAME &&
-           !reinterpret_cast<const detail::TypeImpl *>(this)->members.empty();
-}
 
 const Type *Type::array(const Type *elem, size_t n) noexcept {
     return from(luisa::format("array<{},{}>", elem->description(), n));
@@ -799,38 +701,6 @@ const Type *Type::structure(std::initializer_list<const Type *> members, luisa::
 
 const Type *Type::custom(luisa::string_view name) noexcept {
     return detail::TypeRegistry::instance().custom_type(name);
-}
-
-const Type *Type::coroframe(luisa::string_view name) noexcept {
-    return detail::TypeRegistry::instance().coroframe_type(name);
-}
-
-void Type::update_from(const Type *type) {
-    detail::_update(this, type);
-}
-
-size_t Type::add_member(const luisa::string &name) noexcept {
-    LUISA_ASSERT(name != "coro_id" && name != "coro_token",
-                 "{} is a reserved name for coroframe type.", name);
-    return detail::_add_member(this, name);
-}
-
-void Type::set_member_name(size_t index, luisa::string name) noexcept {
-    LUISA_ASSERT(name != "coro_id" && name != "coro_token",
-                 "{} is a reserved name for coroframe type.", name);
-    detail::_set_member_name(this, index, std::move(name));
-}
-
-size_t Type::member(luisa::string_view name) const noexcept {
-    if (name == "coro_id") return 0;
-    if (name == "coro_token") return 1u;
-    auto &map = static_cast<const detail::TypeImpl *>(this)->member_names;
-    auto it = map.find(name);
-    if (it == map.end()) {
-        return -1;
-    } else {
-        return it->second;
-    }
 }
 
 bool Type::is_bool() const noexcept { return tag() == Tag::BOOL; }

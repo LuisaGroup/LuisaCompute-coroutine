@@ -1,19 +1,14 @@
-#include <luisa/runtime/context.h>
-#include <luisa/runtime/stream.h>
-#include <luisa/runtime/image.h>
-#include <luisa/runtime/shader.h>
-#include <luisa/dsl/syntax.h>
-#include <stb/stb_image_write.h>
-#include <luisa/dsl/sugar.h>
+#include <luisa/luisa-compute.h>
 
 using namespace luisa;
 using namespace luisa::compute;
 
-struct alignas(4) CoroFrame {
-};
-LUISA_COROFRAME_STRUCT(CoroFrame){};
+namespace luisa::compute::coroutine {
+
+}// namespace luisa::compute::coroutine
 
 int main(int argc, char *argv[]) {
+
     Context context{argv[0]};
     if (argc <= 1) { exit(1); }
     Device device = context.create_device(argv[1]);
@@ -22,31 +17,44 @@ int main(int argc, char *argv[]) {
     Image<float> image{device.create_image<float>(PixelStorage::BYTE4, resolution)};
     luisa::vector<std::byte> host_image(image.view().size_bytes());
 
-    Coroutine coro = [&](Var<CoroFrame> &frame) noexcept {
-        $suspend("1");
-        Var coord = coro_id().xy();
-        $suspend("2");
-        Var uv = (make_float2(coord) + 0.5f) / make_float2(resolution);
-        $suspend("3");
-        image->write(coord, make_float4(uv, 0.5f, 1.0f));
+    Kernel1D test = [] {
+        coroutine::Generator<uint(uint)> range = [](UInt n) {
+            auto x = def(0u);
+            $while (x < n) {
+                $yield(x);
+                x += 1u;
+            };
+        };
+        auto iter = range(10u);
+        $while (!iter.update().is_terminated()) {
+            auto x = iter.value();
+            device_log("x = {}", x);
+        };
+        for (auto x : range(10u)) {
+            device_log("x = {}", x);
+        }
     };
-    auto type = Type::of<CoroFrame>();
-    auto frame_buffer = device.create_buffer<CoroFrame>(resolution.x * resolution.y);
+    auto shader = device.compile(test);
+    stream << shader().dispatch(1) << synchronize();
 
-    Kernel2D mega_kernel = [&] {
-        Var<CoroFrame> frame;
-        initialize_coroframe(frame, dispatch_id());
-        coro(frame);
-        coro[1](frame);
-        coro[2](frame);
-        coro[3](frame);
+    coroutine::Coroutine nested2 = [](UInt n) {
+        $for (i, n) {
+            device_log("nested2: {} / {}", i, n);
+            $suspend();
+        };
     };
 
-    auto shader = device.compile(mega_kernel);
-    stream << shader().dispatch(resolution)
-           << synchronize();
+    coroutine::Coroutine nested1 = [&](UInt n) {
+        $for (i, n) {
+            $await nested2(i);
+            device_log("nested1: {} / {}", i, n);
+        };
+    };
 
-    stream << image.copy_to(host_image.data())
-           << synchronize();
-    stbi_write_png("test_helloworld.png", resolution.x, resolution.y, 4, host_image.data(), 0);
+    coroutine::Coroutine top_level = [&]() {
+        $await nested1(10u);
+    };
+
+    coroutine::StateMachineCoroScheduler sched{device, top_level};
+    stream << sched().dispatch(1u) << synchronize();
 }

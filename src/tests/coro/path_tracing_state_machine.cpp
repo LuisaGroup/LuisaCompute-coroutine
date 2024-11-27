@@ -1,18 +1,9 @@
 #include <iostream>
 
-#include <luisa/core/clock.h>
-#include <luisa/core/logging.h>
-#include <luisa/runtime/context.h>
-#include <luisa/runtime/device.h>
-#include <luisa/runtime/stream.h>
-#include <luisa/runtime/event.h>
-#include <luisa/runtime/swapchain.h>
+#include <luisa/luisa-compute.h>
 #include <luisa/dsl/sugar.h>
-#include <luisa/runtime/rtx/accel.h>
-#include <stb/stb_image_write.h>
-#include <luisa/gui/window.h>
-#include <luisa/ast/ast2json.h>
 
+#include <stb/stb_image_write.h>
 #include "../common/cornell_box.h"
 
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -32,10 +23,6 @@ LUISA_STRUCT(Onb, tangent, binormal, normal) {
         return v.x * tangent + v.y * binormal + v.z * normal;
     }
 };
-
-struct alignas(4) CoroFrame {};
-
-LUISA_COROFRAME_STRUCT(CoroFrame) {};
 
 int main(int argc, char *argv[]) {
 
@@ -174,7 +161,7 @@ int main(int argc, char *argv[]) {
 
     auto spp_per_dispatch = device.backend_name() == "metal" || device.backend_name() == "cpu" ? 1u : 64u;
 
-    Coroutine raytracing_coro = [&](Var<CoroFrame> &, ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
+    coroutine::Coroutine coro = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) noexcept {
         UInt2 coord = dispatch_id().xy();
         Float frame_size = min(resolution.x, resolution.y).cast<float>();
         UInt state = seed_image.read(coord).x;
@@ -275,24 +262,10 @@ int main(int argc, char *argv[]) {
         image.write(dispatch_id().xy(), make_float4(clamp(radiance, 0.0f, 30.0f), 1.0f));
     };
 
-    Kernel2D mega_kernel = [&](ImageFloat image, ImageUInt seed_image, AccelVar accel, UInt2 resolution) {
-        Var<CoroFrame> frame;
-        initialize_coroframe(frame, dispatch_id());
-        raytracing_coro(frame, image, seed_image, accel, resolution);
-        $loop {
-            auto token = read_promise<uint>(frame, "coro_token");
-            $switch (token) {
-                for (auto i = 1u; i <= raytracing_coro.suspend_count(); i++) {
-                    $case (i) {
-                        raytracing_coro[i](frame, image, seed_image, accel, resolution);
-                    };
-                }
-                $default {
-                    $return();
-                };
-            };
-        };
-    };
+    coroutine::StateMachineCoroSchedulerConfig config{.block_size = make_uint3(8u, 8u, 1u),
+                                                      .shared_memory = false,
+                                                      .shared_memory_soa = true};
+    coroutine::StateMachineCoroScheduler scheduler{device, coro, config};
 
     Kernel2D accumulate_kernel = [&](ImageFloat accum_image, ImageFloat curr_image) noexcept {
         UInt2 p = dispatch_id().xy();
@@ -328,17 +301,16 @@ int main(int argc, char *argv[]) {
     auto clear_shader = device.compile(clear_kernel, o);
     auto hdr2ldr_shader = device.compile(hdr2ldr_kernel, o);
     auto accumulate_shader = device.compile(accumulate_kernel, o);
-    auto raytracing_shader = device.compile(mega_kernel, o);
     auto make_sampler_shader = device.compile(make_sampler_kernel, o);
 
     static constexpr uint2 resolution = make_uint2(1024u);
     Image<float> framebuffer = device.create_image<float>(PixelStorage::HALF4, resolution);
     Image<float> accum_image = device.create_image<float>(PixelStorage::FLOAT4, resolution);
     luisa::vector<std::array<uint8_t, 4u>> host_image(resolution.x * resolution.y);
-    CommandList cmd_list;
+
     Image<uint> seed_image = device.create_image<uint>(PixelStorage::INT1, resolution);
-    cmd_list << clear_shader(accum_image).dispatch(resolution)
-             << make_sampler_shader(seed_image).dispatch(resolution);
+    stream << clear_shader(accum_image).dispatch(resolution)
+           << make_sampler_shader(seed_image).dispatch(resolution);
 
     Window window{"path tracing", resolution};
     Swapchain swap_chain = device.create_swapchain(
@@ -357,13 +329,13 @@ int main(int argc, char *argv[]) {
     Clock clock;
 
     while (!window.should_close()) {
-        cmd_list << raytracing_shader(framebuffer, seed_image, accel, resolution)
-                        .dispatch(resolution)
-                 << accumulate_shader(accum_image, framebuffer)
-                        .dispatch(resolution);
-        cmd_list << hdr2ldr_shader(accum_image, ldr_image, 1.0f, swap_chain.backend_storage() != PixelStorage::BYTE4).dispatch(resolution);
-        stream << cmd_list.commit()
-               << swap_chain.present(ldr_image) << synchronize();
+        stream << scheduler(framebuffer, seed_image, accel, resolution)
+                      .dispatch(resolution)
+               << accumulate_shader(accum_image, framebuffer)
+                      .dispatch(resolution)
+               << hdr2ldr_shader(accum_image, ldr_image, 1.0f, swap_chain.backend_storage() != PixelStorage::BYTE4).dispatch(resolution)
+               << swap_chain.present(ldr_image)
+               << synchronize();
         window.poll_events();
         double dt = clock.toc() - last_time;
         last_time = clock.toc();

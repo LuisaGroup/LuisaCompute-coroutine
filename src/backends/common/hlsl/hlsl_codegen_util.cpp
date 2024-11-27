@@ -117,10 +117,6 @@ static size_t AddHeader(CallOpSet const &ops, vstd::StringBuilder &builder, bool
         ops.test(CallOp::MATRIX_COMPONENT_WISE_MULTIPLICATION)) {
         builder << CodegenUtility::ReadInternalHLSLFile("reduce");
     }
-    if (ops.test(CallOp::CORO_ID) ||
-        ops.test(CallOp::CORO_TOKEN)) {
-        builder << CodegenUtility::ReadInternalHLSLFile("coroutine");
-    }
     return immutable_size;
 }
 }// namespace detail
@@ -380,10 +376,6 @@ void CodegenUtility::GetTypeName(Type const &type, vstd::StringBuilder &str, Usa
         } break;
         case Type::Tag::CUSTOM: {
             str << '_' << type.description();
-        } break;
-        case Type::Tag::COROFRAME: {
-            auto customType = opt->CreateStruct(type.corotype());
-            str << customType;
         } break;
         default:
             LUISA_ERROR_WITH_LOCATION("Bad.");
@@ -2106,7 +2098,7 @@ uint4 dsp_c;
         LUISA_ERROR("Arguments binding size: {} exceeds 64 32-bit units not supported by hardware device. Try to use bindless instead.", bind_count);
     } else if (bind_count > 16) [[unlikely]] {
         if (!rootsig_exceed_warned.exchange(true)) {
-            LUISA_WARNING("Arguments binding size exceeds 16 32-bit unit (max 64 allowed). This may cause extra performance cost, try to use bindless instead.");
+            LUISA_WARNING("Arguments binding size: {} exceeds 16 32-bit unit (max 64 allowed). This may cause extra performance cost, try to use bindless instead.", bind_count);
         }
     }
     return {

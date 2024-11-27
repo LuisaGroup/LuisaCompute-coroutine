@@ -137,8 +137,6 @@ static void collect_types_in_function(Function f,
                 for (auto m : t->members()) {
                     self(self, m);
                 }
-            } else if (t->is_coroframe()) {
-                self(self, t->corotype());
             }
         }
     };
@@ -347,9 +345,6 @@ void MetalCodegenAST::_emit_type_name(const Type *type, Usage usage) noexcept {
             }
             break;
         }
-        case Type::Tag::COROFRAME:
-            _emit_type_name(type->corotype());
-            break;
     }
 }
 

@@ -1,4 +1,11 @@
-# LuisaCompute
+# LuisaCompute (Coroutine Version, SIGGRAPH Asia 2024)
+
+This is the source code for the extended LuisaCompute framework described in the **SIGGRAPH Asia 2024** paper
+> [***GPU Coroutines for Flexible Splitting and Scheduling of Rendering Tasks***](https://doi.org/10.1145/3687766)
+
+> ⚠️ Note: we have archived this repository as we are re-designing the IR layer for the main-stream LuisaCompute. The coroutine features will be re-implemented on that new IR in the future.
+
+# LuisaCompute (Original Version, SIGGRAPH Asia 2022)
 
 ![teaser](https://user-images.githubusercontent.com/7614925/195987646-fe932ebe-ca6e-4d6e-ab2a-203bcfd3d559.jpg)
 
